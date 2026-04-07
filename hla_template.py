@@ -955,27 +955,20 @@ def generate_pdf(case: dict, output_path: str) -> str:
     # Compute header/footer heights and adjust margins accordingly
     from PIL import Image as PILImage
 
-    if with_logo:
-        # With logo: reserve space for header and footer banners
-        b64  = hla_assets.HEADER_NABL_B64 if nabl else hla_assets.HEADER_NONNABL_B64
-        raw  = hla_assets.get_image_bytes(b64)
-        pil  = PILImage.open(io.BytesIO(raw))
-        ow, oh   = pil.size
-        banner_h = (oh / ow) * CONTENT_W
+    # Reserve space for header and footer banners (always, for consistent layout)
+    b64  = hla_assets.HEADER_NABL_B64 if nabl else hla_assets.HEADER_NONNABL_B64
+    raw  = hla_assets.get_image_bytes(b64)
+    pil  = PILImage.open(io.BytesIO(raw))
+    ow, oh = pil.size
+    banner_h = (oh / ow) * CONTENT_W
 
-        raw_f    = hla_assets.get_image_bytes(hla_assets.FOOTER_BAR_B64)
-        pil_f    = PILImage.open(io.BytesIO(raw_f))
-        fw, fh   = pil_f.size
-        footer_h = (fh / fw) * CONTENT_W
+    raw_f  = hla_assets.get_image_bytes(hla_assets.FOOTER_BAR_B64)
+    pil_f  = PILImage.open(io.BytesIO(raw_f))
+    fw, fh = pil_f.size
+    footer_h = (fh / fw) * CONTENT_W
 
-        top_margin    = MARGIN_T + banner_h + 4 * mm
-        bottom_margin = MARGIN_B + footer_h + 4 * mm
-    else:
-        # Without logo: minimal margins, no header/footer space needed
-        banner_h      = 0
-        footer_h      = 0
-        top_margin    = MARGIN_T
-        bottom_margin = MARGIN_B + 5 * mm  # Small space for page number
+    top_margin    = MARGIN_T + banner_h + 4 * mm
+    bottom_margin = MARGIN_B + footer_h + 4 * mm
 
     doc = SimpleDocTemplate(
         output_path,
