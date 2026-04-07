@@ -18,7 +18,7 @@ HLA_C_C1 = {
 # Everything not in C1 is treated as C2 (C*02, C*04, C*05, C*06, C*15, C*17, C*18)
 
 
-def _c_supertype(allele: Optional[str]) -> Optional[str]:
+def c_supertype(allele: Optional[str]) -> Optional[str]:
     """Return 'C1' or 'C2' for a given HLA-C allele string."""
     if not allele or allele in ("-", "nan", ""):
         return None
@@ -280,8 +280,8 @@ def _build_person(row: pd.Series, hla_lookup: dict, join_by: str) -> dict:
 
     # HLA-C supertype (for RPL)
     c_alleles = hla.get("C", [None, None])
-    ct1 = _c_supertype(c_alleles[0]) if c_alleles[0] else None
-    ct2 = _c_supertype(c_alleles[1]) if c_alleles[1] else None
+    ct1 = c_supertype(c_alleles[0]) if c_alleles[0] else None
+    ct2 = c_supertype(c_alleles[1]) if c_alleles[1] else None
     hla_c_type = ",".join(filter(None, [ct1, ct2])) if (ct1 or ct2) else ""
 
     # Only use the Excel Remarks/comments column; skip raw instrument Comments
@@ -313,7 +313,7 @@ def _build_person(row: pd.Series, hla_lookup: dict, join_by: str) -> dict:
 
 # ─── Compute RPL reference table ─────────────────────────────────────────────
 
-def _compute_rpl_reference(patient: dict, donor: dict) -> dict:
+def compute_rpl_reference(patient: dict, donor: dict) -> dict:
     """Compute HLA match counts for RPL reference table."""
     loci = ["A", "B", "C", "DRB1", "DQB1", "DPB1"]
     p_alleles = set()
@@ -413,7 +413,7 @@ def parse_excel(filepath: str, nabl: bool = True) -> list:
         # RPL reference (use first donor for couple stats)
         rpl_ref = {}
         if report_type == "rpl_couple" and donors:
-            rpl_ref = _compute_rpl_reference(patient_dict, donors[0])
+            rpl_ref = compute_rpl_reference(patient_dict, donors[0])
 
         # Methodology + IMGT from first row of case
         row0 = current_patient["_row"]
