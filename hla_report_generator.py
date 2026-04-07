@@ -42,7 +42,7 @@ except ImportError:
     FITZ_OK = False
 
 import hla_assets
-from hla_data_parser import parse_excel, get_case_summary
+from hla_data_parser import parse_excel, get_case_summary, c_supertype, compute_rpl_reference
 from hla_template import generate_pdf, make_filename
 
 # ─── Constants ────────────────────────────────────────────────────────────────
@@ -244,7 +244,7 @@ def _make_allele_row(allele1="", allele2=""):
     rh.setContentsMargins(0, 0, 0, 0)
     a1 = QLineEdit(allele1)
     a2 = QLineEdit(allele2)
-    a1.setMaximumHeight(28); a2.setMaximumHeight(28)
+    a1.setMaximumHeight(24); a2.setMaximumHeight(24)
     a1.setPlaceholderText("Allele 1 (e.g. A*02:01:01:01)")
     a2.setPlaceholderText("Allele 2")
     rh.addWidget(a1, 1)
@@ -252,7 +252,7 @@ def _make_allele_row(allele1="", allele2=""):
     return row_w, a1, a2
 
 
-def _render_pdf_pages(pdf_path: str, width_px: int = 700) -> list:
+def _render_pdf_pages(pdf_path: str, width_px: int = 600) -> list:
     """Render every page of a PDF to QPixmap using fitz. Returns list of QPixmap."""
     if not FITZ_OK or not os.path.exists(pdf_path):
         return []
@@ -286,6 +286,12 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_hla_pat     = {}   # {locus: [a1, a2]}
         self._bulk_donor_fields  = []   # list of dicts per donor
         self._bulk_hla_don     = []   # list of {locus: [a1, a2]} per donor
+        
+        # Debounce timer for real-time updates
+        self._edit_timer = QTimer()
+        self._edit_timer.setSingleShot(True)
+        self._edit_timer.timeout.connect(self._refresh_bulk_preview)
+
         self.init_ui()
         self._load_persistent()
 
@@ -299,21 +305,37 @@ class HLAReportGeneratorApp(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(10, 2, 10, 5)
         central.setLayout(main_layout)
 
         # Header — matches PGTA exactly
-        header_layout = QHBoxLayout()
+        top_row = QHBoxLayout()
         title_label = QLabel("HLA Typing Report Generator")
-        title_label.setStyleSheet("font-size: 24px; font-weight: bold; padding: 10px;")
+        title_label.setStyleSheet("font-size: 18px; font-weight: bold; padding: 0px;")
         title_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        header_layout.addWidget(title_label)
-        header_layout.addStretch()
-        header_layout.addWidget(QLabel("Select Template:"))
+        top_row.addWidget(title_label)
+        top_row.addStretch()
+        
+        # Right side selectors (two rows if needed, but we'll try compact first)
+        right_panel = QWidget()
+        right_lay   = QFormLayout(right_panel)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.setSpacing(5)
+
         self.template_combo = ClickOnlyComboBox()
-        self.template_combo.addItems(["HLA Typing", "PGT-A (Other App)", "NIPT (Coming Soon)"])
-        self.template_combo.setMinimumWidth(200)
-        header_layout.addWidget(self.template_combo)
-        main_layout.addLayout(header_layout)
+        self.template_combo.addItems(TEMPLATE_NAMES)
+        self.template_combo.setMinimumWidth(280)
+        self.template_combo.setFixedHeight(24)
+        right_lay.addRow("<b>Select Template:</b>", self.template_combo)
+
+        self.logo_combo = ClickOnlyComboBox()
+        self.logo_combo.addItems(["With Logo", "Without Logo"])
+        self.logo_combo.setFixedWidth(140)
+        self.logo_combo.setFixedHeight(24)
+        right_lay.addRow("<b>Select Logo:</b>", self.logo_combo)
+        
+        top_row.addWidget(right_panel)
+        main_layout.addLayout(top_row)
 
         # Tabs
         self.tabs = QTabWidget()
@@ -333,7 +355,10 @@ class HLAReportGeneratorApp(QMainWindow):
         self.tabs.addTab(self.guide_tab,    "User Guide")
         self.tabs.setTabIcon(3, self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation))
 
-        self.statusBar().showMessage("Ready")
+        
+        # Connect global selectors to refresh functions
+        self.template_combo.currentIndexChanged.connect(self._on_global_pref_changed)
+        self.logo_combo.currentIndexChanged.connect(self._on_global_pref_changed)
 
     # ══════════════════════════════════════════════════════════════════════════
     # TAB 1 — MANUAL ENTRY
@@ -348,6 +373,7 @@ class HLAReportGeneratorApp(QMainWindow):
 
         # ── Left: form ─────────────────────────────────────────────────────
         left_widget = QWidget()
+        left_widget.setMaximumWidth(540)
         left_layout = QVBoxLayout()
         left_widget.setLayout(left_layout)
 
@@ -362,6 +388,7 @@ class HLAReportGeneratorApp(QMainWindow):
         # Patient Information
         pat_group = QGroupBox("Patient Information")
         pat_form  = QFormLayout(); pat_group.setLayout(pat_form)
+        pat_form.setSpacing(1); pat_form.setContentsMargins(4, 1, 4, 1)
         scroll_layout.addWidget(pat_group)
 
         self.f = {}
@@ -383,26 +410,18 @@ class HLAReportGeneratorApp(QMainWindow):
         for key, lbl, default in PAT_FIELDS:
             w = QLineEdit(default)
             if "date" in key.lower(): w.setPlaceholderText("DD-MM-YYYY")
-            w.setMaximumHeight(32)
+            w.setMaximumHeight(24)
             self.f[key] = w
             pat_form.addRow(lbl + ":", w)
             if key == "diagnosis":
                 w.textChanged.connect(self._auto_detect_manual_template)
 
-        # Report Options
-        opt_group = QGroupBox("Report Options")
-        opt_form  = QFormLayout(); opt_group.setLayout(opt_form)
-        scroll_layout.addWidget(opt_group)
-        self.cmb_type = ClickOnlyComboBox()
-        self.cmb_type.addItems(TEMPLATE_NAMES)
-        self.cmb_logo = ClickOnlyComboBox()
-        self.cmb_logo.addItems(["With Logo", "Without Logo"])
-        opt_form.addRow("Template:", self.cmb_type)
-        opt_form.addRow("Logo variant:", self.cmb_logo)
+        # Report Options moved to global header
 
         # Patient HLA Results (FormLayout, one locus per row, two alleles side-by-side)
         hla_group = QGroupBox("HLA Results — Patient")
         hla_form  = QFormLayout(); hla_group.setLayout(hla_form)
+        hla_form.setSpacing(1); hla_form.setContentsMargins(4, 1, 4, 1)
         scroll_layout.addWidget(hla_group)
         self.hla_pat = {}
         for locus in HLA_LOCI:
@@ -429,7 +448,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("match",           "Match Score",    ""),
         ]
         for key, lbl, default in DONOR_FIELDS:
-            w = QLineEdit(default); w.setMaximumHeight(32)
+            w = QLineEdit(default); w.setMaximumHeight(24)
             self.fd[key] = w; donor_form.addRow(lbl + ":", w)
             # Auto-detect template when relationship changes
             if key == "relationship":
@@ -491,6 +510,8 @@ class HLAReportGeneratorApp(QMainWindow):
 
         # ── Right: PDF preview (exact PGTA layout) ───────────────────────────
         right_widget = QGroupBox("Report Preview")
+        right_widget.setMinimumWidth(600)
+        right_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         right_layout = QVBoxLayout(); right_widget.setLayout(right_layout)
 
         preview_label = QLabel("Report Preview (PDF)")
@@ -522,9 +543,13 @@ class HLAReportGeneratorApp(QMainWindow):
 
         self._manual_preview_worker = None
 
+        # Manual Entry layout: Left (form) + Right (Fixed 620px Preview)
+        right_widget.setFixedWidth(620)
+
         splitter.addWidget(left_widget)
         splitter.addWidget(right_widget)
-        splitter.setSizes([600, 400])
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
         return tab
 
     def browse_manual_output(self):
@@ -546,8 +571,8 @@ class HLAReportGeneratorApp(QMainWindow):
             QMessageBox.warning(self, "No Output", "Please select an output folder.")
             return
 
-        with_logo = self.cmb_logo.currentText() == "With Logo"
-        rtype     = TEMPLATE_TO_RTYPE.get(self.cmb_type.currentText(), "single_hla")
+        with_logo = self.logo_combo.currentText() == "With Logo"
+        rtype     = TEMPLATE_TO_RTYPE.get(self.template_combo.currentText(), "single_hla")
         nabl      = self.qsettings.value("nabl_stamp", True, type=bool)
         sig_stamp = self.qsettings.value("signature_stamp", False, type=bool)
 
@@ -621,7 +646,7 @@ class HLAReportGeneratorApp(QMainWindow):
             while self._manual_preview_vbox.count():
                 child = self._manual_preview_vbox.takeAt(0)
                 if child.widget(): child.widget().deleteLater()
-            for pm in _render_pdf_pages(pdf_path, width_px=720):
+            for pm in _render_pdf_pages(pdf_path, width_px=600):
                 lbl = QLabel(); lbl.setPixmap(pm)
                 lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
                 lbl.setStyleSheet("margin: 8px; border: 1px solid #ccc;")
@@ -722,51 +747,55 @@ class HLAReportGeneratorApp(QMainWindow):
     def _create_bulk_tab(self):
         tab = QWidget()
         main_layout = QVBoxLayout()
+        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(5, 5, 5, 5)
         tab.setLayout(main_layout)
 
-        # 1. Select File
-        file_group  = QGroupBox("1. Select Excel File")
-        file_layout = QVBoxLayout(); file_group.setLayout(file_layout)
+        # 1 & 2. File and Output Selection (Combined for space)
+        config_group  = QGroupBox("1 & 2. File and Output Selection")
+        config_layout = QVBoxLayout(); config_group.setLayout(config_layout)
+        
+        # File row
         file_row = QHBoxLayout()
         self.bulk_file_label = QLabel("No file selected")
         self.bulk_file_label.setStyleSheet(PATH_LABEL_STYLE)
-        file_row.addWidget(QLabel("File:"))
+        file_row.addWidget(QLabel("<b>Excel File:</b>"))
         file_row.addWidget(self.bulk_file_label, 1)
         browse_btn = QPushButton("Browse")
         browse_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
         browse_btn.clicked.connect(self.browse_bulk_file)
         file_row.addWidget(browse_btn)
-        file_layout.addLayout(file_row)
+        config_layout.addLayout(file_row)
+        config_layout.setSpacing(1)
+        config_layout.setContentsMargins(5, 2, 5, 2)
+
+        # Output row
+        out_row = QHBoxLayout()
+        self.bulk_output_label = QLabel("No folder selected")
+        self.bulk_output_label.setStyleSheet(PATH_LABEL_STYLE)
+        out_row.addWidget(QLabel("<b>Output Folder:</b>"))
+        out_row.addWidget(self.bulk_output_label, 1)
+        out_browse_btn = QPushButton("Browse")
+        out_browse_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
+        out_browse_btn.clicked.connect(self.browse_bulk_output)
+        out_row.addWidget(out_browse_btn)
+
+        config_layout.addLayout(out_row)
+        
+        # Options row (NABL + Load)
         opts_row = QHBoxLayout()
         self.chk_nabl = QCheckBox("NABL-Accredited (MINISEQ)")
         self.chk_nabl.setChecked(True)
         opts_row.addWidget(self.chk_nabl)
         opts_row.addStretch()
-        load_btn = QPushButton("Load && Parse Excel")
+        load_btn = QPushButton("Load & Parse Excel")
         load_btn.setStyleSheet(GENERATE_BTN_STYLE)
         load_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight))
         load_btn.clicked.connect(self.load_excel)
         opts_row.addWidget(load_btn)
-        file_layout.addLayout(opts_row)
-        main_layout.addWidget(file_group)
-
-        # 2. Select Output Folder
-        out_group  = QGroupBox("2. Select Output Folder")
-        out_layout = QHBoxLayout(); out_group.setLayout(out_layout)
-        self.bulk_output_label = QLabel("No folder selected")
-        self.bulk_output_label.setStyleSheet(PATH_LABEL_STYLE)
-        out_layout.addWidget(QLabel("Folder:"))
-        out_layout.addWidget(self.bulk_output_label, 1)
-        out_browse_btn = QPushButton("Browse")
-        out_browse_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
-        out_browse_btn.clicked.connect(self.browse_bulk_output)
-        out_layout.addWidget(out_browse_btn)
-        out_layout.addSpacing(20)
-        out_layout.addWidget(QLabel("Logo:"))
-        self.bulk_logo_combo = ClickOnlyComboBox()
-        self.bulk_logo_combo.addItems(["With Logo", "Without Logo"])
-        out_layout.addWidget(self.bulk_logo_combo)
-        main_layout.addWidget(out_group)
+        config_layout.addLayout(opts_row)
+        
+        main_layout.addWidget(config_group)
 
         # 3. Review and Edit Cases (PGTA layout)
         review_group  = QGroupBox("3. Review and Edit Cases")
@@ -774,6 +803,8 @@ class HLAReportGeneratorApp(QMainWindow):
 
         # LEFT: patient list + controls
         left_panel  = QWidget()
+        left_panel.setMinimumWidth(200)
+        left_panel.setMaximumWidth(350)
         left_layout = QVBoxLayout(); left_panel.setLayout(left_layout)
         left_layout.addWidget(QLabel("Cases:"))
         self.bulk_search = QLineEdit()
@@ -807,83 +838,10 @@ class HLAReportGeneratorApp(QMainWindow):
         gen_btn.clicked.connect(self.generate_bulk)
         left_layout.addWidget(gen_btn)
 
-        # RIGHT: inner splitter — editor | preview  (same as PGTA)
-        right_splitter = QSplitter(Qt.Orientation.Horizontal)
-
-        # Editor side
+        # RIGHT: Patient Editor
         editor_widget = QWidget()
         editor_layout = QVBoxLayout(); editor_widget.setLayout(editor_layout)
         editor_layout.addWidget(QLabel("Patient Editor (select a case from the list):"))
-
-        # Template / type selector — always visible above the scroll area
-        tmpl_bar = QFrame()
-        tmpl_bar.setFrameShape(QFrame.Shape.StyledPanel)
-        tmpl_bar.setStyleSheet("""
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #e8f0f8, stop:1 #d5e5f2);
-            border: 2px solid #4a8bc2;
-            border-radius: 5px;
-            padding: 4px;
-        """)
-        tmpl_bar_layout = QHBoxLayout(tmpl_bar)
-        tmpl_bar_layout.setContentsMargins(12, 8, 12, 8)
-
-        # Template label with bold font
-        tmpl_label = QLabel("<b>Report Template:</b>")
-        tmpl_label.setStyleSheet("font-size: 11pt; color: #1F497D; background: transparent; border: none;")
-        tmpl_bar_layout.addWidget(tmpl_label)
-
-        self._bulk_tmpl_combo = ClickOnlyComboBox()
-        self._bulk_tmpl_combo.addItems(TEMPLATE_NAMES)
-        self._bulk_tmpl_combo.setMinimumWidth(300)
-        self._bulk_tmpl_combo.setMinimumHeight(32)
-        self._bulk_tmpl_combo.setStyleSheet("""
-            QComboBox {
-                background: white;
-                border: 1px solid #888;
-                border-radius: 3px;
-                padding: 5px 8px;
-                font-size: 10pt;
-            }
-            QComboBox:hover {
-                border: 2px solid #4a8bc2;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 25px;
-            }
-        """)
-        self._bulk_tmpl_combo.currentIndexChanged.connect(self._on_bulk_tmpl_changed)
-        tmpl_bar_layout.addWidget(self._bulk_tmpl_combo, 1)
-
-        tmpl_bar_layout.addSpacing(20)
-
-        # Logo label with bold font
-        logo_label = QLabel("<b>Logo:</b>")
-        logo_label.setStyleSheet("font-size: 11pt; color: #1F497D; background: transparent; border: none;")
-        tmpl_bar_layout.addWidget(logo_label)
-
-        self._bulk_logo_bar_combo = ClickOnlyComboBox()
-        self._bulk_logo_bar_combo.addItems(["With Logo", "Without Logo"])
-        self._bulk_logo_bar_combo.setMinimumHeight(32)
-        self._bulk_logo_bar_combo.setStyleSheet("""
-            QComboBox {
-                background: white;
-                border: 1px solid #888;
-                border-radius: 3px;
-                padding: 5px 8px;
-                font-size: 10pt;
-            }
-            QComboBox:hover {
-                border: 2px solid #4a8bc2;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 25px;
-            }
-        """)
-        tmpl_bar_layout.addWidget(self._bulk_logo_bar_combo)
-
-        editor_layout.addWidget(tmpl_bar)
 
         self._bulk_scroll = QScrollArea()
         self._bulk_scroll.setWidgetResizable(True)
@@ -892,67 +850,57 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_editor_container.setLayout(self._bulk_editor_layout)
         self._bulk_scroll.setWidget(self._bulk_editor_container)
         editor_layout.addWidget(self._bulk_scroll, 1)
+        
         placeholder = QLabel("Select a case from the list to edit")
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         placeholder.setStyleSheet(STATUS_LABEL_STYLE)
         self._bulk_editor_layout.addWidget(placeholder)
 
-        # Preview side
+        # Batch Report Preview
         preview_group  = QGroupBox("Batch Report Preview")
+        preview_group.setFixedWidth(620) # Fixed size as requested
         preview_layout = QVBoxLayout(); preview_group.setLayout(preview_layout)
+        
         prev_top = QHBoxLayout()
         self.bulk_preview_status = QLabel("Select a patient to preview")
         self.bulk_preview_status.setStyleSheet("color:gray; font-style:italic;")
         self.bulk_preview_status.setWordWrap(True)
         prev_top.addWidget(self.bulk_preview_status, 1)
+        
         refresh_preview_btn = QPushButton("Refresh Preview")
         refresh_preview_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
         refresh_preview_btn.clicked.connect(self._refresh_bulk_preview)
         prev_top.addWidget(refresh_preview_btn)
         preview_layout.addLayout(prev_top)
+        
         prev_scroll = QScrollArea()
         prev_scroll.setWidgetResizable(True)
         self._bulk_preview_inner = QWidget()
         self._bulk_preview_vbox  = QVBoxLayout(self._bulk_preview_inner)
-        self._bulk_preview_vbox.setAlignment(
-            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        self._bulk_preview_vbox.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         prev_scroll.setWidget(self._bulk_preview_inner)
         preview_layout.addWidget(prev_scroll, 1)
 
-        right_splitter.addWidget(editor_widget)
-        right_splitter.addWidget(preview_group)
-        right_splitter.setSizes([500, 500])
+        # Assemble: Splitter for [Cases | Editor] + Fixed [Preview]
+        edit_splitter = QSplitter(Qt.Orientation.Horizontal)
+        edit_splitter.addWidget(left_panel)
+        edit_splitter.addWidget(editor_widget)
+        edit_splitter.setSizes([280, 500])
+        edit_splitter.setStretchFactor(0, 0)
+        edit_splitter.setStretchFactor(1, 1)
 
-        outer_splitter = QSplitter(Qt.Orientation.Horizontal)
-        outer_splitter.addWidget(left_panel)
-        outer_splitter.addWidget(right_splitter)
-        outer_splitter.setSizes([220, 980])
-        review_layout.addWidget(outer_splitter)
+        review_layout.addWidget(edit_splitter, 1)
+        review_layout.addWidget(preview_group, 0)
+        review_layout.setContentsMargins(5, 5, 5, 5)
+        review_layout.setSpacing(5)
         review_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        main_layout.addWidget(review_group, 1)   # stretch=1 → fills all remaining vertical space
+        main_layout.addWidget(review_group, 1)
 
-        # Progress + log
-        self.bulk_progress = QProgressBar()
-        self.bulk_progress.setVisible(False)
-        main_layout.addWidget(self.bulk_progress)
+
+        # Note: bulk_status_label and bulk_log are no longer added to layout
+        # they are kept as attributes so background logging still works.
         self.bulk_status_label = QLabel("")
-        self.bulk_status_label.setStyleSheet(STATUS_LABEL_STYLE)
-        main_layout.addWidget(self.bulk_status_label)
-
-        self.bulk_log = QTextEdit()
-        self.bulk_log.setReadOnly(True)
-        self.bulk_log.setFont(QFont("Courier", 8))
-        self.bulk_log.setFixedHeight(80)
-        self.bulk_log.setStyleSheet("background:#f8f9fa; border:1px solid #ddd;")
-        main_layout.addWidget(self.bulk_log)
-
-        open_row = QHBoxLayout()
-        self.bulk_open_btn = QPushButton("Open Output Folder")
-        self.bulk_open_btn.setEnabled(False)
-        self.bulk_open_btn.clicked.connect(self._open_bulk_folder)
-        open_row.addStretch()
-        open_row.addWidget(self.bulk_open_btn)
-        main_layout.addLayout(open_row)
+        self.bulk_log = QTextEdit() # hidden
         return tab
 
     def browse_bulk_file(self):
@@ -984,10 +932,10 @@ class HLAReportGeneratorApp(QMainWindow):
             self.cases = parse_excel(path, nabl=self.chk_nabl.isChecked())
             self._populate_bulk_list()
             self._bulk_log(f"Loaded {len(self.cases)} case(s) from {os.path.basename(path)}")
-            self.statusBar().showMessage(f"Loaded {len(self.cases)} case(s)")
         except Exception as e:
             QMessageBox.critical(self, "Parse Error", str(e))
             import traceback; traceback.print_exc()
+
 
     def _populate_bulk_list(self):
         self.bulk_list.clear()
@@ -1026,35 +974,28 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_current_row = idx
         self._rebuild_bulk_editor(idx)
 
-    def _on_bulk_tmpl_changed(self, _index):
-        """Header template combo changed — write back to current case immediately."""
-        idx = self._bulk_current_row
-        if idx < 0 or idx >= len(self.cases): return
-        rtype = TEMPLATE_TO_RTYPE.get(self._bulk_tmpl_combo.currentText(), "single_hla")
-        self.cases[idx]["report_type"] = rtype
-        # Sync in-scroll combo if visible
-        if hasattr(self, "_bulk_rtype_combo"):
-            ti = self._bulk_rtype_combo.findText(self._bulk_tmpl_combo.currentText())
-            if ti >= 0:
-                self._bulk_rtype_combo.blockSignals(True)
-                self._bulk_rtype_combo.setCurrentIndex(ti)
-                self._bulk_rtype_combo.blockSignals(False)
-        QTimer.singleShot(100, self._refresh_bulk_preview)
+
+    def _on_bulk_field_debounced(self):
+        """Triggered by any field change; restarts debounce timer."""
+        self._edit_timer.start(400) # 400ms debounce
 
     def _rebuild_bulk_editor(self, idx):
         """Clear and rebuild form fields for cases[idx]. Same pattern as PGTA."""
-        # Sync header bar combos to this case (block signals to avoid re-triggering)
+        # Sync global header combos to this case (block signals to avoid re-triggering)
         case = self.cases[idx]
         _tmpl = RTYPE_TO_TEMPLATE.get(case.get("report_type", "single_hla"), TEMPLATE_NAMES[0])
-        self._bulk_tmpl_combo.blockSignals(True)
-        ti = self._bulk_tmpl_combo.findText(_tmpl)
-        if ti >= 0: self._bulk_tmpl_combo.setCurrentIndex(ti)
-        self._bulk_tmpl_combo.blockSignals(False)
-        # Logo: derive from case's with_logo flag; default to current bulk_logo_combo
-        with_logo = case.get("with_logo", self.bulk_logo_combo.currentText() == "With Logo")
+        self.template_combo.blockSignals(True)
+        ti = self.template_combo.findText(_tmpl)
+        if ti >= 0: self.template_combo.setCurrentIndex(ti)
+        self.template_combo.blockSignals(False)
+
+        # Logo: derive from case's with_logo flag
+        with_logo = case.get("with_logo", True)
         logo_txt  = "With Logo" if with_logo else "Without Logo"
-        li = self._bulk_logo_bar_combo.findText(logo_txt)
-        if li >= 0: self._bulk_logo_bar_combo.setCurrentIndex(li)
+        self.logo_combo.blockSignals(True)
+        li = self.logo_combo.findText(logo_txt)
+        if li >= 0: self.logo_combo.setCurrentIndex(li)
+        self.logo_combo.blockSignals(False)
 
         # Clear existing widgets (PGTA pattern)
         while self._bulk_editor_layout.count():
@@ -1068,6 +1009,7 @@ class HLAReportGeneratorApp(QMainWindow):
         # ── Patient Info ────────────────────────────────────────────────────
         pat_group = QGroupBox("Patient Information")
         pat_form  = QFormLayout(); pat_group.setLayout(pat_form)
+        pat_form.setSpacing(1); pat_form.setContentsMargins(4, 1, 4, 1)
 
         self._bulk_fields = {}
         PAT_FIELDS = [
@@ -1087,36 +1029,56 @@ class HLAReportGeneratorApp(QMainWindow):
         ]
         for key, lbl in PAT_FIELDS:
             w = QLineEdit(str(p.get(key, "")))
-            w.setMaximumHeight(32)
+            w.setFixedHeight(24)
             if "date" in key.lower(): w.setPlaceholderText("DD-MM-YYYY")
+            w.textChanged.connect(self._on_bulk_field_debounced)
             self._bulk_fields[key] = w
             pat_form.addRow(lbl + ":", w)
 
         # Report-level fields
         meta_group = QGroupBox("Report Settings")
         meta_form  = QFormLayout(); meta_group.setLayout(meta_form)
+        meta_form.setSpacing(1)
+        meta_form.setContentsMargins(4, 1, 4, 1)
 
         rtype_combo = ClickOnlyComboBox()
         rtype_combo.addItems(TEMPLATE_NAMES)
         _cur_tmpl = RTYPE_TO_TEMPLATE.get(case.get("report_type", "single_hla"), TEMPLATE_NAMES[0])
         ri = rtype_combo.findText(_cur_tmpl)
         if ri >= 0: rtype_combo.setCurrentIndex(ri)
+        rtype_combo.currentIndexChanged.connect(self._on_bulk_field_debounced)
         self._bulk_rtype_combo = rtype_combo
         meta_form.addRow("Report Type:", rtype_combo)
 
         ts_edit = QLineEdit(case.get("typing_status", "Complete"))
-        ts_edit.setMaximumHeight(32)
+        ts_edit.setFixedHeight(24)
+        ts_edit.textChanged.connect(self._on_bulk_field_debounced)
         self._bulk_ts_edit = ts_edit
         meta_form.addRow("Typing Status:", ts_edit)
 
         imgt_edit = QLineEdit(case.get("imgt_release", ""))
-        imgt_edit.setMaximumHeight(32)
+        imgt_edit.setFixedHeight(24)
+        imgt_edit.textChanged.connect(self._on_bulk_field_debounced)
         self._bulk_imgt_edit = imgt_edit
         meta_form.addRow("IMGT Release:", imgt_edit)
+
+        meth_edit = QLineEdit(case.get("methodology", ""))
+        meth_edit.setFixedHeight(24)
+        meth_edit.textChanged.connect(self._on_bulk_field_debounced)
+        self._bulk_meth_edit = meth_edit
+        meta_form.addRow("Methodology:", meth_edit)
+
+        cov_edit = QLineEdit(case.get("coverage", ""))
+        cov_edit.setFixedHeight(24)
+        cov_edit.textChanged.connect(self._on_bulk_field_debounced)
+        self._bulk_cov_edit = cov_edit
+        meta_form.addRow("Coverage Override:", cov_edit)
 
         # ── Patient HLA ─────────────────────────────────────────────────────
         hla_pat_group = QGroupBox("HLA Results — Patient")
         hla_pat_form  = QFormLayout(); hla_pat_group.setLayout(hla_pat_form)
+        hla_pat_form.setSpacing(2)
+        hla_pat_form.setContentsMargins(4, 4, 4, 4)
 
         self._bulk_hla_pat = {}
         hla_data = p.get("hla", {})
@@ -1125,11 +1087,38 @@ class HLAReportGeneratorApp(QMainWindow):
             a1_val  = alleles[0] if len(alleles) > 0 else ""
             a2_val  = alleles[1] if len(alleles) > 1 else ""
             row_w, a1, a2 = _make_allele_row(a1_val, a2_val)
+            a1.textChanged.connect(self._on_bulk_field_debounced)
+            a2.textChanged.connect(self._on_bulk_field_debounced)
             hla_pat_form.addRow(f"{locus}:", row_w)
             self._bulk_hla_pat[locus] = [a1, a2]
 
         self._bulk_editor_layout.addWidget(pat_group)
         self._bulk_editor_layout.addWidget(meta_group)
+        
+        # ── RPL Reference Section (Conditional) ─────────────────────────────
+        self._bulk_rpl_fields = {}
+        if case.get("report_type") == "rpl_couple":
+            rpl_group = QGroupBox("RPL / Fertility Reference (calculated, editable)")
+            rpl_form  = QFormLayout(); rpl_group.setLayout(rpl_form)
+            rpl_form.setSpacing(1)
+            rpl_form.setContentsMargins(4, 4, 4, 2)
+            ref = case.get("rpl_reference", {})
+            RPL_FIELDS = [
+                ("match_str",        "Match (Overall)"),
+                ("match_pct",        "Overall %"),
+                ("class2_pct",       "Class-II %"),
+                ("hla_sharing_rif",  "HLA Sharing (RIF)"),
+                ("hla_c_patient",    "Maternal HLA-C Type"),
+                ("hla_c_donor",      "Paternal HLA-C Type"),
+            ]
+            for key, lbl in RPL_FIELDS:
+                w = QLineEdit(str(ref.get(key, "")))
+                w.setFixedHeight(24)
+                w.textChanged.connect(self._on_bulk_field_debounced)
+                self._bulk_rpl_fields[key] = w
+                rpl_form.addRow(lbl + ":", w)
+            self._bulk_editor_layout.addWidget(rpl_group)
+
         self._bulk_editor_layout.addWidget(hla_pat_group)
 
         # ── Donors ──────────────────────────────────────────────────────────
@@ -1139,6 +1128,8 @@ class HLAReportGeneratorApp(QMainWindow):
         for di, d in enumerate(case.get("donors", [])):
             d_group = QGroupBox(f"Donor {di+1} — {d.get('name','')}")
             d_form  = QFormLayout(); d_group.setLayout(d_form)
+            d_form.setSpacing(1)
+            d_form.setContentsMargins(4, 4, 4, 2)
             d_fields = {}
             DONOR_FIELDS = [
                 ("name",            "Name"),
@@ -1152,7 +1143,8 @@ class HLAReportGeneratorApp(QMainWindow):
                 ("report_date",     "Report Date"),
             ]
             for key, lbl in DONOR_FIELDS:
-                w = QLineEdit(str(d.get(key, ""))); w.setMaximumHeight(32)
+                w = QLineEdit(str(d.get(key, ""))); w.setFixedHeight(24)
+                w.textChanged.connect(self._on_bulk_field_debounced)
                 d_fields[key] = w; d_form.addRow(lbl + ":", w)
 
             # Donor HLA
@@ -1164,6 +1156,8 @@ class HLAReportGeneratorApp(QMainWindow):
                 a1_val  = alleles[0] if len(alleles) > 0 else ""
                 a2_val  = alleles[1] if len(alleles) > 1 else ""
                 row_w, a1, a2 = _make_allele_row(a1_val, a2_val)
+                a1.textChanged.connect(self._on_bulk_field_debounced)
+                a2.textChanged.connect(self._on_bulk_field_debounced)
                 d_form.addRow(f"  {locus}:", row_w)
                 d_hla[locus] = [a1, a2]
 
@@ -1200,13 +1194,18 @@ class HLAReportGeneratorApp(QMainWindow):
             if v1 or v2: p["hla"][locus] = [v1, v2]
             else:        p["hla"].pop(locus, None)
 
-        # Report meta — use header bar combos as canonical source
-        case["report_type"] = TEMPLATE_TO_RTYPE.get(self._bulk_tmpl_combo.currentText(), "single_hla")
-        case["with_logo"]   = self._bulk_logo_bar_combo.currentText() == "With Logo"
+        # Report meta — use GLOBAL header bar combos as source
+        case["report_type"] = TEMPLATE_TO_RTYPE.get(self.template_combo.currentText(), "single_hla")
+        case["with_logo"]   = self.logo_combo.currentText() == "With Logo"
+        
         if hasattr(self, "_bulk_ts_edit"):
             case["typing_status"] = self._bulk_ts_edit.text().strip()
         if hasattr(self, "_bulk_imgt_edit"):
             case["imgt_release"] = self._bulk_imgt_edit.text().strip()
+        if hasattr(self, "_bulk_meth_edit"):
+            case["methodology"] = self._bulk_meth_edit.text().strip()
+        if hasattr(self, "_bulk_cov_edit"):
+            case["coverage"] = self._bulk_cov_edit.text().strip()
 
         # Donors
         for di, (d_fields, d_hla) in enumerate(
@@ -1221,8 +1220,74 @@ class HLAReportGeneratorApp(QMainWindow):
                 if v1 or v2: d["hla"][locus] = [v1, v2]
                 else:        d["hla"].pop(locus, None)
 
-        self._bulk_log(f"Edits applied to case {idx+1}: {case['patient'].get('name','')}")
-        self.statusBar().showMessage(f"Case {idx+1} updated")
+        # RPL / Fertility manual overrides
+        if case["report_type"] == "rpl_couple" and hasattr(self, "_bulk_rpl_fields"):
+            if "rpl_reference" not in case: case["rpl_reference"] = {}
+            ref = case["rpl_reference"]
+            for key, w in self._bulk_rpl_fields.items():
+                ref[key] = w.text().strip()
+            # Also sync patient-level hla_c_type used by template
+            case["patient"]["hla_c_type"] = ref.get("hla_c_patient", "")
+            if case.get("donors"):
+                case["donors"][0]["hla_c_type"] = ref.get("hla_c_donor", "")
+
+        # ── Real-time Recalculation Logic ───────────────────────────────────
+        # If alleles changed, update the CALCULATED fields in the UI.
+        # We detect change by comparing current HLA to a cached version.
+        current_hla_str = json.dumps(case["patient"].get("hla", {})) + \
+                          json.dumps([d.get("hla", {}) for d in case.get("donors", [])])
+        
+        last_hla = case.get("_last_hla_sync", "")
+        if current_hla_str != last_hla:
+            case["_last_hla_sync"] = current_hla_str
+            if case["report_type"] == "rpl_couple" and case.get("donors"):
+                # Recalculate patient C-type
+                pc = case["patient"]["hla"].get("C", [None, None])
+                ct1 = c_supertype(pc[0]) if pc[0] else None
+                ct2 = c_supertype(pc[1]) if pc[1] else None
+                new_pc_type = ",".join(filter(None, [ct1, ct2]))
+                
+                # Recalculate donor C-type
+                dc = case["donors"][0]["hla"].get("C", [None, None])
+                dt1 = c_supertype(dc[0]) if dc[0] else None
+                dt2 = c_supertype(dc[1]) if dc[1] else None
+                new_dc_type = ",".join(filter(None, [dt1, dt2]))
+                
+                # Recalculate Match Stats
+                new_ref = compute_rpl_reference(case["patient"], case["donors"][0])
+                new_ref["hla_c_patient"] = new_pc_type
+                new_ref["hla_c_donor"]   = new_dc_type
+                
+                # Update UI fields and data (triggers debounce again, which is fine)
+                if hasattr(self, "_bulk_rpl_fields"):
+                    for key, val in new_ref.items():
+                        if key in self._bulk_rpl_fields:
+                            w = self._bulk_rpl_fields[key]
+                            if w.text().strip() != val: # only if changed to allow manual edits to stick if they match
+                                w.blockSignals(True)
+                                w.setText(val)
+                                w.blockSignals(False)
+                                case["rpl_reference"][key] = val
+                case["patient"]["hla_c_type"] = new_pc_type
+                case["donors"][0]["hla_c_type"] = new_dc_type
+
+        # self._bulk_log(f"Edits applied to case {idx+1}: {case['patient'].get('name','')}")
+        # Message removed as per user request (Image 2)
+
+    def _on_global_pref_changed(self):
+        """Called when Template or Logo selection in the global header changes."""
+        idx = self.tabs.currentIndex()
+        if idx == 0: # Manual Tab
+            self._refresh_manual_preview()
+        elif idx == 1: # Bulk Tab
+            b_idx = self._bulk_current_row
+            if 0 <= b_idx < len(self.cases):
+                case = self.cases[b_idx]
+                case["report_type"] = TEMPLATE_TO_RTYPE.get(self.template_combo.currentText(), "single_hla")
+                case["with_logo"]   = self.logo_combo.currentText() == "With Logo"
+                # Rebuild editor because layout might change based on template (RPL extra fields)
+                self._rebuild_bulk_editor(b_idx)
+            self._refresh_bulk_preview()
 
     def _load_bulk_preview(self, pdf_path: str):
         """Render a PDF into the bulk preview panel using fitz (PGTA TERA-style)."""
@@ -1235,7 +1300,7 @@ class HLAReportGeneratorApp(QMainWindow):
             self._bulk_preview_vbox.addWidget(lbl)
             self.bulk_preview_status.setText("Preview not available")
             return
-        pixmaps = _render_pdf_pages(pdf_path, width_px=720)
+        pixmaps = _render_pdf_pages(pdf_path, width_px=600)
         if pixmaps:
             for pm in pixmaps:
                 lbl = QLabel(); lbl.setPixmap(pm)
@@ -1254,7 +1319,7 @@ class HLAReportGeneratorApp(QMainWindow):
             return
         self._flush_bulk_edits(idx)
         case = self.cases[idx]
-        with_logo = self.bulk_logo_combo.currentText() == "With Logo"
+        with_logo = self.logo_combo.currentText() == "With Logo"
         nabl      = self.qsettings.value("nabl_stamp", True, type=bool)
         sig_stamp = self.qsettings.value("signature_stamp", False, type=bool)
         c = self._build_case(
@@ -1300,14 +1365,12 @@ class HLAReportGeneratorApp(QMainWindow):
             QMessageBox.warning(self, "No Output", "Please select an output folder.")
             return
 
-        with_logo  = self.bulk_logo_combo.currentText() == "With Logo"
+        with_logo  = self.logo_combo.currentText() == "With Logo"
         sigs       = self._get_signatories()
         sig_single = self.qsettings.value("sig_count_single", 3, type=int)
         sig_donor  = self.qsettings.value("sig_count_donor",  2, type=int)
         sig_stamp  = self.qsettings.value("signature_stamp", False, type=bool)
 
-        self.bulk_progress.setVisible(True)
-        self.bulk_progress.setValue(0)
         self.bulk_status_label.setText("Generating…")
         self.bulk_log.clear()
 
@@ -1320,26 +1383,17 @@ class HLAReportGeneratorApp(QMainWindow):
         self.worker.start()
 
     def _on_bulk_progress(self, pct, msg):
-        self.bulk_progress.setValue(pct)
         self.bulk_status_label.setText(msg)
         self._bulk_log(f"  {msg}")
 
     def _on_bulk_done(self, success, failed):
-        self.bulk_progress.setVisible(False)
-        self.bulk_open_btn.setEnabled(True)
         self.bulk_status_label.setText(
             f"✓ Done — {len(success)} generated, {len(failed)} failed.")
         self._bulk_log(f"\n✓ Complete. {len(success)} reports saved.")
         QMessageBox.information(self, "Done",
             f"Generated {len(success)} report(s).\nOutput: {self.bulk_output_label.text()}")
-        self.statusBar().showMessage(f"Done: {len(success)} reports generated")
+        # Status bar message removed as requested
 
-    def _open_bulk_folder(self):
-        d = self.bulk_output_label.text()
-        if d and os.path.isdir(d):
-            if platform.system() == "Windows": os.startfile(d)
-            elif platform.system() == "Darwin": subprocess.Popen(["open", d])
-            else: subprocess.Popen(["xdg-open", d])
 
     def _bulk_log(self, msg):
         self.bulk_log.append(msg)
@@ -1407,10 +1461,12 @@ class HLAReportGeneratorApp(QMainWindow):
         self.tbl_sigs = QTableWidget(0, 2)
         self.tbl_sigs.setHorizontalHeaderLabels(["Name", "Title / Role"])
         self.tbl_sigs.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.tbl_sigs.setFixedHeight(140)
         self.tbl_sigs.setAlternatingRowColors(True)
         self.tbl_sigs.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tbl_sigs.setFixedHeight(110)  # Compact fixed height
         g3.addWidget(self.tbl_sigs)
+        
+        g3.addSpacing(5) # Explicit gap
         sig_row = QHBoxLayout()
         edit_sigs_btn  = QPushButton("Edit Signatories…")
         reset_sigs_btn = QPushButton("Reset Defaults")
