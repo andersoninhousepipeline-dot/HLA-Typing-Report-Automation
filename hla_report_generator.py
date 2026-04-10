@@ -57,12 +57,12 @@ _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "template")
 # and the reference PDF template path (used for preview in Settings).
 REPORT_TEMPLATES = [
     {
-        "name":         "HLA Typing High Resolution",
+        "name":         "With CL",
         "report_type":  "single_hla",
         "default_path": os.path.join(_TEMPLATE_DIR, "Dummy_NGS High Resolution 28.10.2025.pdf"),
     },
     {
-        "name":         "HLA Typing – NGS High Resolution Typing",
+        "name":         "RPL",
         "report_type":  "rpl_couple",
         "default_path": os.path.join(_TEMPLATE_DIR, "HLA fertility _RPL_WITH LOGO.pdf"),
     },
@@ -141,6 +141,7 @@ class GenerateWorker(QThread):
             c["with_logo"]       = self.with_logo
             c["signature_stamp"] = self.signature_stamp
             rtype = c.get("report_type", "single_hla")
+            nabl  = c.get("nabl", True)
             n = self.sig_count_single if rtype == "single_hla" else self.sig_count_donor
             c["signatories"] = []
             for sig in self.signatories[:n]:
@@ -148,12 +149,30 @@ class GenerateWorker(QThread):
                 if sign_info is None:
                     # fallback: use first available named sign
                     sign_info = next(iter(hla_assets.SIGN_BY_NAME.values()))
-                c["signatories"].append({
+                entry = {
                     "name":     sig["name"],
                     "title":    sig["title"],
                     "sign_b64": sign_info["sign_b64"],
                     "is_png":   sign_info["is_png"],
-                })
+                }
+                # Rubber seal: only when stamp setting is ON and NABL is enabled
+                if self.signature_stamp and nabl and rtype != "rpl_couple" and "rayvathy" in sig["name"].lower():
+                    entry["seal_b64"] = hla_assets.SEAL_REVATHY_B64
+                # Apply custom signature override if provided
+                if hasattr(sig, "get") and sig.get("sign_override_b64"):
+                    entry["sign_b64"] = sig["sign_override_b64"]
+                    entry["is_png"]   = sig.get("sign_override_is_png", True)
+                c["signatories"].append(entry)
+            # Apply per-case signature name overrides (selected from SIGN_BY_NAME lookup)
+            for slot, sig_name in case.get("sig_name_overrides", {}).items():
+                try:
+                    slot_i = int(slot)
+                    sign_info = hla_assets.SIGN_BY_NAME.get(sig_name)
+                    if sign_info and 0 <= slot_i < len(c["signatories"]):
+                        c["signatories"][slot_i]["sign_b64"] = sign_info["sign_b64"]
+                        c["signatories"][slot_i]["is_png"]   = sign_info["is_png"]
+                except Exception:
+                    pass
             fname    = make_filename(c)
             out_path = os.path.join(self.output_dir, fname)
             self.progress.emit(int(i / total * 100),
@@ -429,39 +448,47 @@ class HLAReportGeneratorApp(QMainWindow):
             hla_form.addRow(f"{locus}:", row_w)
             self.hla_pat[locus] = [a1, a2]
 
-        # Donor section
-        self.donor_group = QGroupBox("Donor Information (optional)")
-        self.donor_group.setCheckable(True)
-        self.donor_group.setChecked(False)
-        donor_form = QFormLayout(); self.donor_group.setLayout(donor_form)
-        scroll_layout.addWidget(self.donor_group)
+        # ── Donors section — supports multiple donors ──────────────────────
+        self._manual_donors = []   # list of {container, fields, hla}
+        donors_outer = QGroupBox("Donors (Optional)")
+        donors_outer_layout = QVBoxLayout()
+        donors_outer_layout.setSpacing(2)
+        donors_outer_layout.setContentsMargins(4, 2, 4, 2)
+        donors_outer.setLayout(donors_outer_layout)
 
-        self.fd = {}
-        DONOR_FIELDS = [
-            ("donor_name",      "Donor Name",     ""),
-            ("relationship",    "Relationship",   ""),
-            ("donor_gender_age","Gender / Age",   ""),
-            ("donor_pin",       "Donor PIN",      ""),
-            ("donor_sample_no", "Sample Number",  ""),
-            ("donor_collect",   "Collection Date",""),
-            ("donor_receipt",   "Receipt Date",   ""),
-            ("match",           "Match Score",    ""),
-        ]
-        for key, lbl, default in DONOR_FIELDS:
-            w = QLineEdit(default); w.setMaximumHeight(24)
-            self.fd[key] = w; donor_form.addRow(lbl + ":", w)
-            # Auto-detect template when relationship changes
-            if key == "relationship":
-                w.textChanged.connect(self._auto_detect_manual_template)
+        add_donor_btn = QPushButton("+ Add Donor")
+        add_donor_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder))
+        add_donor_btn.setMaximumHeight(26)
+        add_donor_btn.clicked.connect(self._add_manual_donor)
+        donors_outer_layout.addWidget(add_donor_btn)
 
-        self.donor_group.toggled.connect(self._auto_detect_manual_template)
+        self._donors_list_layout = QVBoxLayout()
+        self._donors_list_layout.setSpacing(2)
+        donors_outer_layout.addLayout(self._donors_list_layout)
 
-        donor_form.addRow(QLabel("<b>Donor HLA Results</b>"), QLabel(""))
-        self.hla_don = {}
-        for locus in HLA_LOCI:
-            row_w, a1, a2 = _make_allele_row()
-            donor_form.addRow(f"{locus}:", row_w)
-            self.hla_don[locus] = [a1, a2]
+        scroll_layout.addWidget(donors_outer)
+
+        # ── Signature Override — select from configured signatories ───────────
+        self._manual_sig_name_overrides = {}   # {slot_idx: sig_name_string}
+        self._manual_sig_combos         = {}   # {slot_idx: QComboBox}
+
+        sig_group = QGroupBox("Signature Override (select from Settings signatories)")
+        sig_form  = QFormLayout()
+        sig_form.setSpacing(2)
+        sig_form.setContentsMargins(4, 2, 4, 2)
+        sig_group.setLayout(sig_form)
+
+        _sig_options = ["(Use Default)"] + list(hla_assets.SIGN_BY_NAME.keys())
+        for i in range(3):
+            cmb = ClickOnlyComboBox()
+            cmb.addItems(_sig_options)
+            cmb.setFixedHeight(24)
+            cmb.currentTextChanged.connect(
+                lambda text, slot=i: self._on_manual_sig_changed(slot, text))
+            self._manual_sig_combos[i] = cmb
+            sig_form.addRow(f"Signatory {i+1}:", cmb)
+
+        scroll_layout.addWidget(sig_group)
 
         # Draft buttons — under form (same position as PGTA)
         draft_layout = QHBoxLayout()
@@ -584,30 +611,32 @@ class HLAReportGeneratorApp(QMainWindow):
         }
 
         donors = []
-        if self.donor_group.isChecked():
-            d = {k: w.text().strip() for k, w in self.fd.items()}
+        for entry in self._manual_donors:
+            d = {k: w.text().strip() for k, w in entry["fields"].items()}
             donor_hla = {
                 locus: [a[0].text().strip(), a[1].text().strip()]
-                for locus, a in self.hla_don.items()
+                for locus, a in entry["hla"].items()
                 if a[0].text().strip() or a[1].text().strip()
             }
             donors.append({
-                "name": d.get("donor_name", ""),
-                "relationship": d.get("relationship", ""),
-                "gender_age": d.get("donor_gender_age", ""),
-                "pin": d.get("donor_pin", ""),
-                "sample_number": d.get("donor_sample_no", ""),
-                "collection_date": d.get("donor_collect", ""),
-                "receipt_date": d.get("donor_receipt", ""),
-                "report_date": patient.get("report_date", ""),
-                "match": d.get("match", ""),
+                "name":           d.get("donor_name", ""),
+                "relationship":   d.get("relationship", ""),
+                "gender_age":     d.get("donor_gender_age", ""),
+                "pin":            d.get("donor_pin", ""),
+                "sample_number":  d.get("donor_sample_no", ""),
+                "collection_date":d.get("donor_collect", ""),
+                "receipt_date":   d.get("donor_receipt", ""),
+                "report_date":    patient.get("report_date", ""),
+                "match":          d.get("match", ""),
                 "hla": donor_hla, "hla_c_type": "", "remarks": "",
                 "hospital_clinic": patient.get("hospital_clinic", ""),
-                "diagnosis": patient.get("diagnosis", ""),
-                "specimen": patient.get("specimen", "Blood - EDTA"),
+                "diagnosis":       patient.get("diagnosis", ""),
+                "specimen":        patient.get("specimen", "Blood - EDTA"),
             })
 
         case = self._build_case(rtype, nabl, with_logo, sig_stamp, patient, donors)
+        # Apply any custom signature image overrides from the Manual tab
+        self._apply_sig_name_overrides(case, self._manual_sig_name_overrides)
         fname    = make_filename(case)
         out_path = os.path.join(out_dir, fname)
         os.makedirs(out_dir, exist_ok=True)
@@ -658,35 +687,137 @@ class HLAReportGeneratorApp(QMainWindow):
 
     def _auto_detect_manual_template(self):
         """Intelligently update the Template combo based on donor+relationship+diagnosis."""
-        donor_enabled = self.donor_group.isChecked()
-        relationship  = self.fd.get("relationship", QLineEdit()).text().strip().lower()
-        diagnosis     = self.f.get("diagnosis", QLineEdit()).text().strip().upper()
+        has_donors = bool(self._manual_donors)
+        diagnosis  = self.f.get("diagnosis", QLineEdit()).text().strip().upper()
 
-        if not donor_enabled:
+        # Collect all donor relationships
+        relationships = [
+            entry["fields"].get("relationship", QLineEdit()).text().strip().lower()
+            for entry in self._manual_donors
+        ]
+
+        if not has_donors:
             rtype = "single_hla"
         elif any(k in diagnosis for k in ("RPL", "RECURRENT", "MISCARRIAGE", "RIF")):
             rtype = "rpl_couple"
-        elif relationship in ("wife", "husband", "spouse", "partner"):
+        elif any(r in ("wife", "husband", "spouse", "partner") for r in relationships):
             rtype = "rpl_couple"
         else:
             rtype = "transplant_donor"
 
         name = RTYPE_TO_TEMPLATE.get(rtype, TEMPLATE_NAMES[0])
-        idx  = self.cmb_type.findText(name)
+        idx  = self.template_combo.findText(name)
         if idx >= 0:
-            self.cmb_type.blockSignals(True)
-            self.cmb_type.setCurrentIndex(idx)
-            self.cmb_type.blockSignals(False)
+            self.template_combo.blockSignals(True)
+            self.template_combo.setCurrentIndex(idx)
+            self.template_combo.blockSignals(False)
 
     def _clear_manual_form(self):
         for w in self.f.values(): w.clear()
         for locus in HLA_LOCI:
             self.hla_pat[locus][0].clear(); self.hla_pat[locus][1].clear()
-        for w in self.fd.values(): w.clear()
-        for locus in HLA_LOCI:
-            self.hla_don[locus][0].clear(); self.hla_don[locus][1].clear()
-        self.donor_group.setChecked(False)
+        # Remove all donor panels
+        for entry in list(self._manual_donors):
+            entry["container"].deleteLater()
+        self._manual_donors.clear()
         self.manual_status_label.setText("Form cleared.")
+
+    # ── Multi-donor helpers ────────────────────────────────────────────────────
+    def _add_manual_donor(self, donor_data=None):
+        """Create and insert a new donor panel into the manual tab."""
+        di = len(self._manual_donors)
+        fields = donor_data.get("fields", {}) if isinstance(donor_data, dict) and "fields" in donor_data else (donor_data or {})
+        hla_data = donor_data.get("hla", {}) if isinstance(donor_data, dict) and "hla" in donor_data else {}
+
+        # Container widget (group + remove button)
+        container = QWidget()
+        c_lay = QVBoxLayout(container)
+        c_lay.setContentsMargins(0, 0, 0, 2)
+        c_lay.setSpacing(2)
+
+        group = QGroupBox(f"Donor {di + 1}")
+        form  = QFormLayout()
+        form.setSpacing(1)
+        form.setContentsMargins(4, 1, 4, 1)
+        group.setLayout(form)
+
+        DONOR_FIELDS = [
+            ("donor_name",       "Donor Name",      ""),
+            ("relationship",     "Relationship",    ""),
+            ("donor_gender_age", "Gender / Age",    ""),
+            ("donor_pin",        "Donor PIN",       ""),
+            ("donor_sample_no",  "Sample Number",   ""),
+            ("donor_collect",    "Collection Date", ""),
+            ("donor_receipt",    "Receipt Date",    ""),
+            ("match",            "Match Score",     ""),
+        ]
+        d_fields = {}
+        for key, lbl, default in DONOR_FIELDS:
+            val = fields.get(key, default)
+            w = QLineEdit(val)
+            w.setMaximumHeight(24)
+            d_fields[key] = w
+            form.addRow(lbl + ":", w)
+            if key == "relationship":
+                w.textChanged.connect(self._auto_detect_manual_template)
+
+        form.addRow(QLabel("<b>Donor HLA Results</b>"), QLabel(""))
+        d_hla = {}
+        for locus in HLA_LOCI:
+            alleles = hla_data.get(locus, ["", ""])
+            a1_val  = alleles[0] if len(alleles) > 0 else ""
+            a2_val  = alleles[1] if len(alleles) > 1 else ""
+            row_w, a1, a2 = _make_allele_row(a1_val, a2_val)
+            form.addRow(f"{locus}:", row_w)
+            d_hla[locus] = [a1, a2]
+
+        remove_btn = QPushButton(f"Remove Donor {di + 1}")
+        remove_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
+        remove_btn.setMaximumHeight(22)
+
+        c_lay.addWidget(group)
+        c_lay.addWidget(remove_btn)
+
+        entry = {"container": container, "fields": d_fields, "hla": d_hla, "group": group}
+        self._manual_donors.append(entry)
+        remove_btn.clicked.connect(lambda checked, e=entry: self._remove_manual_donor(e))
+
+        self._donors_list_layout.addWidget(container)
+        self._auto_detect_manual_template()
+
+    def _remove_manual_donor(self, entry):
+        """Remove a donor panel from the manual tab."""
+        if entry in self._manual_donors:
+            self._manual_donors.remove(entry)
+            entry["container"].deleteLater()
+            # Re-number remaining donor groups
+            for i, e in enumerate(self._manual_donors):
+                e["group"].setTitle(f"Donor {i + 1}")
+            self._auto_detect_manual_template()
+
+    # ── Signature image overrides (manual tab) ─────────────────────────────────
+    # ── Signature name-override helpers ───────────────────────────────────────
+    def _on_manual_sig_changed(self, slot: int, text: str):
+        """Called when the user changes a signature-override dropdown in the Manual tab."""
+        if text == "(Use Default)":
+            self._manual_sig_name_overrides.pop(slot, None)
+        else:
+            self._manual_sig_name_overrides[slot] = text
+
+    def _apply_sig_name_overrides(self, case: dict, name_overrides: dict):
+        """
+        Replace signatory sign_b64 / is_png using name-keyed lookup from SIGN_BY_NAME.
+        name_overrides: {slot_int_or_str: sig_name_string}
+        Slots with "(Use Default)" or missing entries are left unchanged.
+        """
+        for i, sig in enumerate(case.get("signatories", [])):
+            name = name_overrides.get(i) or name_overrides.get(str(i))
+            if not name or name == "(Use Default)":
+                continue
+            sign_info = hla_assets.SIGN_BY_NAME.get(name)
+            if sign_info:
+                sig["sign_b64"] = sign_info["sign_b64"]
+                sig["is_png"]   = sign_info["is_png"]
 
     def save_manual_draft(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -694,16 +825,21 @@ class HLAReportGeneratorApp(QMainWindow):
             "JSON Files (*.json);;All Files (*)"
         )
         if not path: return
+        saved_donors = []
+        for entry in self._manual_donors:
+            saved_donors.append({
+                "fields": {k: w.text().strip() for k, w in entry["fields"].items()},
+                "hla":    {locus: [a[0].text().strip(), a[1].text().strip()]
+                           for locus, a in entry["hla"].items()},
+            })
         data = {
             "patient_fields": {k: w.text().strip() for k, w in self.f.items()},
-            "report_type": TEMPLATE_TO_RTYPE.get(self.cmb_type.currentText(), "single_hla"),
-            "with_logo":   self.cmb_logo.currentText(),
-            "donor_enabled": self.donor_group.isChecked(),
-            "donor_fields": {k: w.text().strip() for k, w in self.fd.items()},
+            "report_type": TEMPLATE_TO_RTYPE.get(self.template_combo.currentText(), "single_hla"),
+            "with_logo":   self.logo_combo.currentText(),
+            "donors":      saved_donors,
             "patient_hla": {locus: [a[0].text().strip(), a[1].text().strip()]
                             for locus, a in self.hla_pat.items()},
-            "donor_hla":   {locus: [a[0].text().strip(), a[1].text().strip()]
-                            for locus, a in self.hla_don.items()},
+            "sig_name_overrides": {str(k): v for k, v in self._manual_sig_name_overrides.items()},
         }
         try:
             with open(path, "w") as fh: json.dump(data, fh, indent=2)
@@ -722,21 +858,36 @@ class HLAReportGeneratorApp(QMainWindow):
             for k, v in data.get("patient_fields", {}).items():
                 if k in self.f: self.f[k].setText(v)
             _tmpl_name = RTYPE_TO_TEMPLATE.get(data.get("report_type", "single_hla"), TEMPLATE_NAMES[0])
-            idx = self.cmb_type.findText(_tmpl_name)
-            if idx >= 0: self.cmb_type.setCurrentIndex(idx)
-            idx = self.cmb_logo.findText(data.get("with_logo", "With Logo"))
-            if idx >= 0: self.cmb_logo.setCurrentIndex(idx)
-            self.donor_group.setChecked(data.get("donor_enabled", False))
-            for k, v in data.get("donor_fields", {}).items():
-                if k in self.fd: self.fd[k].setText(v)
+            idx = self.template_combo.findText(_tmpl_name)
+            if idx >= 0: self.template_combo.setCurrentIndex(idx)
+            idx = self.logo_combo.findText(data.get("with_logo", "With Logo"))
+            if idx >= 0: self.logo_combo.setCurrentIndex(idx)
+            # Clear existing donor panels
+            for entry in list(self._manual_donors):
+                entry["container"].deleteLater()
+            self._manual_donors.clear()
+            # Restore donor panels
+            for donor_data in data.get("donors", []):
+                self._add_manual_donor(donor_data)
+            # Backward compat: old single-donor format
+            if not data.get("donors") and data.get("donor_enabled"):
+                old_fields = data.get("donor_fields", {})
+                old_hla    = data.get("donor_hla", {})
+                self._add_manual_donor({"fields": old_fields, "hla": old_hla})
             for locus, vals in data.get("patient_hla", {}).items():
                 if locus in self.hla_pat:
                     self.hla_pat[locus][0].setText(vals[0] if len(vals) > 0 else "")
                     self.hla_pat[locus][1].setText(vals[1] if len(vals) > 1 else "")
-            for locus, vals in data.get("donor_hla", {}).items():
-                if locus in self.hla_don:
-                    self.hla_don[locus][0].setText(vals[0] if len(vals) > 0 else "")
-                    self.hla_don[locus][1].setText(vals[1] if len(vals) > 1 else "")
+            # Restore signature name overrides
+            self._manual_sig_name_overrides.clear()
+            for slot_s, sig_name in data.get("sig_name_overrides", {}).items():
+                slot_i = int(slot_s)
+                if sig_name and sig_name != "(Use Default)":
+                    self._manual_sig_name_overrides[slot_i] = sig_name
+                cmb = self._manual_sig_combos.get(slot_i)
+                if cmb:
+                    idx = cmb.findText(sig_name)
+                    if idx >= 0: cmb.setCurrentIndex(idx)
             self.manual_status_label.setText(f"Draft loaded: {os.path.basename(path)}")
         except Exception as e:
             QMessageBox.critical(self, "Load Error", str(e))
@@ -1125,24 +1276,30 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_donor_fields = []
         self._bulk_hla_don      = []
 
+        DONOR_FIELDS_DEF = [
+            ("name",            "Name"),
+            ("relationship",    "Relationship"),
+            ("gender_age",      "Gender / Age"),
+            ("pin",             "PIN"),
+            ("sample_number",   "Sample Number"),
+            ("match",           "Match Score"),
+            ("collection_date", "Collection Date"),
+            ("receipt_date",    "Receipt Date"),
+            ("report_date",     "Report Date"),
+        ]
+
         for di, d in enumerate(case.get("donors", [])):
+            d_container = QWidget()
+            d_container_lay = QVBoxLayout(d_container)
+            d_container_lay.setContentsMargins(0, 0, 0, 2)
+            d_container_lay.setSpacing(2)
+
             d_group = QGroupBox(f"Donor {di+1} — {d.get('name','')}")
             d_form  = QFormLayout(); d_group.setLayout(d_form)
             d_form.setSpacing(1)
             d_form.setContentsMargins(4, 4, 4, 2)
             d_fields = {}
-            DONOR_FIELDS = [
-                ("name",            "Name"),
-                ("relationship",    "Relationship"),
-                ("gender_age",      "Gender / Age"),
-                ("pin",             "PIN"),
-                ("sample_number",   "Sample Number"),
-                ("match",           "Match Score"),
-                ("collection_date", "Collection Date"),
-                ("receipt_date",    "Receipt Date"),
-                ("report_date",     "Report Date"),
-            ]
-            for key, lbl in DONOR_FIELDS:
+            for key, lbl in DONOR_FIELDS_DEF:
                 w = QLineEdit(str(d.get(key, ""))); w.setFixedHeight(24)
                 w.textChanged.connect(self._on_bulk_field_debounced)
                 d_fields[key] = w; d_form.addRow(lbl + ":", w)
@@ -1161,9 +1318,50 @@ class HLAReportGeneratorApp(QMainWindow):
                 d_form.addRow(f"  {locus}:", row_w)
                 d_hla[locus] = [a1, a2]
 
+            # Remove donor button
+            rm_btn = QPushButton(f"Remove Donor {di+1}")
+            rm_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
+            rm_btn.setMaximumHeight(22)
+            rm_btn.clicked.connect(
+                lambda checked, ci=idx, di_=di: self._remove_bulk_donor(ci, di_))
+
+            d_container_lay.addWidget(d_group)
+            d_container_lay.addWidget(rm_btn)
+
             self._bulk_donor_fields.append(d_fields)
             self._bulk_hla_don.append(d_hla)
-            self._bulk_editor_layout.addWidget(d_group)
+            self._bulk_editor_layout.addWidget(d_container)
+
+        # Add donor button
+        add_d_btn = QPushButton("+ Add Donor")
+        add_d_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder))
+        add_d_btn.setMaximumHeight(26)
+        add_d_btn.clicked.connect(lambda: self._add_bulk_donor(self._bulk_current_row))
+        self._bulk_editor_layout.addWidget(add_d_btn)
+
+        # ── Signature Override (select from configured signatories) ──────────
+        self._bulk_sig_combos = {}
+        name_overrides = case.get("sig_name_overrides", {})
+        sig_group = QGroupBox("Signature Override (select from Settings signatories)")
+        sig_form  = QFormLayout()
+        sig_form.setSpacing(2)
+        sig_form.setContentsMargins(4, 2, 4, 2)
+        sig_group.setLayout(sig_form)
+        _sig_opts = ["(Use Default)"] + list(hla_assets.SIGN_BY_NAME.keys())
+        for i in range(3):
+            cmb = ClickOnlyComboBox()
+            cmb.addItems(_sig_opts)
+            cmb.setFixedHeight(24)
+            # Restore saved choice for this slot
+            saved_name = name_overrides.get(i, name_overrides.get(str(i), ""))
+            if saved_name:
+                pos = cmb.findText(saved_name)
+                if pos >= 0: cmb.setCurrentIndex(pos)
+            cmb.currentTextChanged.connect(
+                lambda text, ci=idx, slot=i: self._on_bulk_sig_changed(ci, slot, text))
+            self._bulk_sig_combos[i] = cmb
+            sig_form.addRow(f"Signatory {i+1}:", cmb)
+        self._bulk_editor_layout.addWidget(sig_group)
 
         # Save button for this case
         save_btn = QPushButton(f"Apply Edits to Case {idx+1}")
@@ -1274,6 +1472,49 @@ class HLAReportGeneratorApp(QMainWindow):
         # self._bulk_log(f"Edits applied to case {idx+1}: {case['patient'].get('name','')}")
         # Message removed as per user request (Image 2)
 
+    # ── Bulk donor add/remove ──────────────────────────────────────────────────
+    def _add_bulk_donor(self, case_idx):
+        """Add an empty donor to case and rebuild the editor."""
+        if case_idx < 0 or case_idx >= len(self.cases): return
+        self._flush_bulk_edits(case_idx)
+        case = self.cases[case_idx]
+        if "donors" not in case: case["donors"] = []
+        patient = case.get("patient", {})
+        case["donors"].append({
+            "name": "", "relationship": "", "gender_age": "",
+            "pin": "", "sample_number": "", "match": "",
+            "collection_date": "", "receipt_date": "",
+            "report_date": patient.get("report_date", ""),
+            "hla": {}, "hla_c_type": "", "remarks": "",
+            "hospital_clinic": patient.get("hospital_clinic", ""),
+            "diagnosis":       patient.get("diagnosis", ""),
+            "specimen":        patient.get("specimen", "Blood - EDTA"),
+        })
+        self._rebuild_bulk_editor(case_idx)
+
+    def _remove_bulk_donor(self, case_idx, donor_idx):
+        """Remove a donor from a case and rebuild the editor."""
+        if case_idx < 0 or case_idx >= len(self.cases): return
+        self._flush_bulk_edits(case_idx)
+        case = self.cases[case_idx]
+        donors = case.get("donors", [])
+        if 0 <= donor_idx < len(donors):
+            donors.pop(donor_idx)
+        self._rebuild_bulk_editor(case_idx)
+
+    # ── Bulk signature name-override helpers ──────────────────────────────────
+    def _on_bulk_sig_changed(self, case_idx: int, slot: int, text: str):
+        """Called when the user changes a signature-override dropdown in the Bulk editor."""
+        if case_idx < 0 or case_idx >= len(self.cases):
+            return
+        if "sig_name_overrides" not in self.cases[case_idx]:
+            self.cases[case_idx]["sig_name_overrides"] = {}
+        if text == "(Use Default)":
+            self.cases[case_idx]["sig_name_overrides"].pop(slot, None)
+            self.cases[case_idx]["sig_name_overrides"].pop(str(slot), None)
+        else:
+            self.cases[case_idx]["sig_name_overrides"][slot] = text
+
     def _on_global_pref_changed(self):
         """Called when Template or Logo selection in the global header changes."""
         idx = self.tabs.currentIndex()
@@ -1327,6 +1568,12 @@ class HLAReportGeneratorApp(QMainWindow):
             case.get("nabl", nabl), with_logo, sig_stamp,
             case["patient"], case.get("donors", [])
         )
+        # Apply any per-case signature overrides
+        self._apply_sig_name_overrides(c, case.get("sig_name_overrides", {}))
+        # Copy case-level imgt/methodology/typing_status overrides
+        for key in ("imgt_release", "methodology", "typing_status", "coverage", "rpl_reference"):
+            if case.get(key):
+                c[key] = case[key]
         tmp = TEMP_PREVIEW_PATH.replace(".pdf", "_bulk.pdf")
         self.bulk_preview_status.setText("Generating preview…")
         if hasattr(self, "_bulk_preview_worker") and self._bulk_preview_worker \
@@ -1444,6 +1691,14 @@ class HLAReportGeneratorApp(QMainWindow):
         self.chk_stamp.setChecked(     self.qsettings.value("signature_stamp",  False, type=bool))
         for chk in [self.chk_logo, self.chk_nabl_stamp, self.chk_stamp]:
             g1.addWidget(chk)
+        # Auto-persist checkbox state immediately on change so that report generation
+        # always reads the current UI value (prevents stale-cache stamp/logo bugs).
+        self.chk_logo.stateChanged.connect(
+            lambda: self.qsettings.setValue("with_logo",       self.chk_logo.isChecked()))
+        self.chk_nabl_stamp.stateChanged.connect(
+            lambda: self.qsettings.setValue("nabl_stamp",      self.chk_nabl_stamp.isChecked()))
+        self.chk_stamp.stateChanged.connect(
+            lambda: self.qsettings.setValue("signature_stamp", self.chk_stamp.isChecked()))
         lay.addWidget(grp1)
 
         grp2 = QGroupBox("Signatory Count Defaults")
@@ -1659,8 +1914,9 @@ case — edits are flushed automatically).</p>
             sign_info = hla_assets.SIGN_BY_NAME.get(sig["name"],
                             next(iter(hla_assets.SIGN_BY_NAME.values())))
             entry = {**sig, **sign_info}
-            # NABL NGS only: attach Dr. Rayvathy's rubber seal below her signature
-            if nabl and rtype != "rpl_couple" and "rayvathy" in sig["name"].lower():
+            # Rubber seal: only when BOTH the stamp setting is ON and NABL is enabled
+            # (non-RPL reports only; sig_stamp=False → seal is never attached)
+            if sig_stamp and nabl and rtype != "rpl_couple" and "rayvathy" in sig["name"].lower():
                 entry["seal_b64"] = hla_assets.SEAL_REVATHY_B64
             sigs.append(entry)
         return {
