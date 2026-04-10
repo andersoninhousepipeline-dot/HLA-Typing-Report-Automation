@@ -155,8 +155,8 @@ class GenerateWorker(QThread):
                     "sign_b64": sign_info["sign_b64"],
                     "is_png":   sign_info["is_png"],
                 }
-                # Rubber seal: only when stamp setting is ON and NABL is enabled
-                if self.signature_stamp and nabl and rtype != "rpl_couple" and "rayvathy" in sig["name"].lower():
+                # Rubber seal: whenever stamp setting is ON, across all templates and both NABL/non-NABL
+                if self.signature_stamp and "rayvathy" in sig["name"].lower():
                     entry["seal_b64"] = hla_assets.SEAL_REVATHY_B64
                 # Apply custom signature override if provided
                 if hasattr(sig, "get") and sig.get("sign_override_b64"):
@@ -164,6 +164,7 @@ class GenerateWorker(QThread):
                     entry["is_png"]   = sig.get("sign_override_is_png", True)
                 c["signatories"].append(entry)
             # Apply per-case signature name overrides (selected from SIGN_BY_NAME lookup)
+            _title_lookup = {s["name"]: s["title"] for s in DEFAULT_SIGNATORIES}
             for slot, sig_name in case.get("sig_name_overrides", {}).items():
                 try:
                     slot_i = int(slot)
@@ -171,6 +172,9 @@ class GenerateWorker(QThread):
                     if sign_info and 0 <= slot_i < len(c["signatories"]):
                         c["signatories"][slot_i]["sign_b64"] = sign_info["sign_b64"]
                         c["signatories"][slot_i]["is_png"]   = sign_info["is_png"]
+                        c["signatories"][slot_i]["name"]     = sig_name
+                        if sig_name in _title_lookup:
+                            c["signatories"][slot_i]["title"] = _title_lookup[sig_name]
                 except Exception:
                     pass
             fname    = make_filename(c)
@@ -587,17 +591,8 @@ class HLAReportGeneratorApp(QMainWindow):
             self.bulk_output_label.setText(path)   # sync with bulk tab
             self.qsettings.setValue("last_output_dir", path)
 
-    def generate_manual(self):
-        name = self.f["patient_name"].text().strip()
-        pin  = self.f["pin"].text().strip()
-        if not name or not pin:
-            QMessageBox.warning(self, "Missing Fields", "Patient Name and PIN are required.")
-            return
-        out_dir = self.manual_output_label.text()
-        if out_dir == "No directory selected":
-            QMessageBox.warning(self, "No Output", "Please select an output folder.")
-            return
-
+    def _collect_manual_case(self) -> dict:
+        """Build a case dict from the current Manual tab form state + current settings."""
         with_logo = self.logo_combo.currentText() == "With Logo"
         rtype     = TEMPLATE_TO_RTYPE.get(self.template_combo.currentText(), "single_hla")
         nabl      = self.qsettings.value("nabl_stamp", True, type=bool)
@@ -635,8 +630,21 @@ class HLAReportGeneratorApp(QMainWindow):
             })
 
         case = self._build_case(rtype, nabl, with_logo, sig_stamp, patient, donors)
-        # Apply any custom signature image overrides from the Manual tab
         self._apply_sig_name_overrides(case, self._manual_sig_name_overrides)
+        return case
+
+    def generate_manual(self):
+        name = self.f["patient_name"].text().strip()
+        pin  = self.f["pin"].text().strip()
+        if not name or not pin:
+            QMessageBox.warning(self, "Missing Fields", "Patient Name and PIN are required.")
+            return
+        out_dir = self.manual_output_label.text()
+        if out_dir == "No directory selected":
+            QMessageBox.warning(self, "No Output", "Please select an output folder.")
+            return
+
+        case     = self._collect_manual_case()
         fname    = make_filename(case)
         out_path = os.path.join(out_dir, fname)
         os.makedirs(out_dir, exist_ok=True)
@@ -644,7 +652,6 @@ class HLAReportGeneratorApp(QMainWindow):
             generate_pdf(case, out_path)
             self.manual_status_label.setText(f"✓ Saved: {fname}")
             self.statusBar().showMessage(f"Generated: {fname}")
-            # Launch preview in background (PGTA pattern)
             self._start_manual_preview(case)
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
@@ -682,8 +689,14 @@ class HLAReportGeneratorApp(QMainWindow):
                 self._manual_preview_vbox.addWidget(lbl)
 
     def _refresh_manual_preview(self):
-        if os.path.exists(TEMP_PREVIEW_PATH):
-            self._on_manual_preview_generated(TEMP_PREVIEW_PATH)
+        """Regenerate preview from current form state (picks up latest stamp/logo/template settings)."""
+        try:
+            case = self._collect_manual_case()
+            self._start_manual_preview(case)
+        except Exception:
+            # Form may be empty — fall back to reloading existing file
+            if os.path.exists(TEMP_PREVIEW_PATH):
+                self._on_manual_preview_generated(TEMP_PREVIEW_PATH)
 
     def _auto_detect_manual_template(self):
         """Intelligently update the Template combo based on donor+relationship+diagnosis."""
@@ -806,10 +819,11 @@ class HLAReportGeneratorApp(QMainWindow):
 
     def _apply_sig_name_overrides(self, case: dict, name_overrides: dict):
         """
-        Replace signatory sign_b64 / is_png using name-keyed lookup from SIGN_BY_NAME.
+        Replace signatory sign_b64 / is_png / name / title using name-keyed lookup from SIGN_BY_NAME.
         name_overrides: {slot_int_or_str: sig_name_string}
         Slots with "(Use Default)" or missing entries are left unchanged.
         """
+        title_lookup = {s["name"]: s["title"] for s in DEFAULT_SIGNATORIES}
         for i, sig in enumerate(case.get("signatories", [])):
             name = name_overrides.get(i) or name_overrides.get(str(i))
             if not name or name == "(Use Default)":
@@ -818,6 +832,9 @@ class HLAReportGeneratorApp(QMainWindow):
             if sign_info:
                 sig["sign_b64"] = sign_info["sign_b64"]
                 sig["is_png"]   = sign_info["is_png"]
+                sig["name"]     = name
+                if name in title_lookup:
+                    sig["title"] = title_lookup[name]
 
     def save_manual_draft(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -1914,9 +1931,8 @@ case — edits are flushed automatically).</p>
             sign_info = hla_assets.SIGN_BY_NAME.get(sig["name"],
                             next(iter(hla_assets.SIGN_BY_NAME.values())))
             entry = {**sig, **sign_info}
-            # Rubber seal: only when BOTH the stamp setting is ON and NABL is enabled
-            # (non-RPL reports only; sig_stamp=False → seal is never attached)
-            if sig_stamp and nabl and rtype != "rpl_couple" and "rayvathy" in sig["name"].lower():
+            # Rubber seal: whenever stamp setting is ON, across all templates and both NABL/non-NABL
+            if sig_stamp and "rayvathy" in sig["name"].lower():
                 entry["seal_b64"] = hla_assets.SEAL_REVATHY_B64
             sigs.append(entry)
         return {
