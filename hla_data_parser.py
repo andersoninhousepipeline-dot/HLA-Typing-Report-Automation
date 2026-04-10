@@ -55,6 +55,70 @@ def _clean_str(val) -> str:
     return str(val).strip()
 
 
+# Recognised name prefixes → canonical casing
+_PREFIX_MAP = {
+    "mr":     "Mr",
+    "mrs":    "Mrs",
+    "ms":     "Ms",
+    "master": "Master",
+    "dr":     "Dr",
+}
+
+
+def _sentence_case(val) -> str:
+    """
+    Convert a text value to sentence case with prefix-aware formatting.
+
+    Rules
+    -----
+    * Known prefixes (Mr / Mrs / Ms / Master / Dr) are preserved with correct casing.
+    * A period immediately after the prefix (e.g. "Mrs.hemalatha") is treated as a
+      separator — replaced by a space before processing.
+    * The first word of the actual name (after the prefix) is capitalised.
+    * All remaining words are lowercased.
+
+    Examples
+    --------
+    "mr JOHN DOE"     → "Mr John doe"
+    "DR jane SMITH"   → "Dr Jane smith"
+    "ms aNNa"         → "Ms Anna"
+    "Mrs.hemalatha"   → "Mrs Hemalatha"
+    "dr.ravi kumar"   → "Dr Ravi kumar"
+    "JOHN DOE"        → "John doe"
+    """
+    s = _clean_str(val)
+    if not s:
+        return s
+
+    # Normalise "prefix.word" → "prefix word"  (e.g. "Mrs.hemalatha", "dr.ravi")
+    s = re.sub(r'^(mr|mrs|ms|master|dr)\.(\S)', r'\1 \2', s, flags=re.IGNORECASE)
+    # Also strip a lone trailing period on the prefix word (e.g. "Mr. John" → "Mr John")
+    s = re.sub(r'^(mr|mrs|ms|master|dr)\.\s+', r'\1 ', s, flags=re.IGNORECASE)
+
+    words = s.split()
+    if not words:
+        return s
+
+    # Check whether the first word is a known prefix (ignore trailing punctuation)
+    first_key = words[0].rstrip('.').lower()
+    if first_key in _PREFIX_MAP:
+        prefix    = _PREFIX_MAP[first_key]
+        remaining = words[1:]
+        if not remaining:
+            return prefix
+        # First name word: first char upper, rest lower
+        fn = remaining[0].lower()
+        fn = fn[0].upper() + fn[1:] if fn else fn
+        # Subsequent words: all lowercase
+        rest = [w.lower() for w in remaining[1:]]
+        return " ".join([prefix, fn] + rest)
+
+    # No recognised prefix — standard sentence case
+    lowered = [w.lower() for w in words]
+    lowered[0] = lowered[0][0].upper() + lowered[0][1:] if lowered[0] else lowered[0]
+    return " ".join(lowered)
+
+
 def _clean_allele(val) -> Optional[str]:
     """
     Normalise a single allele: strip prefix, handle dash/null.
@@ -290,23 +354,27 @@ def _build_person(row: pd.Series, hla_lookup: dict, join_by: str) -> dict:
     combined_remarks = excel_remarks  # Instrument remarks excluded intentionally
 
     return {
-        "name":           _clean_str(row.get(" name", "")),
-        "gender_age":     _clean_str(row.get("Gender / Age", "")),
+        # Text fields → sentence case (first char upper, rest lower)
+        "name":           _sentence_case(row.get(" name", "")),
+        "gender_age":     _sentence_case(row.get("Gender / Age", "")),
+        "diagnosis":      _sentence_case(row.get("Diagnosis", "")),
+        "referred_by":    _sentence_case(row.get("Referred By", "")),
+        "hospital_clinic":_sentence_case(row.get("Hospital/Clinic", "")),
+        "specimen":       _sentence_case(row.get("Specimen ", "")),
+        "relationship":   _sentence_case(row.get("Relationship", "")),
+        "remarks":        _sentence_case(combined_remarks),
+        # ID / code fields → left as-is (no case conversion)
         "hospital_mr_no": _clean_str(row.get("Hospital MR No ", "")),
-        "diagnosis":      _clean_str(row.get("Diagnosis", "")),
-        "referred_by":    _clean_str(row.get("Referred By", "")),
-        "hospital_clinic":_clean_str(row.get("Hospital/Clinic", "")),
         "pin":            _clean_str(row.get("PIN", "")),
         "sample_number":  str(row.get("Sample Number ", "")).strip().split(".")[0],
-        "specimen":       _clean_str(row.get("Specimen ", "")),
+        # Date fields (already formatted DD-MM-YYYY)
         "collection_date":_fmt_date(row.get("Collection Date ")),
         "receipt_date":   _fmt_date(row.get("Sample receipt date")),
         "report_date":    _fmt_date(row.get("Report date ")),
-        "relationship":   _clean_str(row.get("Relationship", "")),
+        # Computed / structured fields
         "match":          _parse_match(row.get("Match", "")),
         "hla":            hla,
         "hla_c_type":     hla_c_type,
-        "remarks":        combined_remarks,
         "_join_key":      key,
     }
 
