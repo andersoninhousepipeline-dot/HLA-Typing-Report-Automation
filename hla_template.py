@@ -791,8 +791,7 @@ def _signature_block(signatories: list, S: dict) -> list:
     ]))
 
     return [
-        Spacer(1, 2 * mm),  # Reduced spacing before signature section
-        HRFlowable(width="100%", thickness=0.5, color=BLACK, spaceAfter=2),  # Thinner line, less space
+        Spacer(1, 2 * mm),
         Paragraph("<b>This report has been reviewed and approved by:</b>",
                   S["sign_approval"]),
         outer,
