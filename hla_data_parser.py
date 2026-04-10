@@ -116,7 +116,10 @@ def _sentence_case(val) -> str:
     # No recognised prefix — standard sentence case
     lowered = [w.lower() for w in words]
     lowered[0] = lowered[0][0].upper() + lowered[0][1:] if lowered[0] else lowered[0]
-    return " ".join(lowered)
+    result = " ".join(lowered)
+    # Capitalise the first letter after any embedded period (e.g. "Baby.sitara" → "Baby.Sitara")
+    result = re.sub(r'\.([a-z])', lambda m: '.' + m.group(1).upper(), result)
+    return result
 
 
 def _clean_allele(val) -> Optional[str]:
