@@ -344,15 +344,15 @@ class _HFCanvas:
                 width=CONTENT_W, height=self.footer_h,
                 preserveAspectRatio=True, mask="auto"
             )
-            # Page number "Page X of N" (white, right-aligned, centred on footer bar)
-            canvas.setFont(_f("Calibri", "Helvetica"), 11)
-            canvas.setFillColor(WHITE)
+            # Page number "Page X of N" — right-aligned, just above the footer bar
+            canvas.setFont(_f("Calibri", "Helvetica"), 9)
+            canvas.setFillColor(BLACK)
             canvas.drawRightString(
                 PAGE_W - MARGIN_R,
-                fy + self.footer_h / 2 - 5,
+                fy + self.footer_h + 2 * mm,
                 f"Page {doc.page} of {self.total_pages}"
             )
-        # No logo mode: leave header/footer space completely empty (no page numbers, no content)
+        # No logo mode: leave header/footer space completely empty (no page numbers)
 
         canvas.restoreState()
 
@@ -974,7 +974,7 @@ def generate_pdf(case: dict, output_path: str) -> str:
         banner_h      = 0
         footer_h      = 0
         top_margin    = MARGIN_T
-        bottom_margin = MARGIN_B + 5 * mm  # Small space for page number
+        bottom_margin = MARGIN_B
 
     doc = SimpleDocTemplate(
         output_path,
