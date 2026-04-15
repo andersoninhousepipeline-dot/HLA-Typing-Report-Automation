@@ -467,6 +467,10 @@ class HLAReportGeneratorApp(QMainWindow):
             if key == "diagnosis":
                 w.textChanged.connect(self._auto_detect_manual_template)
 
+        self._manual_nabl_chk = QCheckBox("NABL Accreditation")
+        self._manual_nabl_chk.setChecked(self.qsettings.value("nabl_stamp", True, type=bool))
+        pat_form.addRow(self._manual_nabl_chk)
+
         # Report Options moved to global header
 
         # Patient HLA Results (FormLayout, one locus per row, two alleles side-by-side)
@@ -623,7 +627,7 @@ class HLAReportGeneratorApp(QMainWindow):
         """Build a case dict from the current Manual tab form state + current settings."""
         with_logo = self.logo_combo.currentText() == "With Logo"
         rtype     = TEMPLATE_TO_RTYPE.get(self.template_combo.currentText(), "single_hla")
-        nabl      = self.qsettings.value("nabl_stamp", True, type=bool)
+        nabl      = self._manual_nabl_chk.isChecked()
         sig_stamp = self.qsettings.value("signature_stamp", False, type=bool)
 
         patient = {k: w.text().strip() for k, w in self.f.items()}
@@ -896,6 +900,7 @@ class HLAReportGeneratorApp(QMainWindow):
             "patient_hla": {locus: [a[0].text().strip(), a[1].text().strip()]
                             for locus, a in self.hla_pat.items()},
             "sig_name_overrides": {str(k): v for k, v in self._manual_sig_name_overrides.items()},
+            "nabl": self._manual_nabl_chk.isChecked(),
         }
         try:
             with open(path, "w") as fh: json.dump(data, fh, indent=2)
@@ -944,6 +949,7 @@ class HLAReportGeneratorApp(QMainWindow):
                 if cmb:
                     idx = cmb.findText(sig_name)
                     if idx >= 0: cmb.setCurrentIndex(idx)
+            self._manual_nabl_chk.setChecked(data.get("nabl", True))
             self.manual_status_label.setText(f"Draft loaded: {os.path.basename(path)}")
         except Exception as e:
             QMessageBox.critical(self, "Load Error", str(e))
@@ -1139,6 +1145,7 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_hla_pat     = {}
         self._bulk_donor_fields = []
         self._bulk_hla_don     = []
+        self._bulk_nabl_chk    = None
         # Clear the editor UI so no stale widgets remain
         while self._bulk_editor_layout.count():
             child = self._bulk_editor_layout.takeAt(0)
@@ -1263,6 +1270,12 @@ class HLAReportGeneratorApp(QMainWindow):
             w.textChanged.connect(self._on_bulk_field_debounced)
             self._bulk_fields[key] = w
             pat_form.addRow(lbl + ":", w)
+
+        _nabl_default = case.get("nabl", self.qsettings.value("nabl_stamp", True, type=bool))
+        self._bulk_nabl_chk = QCheckBox("NABL Accreditation")
+        self._bulk_nabl_chk.setChecked(_nabl_default)
+        self._bulk_nabl_chk.stateChanged.connect(self._on_bulk_field_debounced)
+        pat_form.addRow(self._bulk_nabl_chk)
 
         # Report-level fields
         meta_group = QGroupBox("Report Settings")
@@ -1477,7 +1490,9 @@ class HLAReportGeneratorApp(QMainWindow):
         else:
             case["report_type"] = TEMPLATE_TO_RTYPE.get(self.template_combo.currentText(), "single_hla")
         case["with_logo"]   = self.logo_combo.currentText() == "With Logo"
-        
+        if hasattr(self, "_bulk_nabl_chk") and self._bulk_nabl_chk is not None:
+            case["nabl"] = self._bulk_nabl_chk.isChecked()
+
         if hasattr(self, "_bulk_ts_edit"):
             case["typing_status"] = self._bulk_ts_edit.text().strip()
         if hasattr(self, "_bulk_imgt_edit"):
