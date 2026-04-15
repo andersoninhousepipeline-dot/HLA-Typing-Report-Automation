@@ -97,7 +97,6 @@ RPL_DISCLAIMERS = [
     "made solely on the basis of this report without clinical correlation.",
 ]
 
-
 # ─── Font registration ────────────────────────────────────────────────────────
 _FONTS_DIR = os.path.join(os.path.dirname(__file__), "assets", "hla", "fonts")
 _REGISTERED: set[str] = set()
@@ -195,18 +194,18 @@ def _styles() -> dict:
             "val", fontName=F_SEGOE_BOLD, fontSize=10,
             textColor=BLACK, leading=12
         ),
-        # ── HLA table ────────────────────────────────────────────────────────
+        # ── HLA table (font sizes reduced 1pt to prevent header overflow) ────
         "hla_hdr": ParagraphStyle(
-            "hla_hdr", fontName=F_CALI_BOLD, fontSize=12,
-            textColor=BLACK, alignment=TA_CENTER, leading=14
+            "hla_hdr", fontName=F_CALI_BOLD, fontSize=11,
+            textColor=BLACK, alignment=TA_CENTER, leading=13
         ),
         "hla_val": ParagraphStyle(
-            "hla_val", fontName=F_CALI, fontSize=11,
-            textColor=BLACK, alignment=TA_CENTER, leading=13
+            "hla_val", fontName=F_CALI, fontSize=10,
+            textColor=BLACK, alignment=TA_CENTER, leading=12
         ),
         "hla_lbl": ParagraphStyle(
-            "hla_lbl", fontName=F_CALI_BOLD, fontSize=11,
-            textColor=BLACK, alignment=TA_CENTER, leading=13
+            "hla_lbl", fontName=F_CALI_BOLD, fontSize=10,
+            textColor=BLACK, alignment=TA_CENTER, leading=12
         ),
         # ── Body text ────────────────────────────────────────────────────────
         "body": ParagraphStyle(
@@ -272,7 +271,7 @@ def _styles() -> dict:
         ),
         "disc_item": ParagraphStyle(
             "disc_item", fontName=F_CALI, fontSize=11,
-            textColor=BLACK, leading=13, leftIndent=12, spaceAfter=1
+            textColor=BLACK, leading=13, alignment=TA_JUSTIFY, leftIndent=12, spaceAfter=1
         ),
         # ── Signature block ───────────────────────────────────────────────────
         # Cambria-Bold 12.2pt in reference PDF; SegoeUI-Bold is closest available
@@ -303,6 +302,134 @@ def _strip_prefix(allele: str) -> str:
         return "—"
     m = re.match(r"[A-Za-z0-9]+\*(.+)", allele)
     return m.group(1) if m else allele
+
+
+def _clean_display(val) -> str:
+    """Render layer: replace empty / N/A / any value containing 'Insufficient Data' with em-dash.
+    'Insufficient Data' is a substring match (mirrors /insufficient data/i.test(val)).
+    N/A is a whole-string match only."""
+    s = str(val).strip() if val else ""
+    if not s:
+        return "\u2014"
+    # Round 4 safety net: collapse ALL whitespace before testing so "I n s u f f i c i e n t   d a t a" is caught
+    if re.sub(r"\s+", "", s).lower() == "insufficientdata":
+        return "\u2014"
+    if re.search(r"insufficient\s*data", s, re.I):   # catches standard spacing variants
+        return "\u2014"
+    if re.fullmatch(r"n/?a", s, re.I):               # whole-string N/A / NA / n/a
+        return "\u2014"
+    return s
+
+
+_DEGREE_MAP = {
+    "mbbs": "MBBS", "md": "MD", "ms": "MS", "dm": "DM",
+    "dnb": "DNB", "phd": "PhD", "dgo": "DGO", "frcs": "FRCS", "mrcp": "MRCP",
+}
+# Fix 2: expanded to include medical/lab abbreviations that must always be uppercased.
+_ABBREV_SET = {"edta", "dna", "rna", "pcr", "bmt", "hla", "rpl", "rif", "nips", "poc", "ngs", "wbc", "rbc"}
+_PREFIX_MAP_TC = {"mr": "Mr", "mrs": "Mrs", "ms": "Ms", "master": "Master", "dr": "Dr"}
+
+
+def _title_case(text: str) -> str:
+    """Render-layer smart title case for names, degrees, and specimen types.
+
+    Rules (applied per token, where tokens split on whitespace and commas):
+    - Already ALL-CAPS words of length > 1 are preserved as-is (e.g. HLA, NGS).
+    - Known degrees (mbbs, md, ms, dm, dnb, phd, dgo, frcs, mrcp) → fixed uppercase/mixed form.
+    - Known abbreviations (edta, bmt, hla, rpl, rif, etc.) → always uppercase.
+    - Short forms enclosed in parentheses → always uppercase (e.g. (hbii) → (HBII)).
+    - Period-concatenated tokens like Dr.S.k.gupta → split at dots, process each segment:
+        · first segment checked as prefix (Dr → Dr)
+        · middle single-letter segments → uppercase initial
+        · last multi-letter segment → title-cased name
+    - Known prefixes at word boundaries (Mr/Mrs/Ms/Master/Dr) → canonical casing.
+    - All other words → first letter upper, rest lower.
+    """
+    if not text or text == "\u2014":
+        return text
+
+    def _process_token(token: str) -> str:
+        if not token:
+            return token
+
+        # Fix 2: strip any trailing parenthesised short-form so the base word is
+        # processed correctly, then reattach the short-form fully uppercased.
+        # e.g. "International(hbii)" → base="International", paren="(HBII)"
+        paren_m = re.search(r'\(([^)]+)\)$', token)
+        if paren_m:
+            base  = token[:paren_m.start()]
+            paren = '(' + paren_m.group(1).upper() + ')'
+        else:
+            base  = token
+            paren = ''
+
+        # If the whole token is just a parenthesised form (no base), return uppercased.
+        if not base:
+            return paren
+
+        result = _process_base(base)
+        return result + paren
+
+    def _process_base(token: str) -> str:
+        """Apply capitalization rules to a bare token (no parenthesised suffix).
+
+        Rules (in priority order):
+        1. Already all-uppercase (length > 1) → preserve (e.g. HLA, EDTA typed in caps).
+        2. Known degrees → fixed mixed-case form (e.g. PhD, MBBS).
+        3. Period-concatenated initials/tokens → split and process each segment.
+        4. Single-letter alpha → uppercase (standalone initial like "r" in "Ramya r").
+        5. Known name prefix (Dr, Mr, Mrs, Ms, Master) → canonical casing.
+        6. Short word (≤4 chars, alpha-only, no vowels) → uppercase abbreviation.
+        7. Short word (≤4 chars, alpha-only) → uppercase (catches BMT, CKD, HD, IDD, etc.).
+        8. Default → title-case.
+        """
+        # Rule 1: Preserve all-uppercase words of length > 1 (already in caps)
+        if len(token) > 1 and token == token.upper() and token.isalpha():
+            return token
+        lower = token.lower()
+        # Rule 2: Known degrees → fixed form
+        if lower in _DEGREE_MAP:
+            return _DEGREE_MAP[lower]
+        # Rule 3: Period-concatenated token (e.g. Dr.S.k.gupta or S.K.)
+        if "." in token:
+            parts = [p for p in token.split(".") if p]
+            if not parts:
+                return token
+            result_parts = []
+            for i, part in enumerate(parts):
+                p_lower = part.lower()
+                if i == 0 and p_lower in _PREFIX_MAP_TC:
+                    result_parts.append(_PREFIX_MAP_TC[p_lower])
+                elif len(part) == 1:
+                    result_parts.append(part.upper())
+                elif p_lower in _DEGREE_MAP:
+                    result_parts.append(_DEGREE_MAP[p_lower])
+                elif p_lower in _ABBREV_SET:
+                    result_parts.append(part.upper())
+                elif part.isalpha() and not any(c in "aeiou" for c in p_lower):
+                    result_parts.append(part.upper())
+                else:
+                    result_parts.append(part[0].upper() + part[1:].lower())
+            return " ".join(result_parts)
+        # Rule 4: Single-letter initial (e.g. "r" in "Ramya r") → uppercase
+        if len(token) == 1 and token.isalpha():
+            return token.upper()
+        # Rule 5: Known name prefix → canonical casing (Dr, Mr, Mrs, Ms, Master)
+        if lower in _PREFIX_MAP_TC:
+            return _PREFIX_MAP_TC[lower]
+        # Rule 6a: Known lab/specimen abbreviation whitelist → always uppercase (checked before vowel rule)
+        if lower in _ABBREV_SET:
+            return token.upper()
+        # Rule 6b: All-alpha, no vowels → uppercase abbreviation (CKD, HD, BMT, PVT, LTD, etc.)
+        # Words containing vowels are never treated as abbreviations regardless of length.
+        if token.isalpha() and not any(c in "aeiou" for c in lower):
+            return token.upper()
+        # Rule 8: Default → title-case
+        return token[0].upper() + token[1:].lower()
+
+    # Split preserving whitespace and comma delimiters
+    parts = re.split(r"(\s+|,)", text)
+    return "".join(_process_token(p) if not re.match(r"^(\s+|,)$", p) else p for p in parts)
 
 
 # ─── Canvas: header + footer on every page ────────────────────────────────────
@@ -337,22 +464,24 @@ class _HFCanvas:
         # Only draw footer if with_logo is True
         if with_logo:
             raw_f = hla_assets.get_image_bytes(hla_assets.FOOTER_BAR_B64)
-            fy = MARGIN_B - self.footer_h - 2 * mm
+            # Footer bar sits above the page-number area (Fix 2: page number below footer)
+            _PAGE_NUM_AREA = 4 * mm   # vertical space reserved below footer bar for page number
+            fy = MARGIN_B + _PAGE_NUM_AREA
             canvas.drawImage(
                 ImageReader(io.BytesIO(raw_f)),
                 MARGIN_L, fy,
                 width=CONTENT_W, height=self.footer_h,
                 preserveAspectRatio=True, mask="auto"
             )
-            # Page number "Page X of N" — right-aligned, just above the footer bar
+            # Page number "Page X of N" — right-aligned, below the footer bar (Fix 2 & 3)
             canvas.setFont(_f("Calibri", "Helvetica"), 9)
             canvas.setFillColor(BLACK)
             canvas.drawRightString(
                 PAGE_W - MARGIN_R,
-                fy + self.footer_h + 2 * mm,
+                MARGIN_B,
                 f"Page {doc.page} of {self.total_pages}"
             )
-        # No logo mode: leave header/footer space completely empty (no page numbers)
+        # No logo mode: no header/footer and no page numbers (Fix 3)
 
         canvas.restoreState()
 
@@ -386,13 +515,15 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False) -> Table:
 
     def L(text): return Paragraph(f"<b>{text}</b>", S["lbl"])
     def C():     return Paragraph("<b>:</b>", S["lbl"])
-    def V(text): return Paragraph(str(text) if text else "\u2014", S["val"])
+    def V(text): return Paragraph(_title_case(_clean_display(text)), S["val"])
+    # Fix 4: ID/code fields must NOT be title-cased — use R() for PIN, Sample Number, MR No.
+    def R(text): return Paragraph(_clean_display(text), S["val"])
     def E():     return Paragraph("", S["lbl"])
 
     left_rows = [
         [L(f"{pf} Name"), C(), V(person.get("name", ""))],
         [L("Gender / Age"), C(), V(person.get("gender_age", ""))],
-        [L("Hospital MR No"), C(), V(person.get("hospital_mr_no", ""))],
+        [L("Hospital MR No"), C(), R(person.get("hospital_mr_no", ""))],
     ]
 
     # Add diagnosis only for patients, not donors
@@ -408,8 +539,8 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False) -> Table:
         left_rows.insert(2, [L("Relationship"), C(), V(person.get("relationship", ""))])
 
     right_rows = [
-        [L("PIN"), C(), V(person.get("pin", ""))],
-        [L("Sample Number"), C(), V(person.get("sample_number", ""))],
+        [L("PIN"), C(), R(person.get("pin", ""))],
+        [L("Sample Number"), C(), R(person.get("sample_number", ""))],
         [L("Specimen"), C(), V(person.get("specimen") or "Blood - EDTA")],
         [L("Collection Date"), C(), V(person.get("collection_date", ""))],
         [L("Sample Receipt Date"), C(), V(person.get("receipt_date", ""))],
@@ -453,7 +584,9 @@ def _hla_table(person: dict, S: dict) -> Table:
         loci = LOCI
 
     def HH(t): return Paragraph(t, S["hla_hdr"])
-    def HV(t): return Paragraph(t or "\u2014", S["hla_val"])
+    # Fix 1: route every allele cell through _clean_display so "Insufficient Data"
+    # (and any other sentinel values) is always replaced with an em-dash at render time.
+    def HV(t): return Paragraph(_clean_display(t), S["hla_val"])
     def HL(t): return Paragraph(t, S["hla_lbl"])
 
     header = [HH("LOCUS")] + [HH(f"HLA-{l}*") for l in loci]
@@ -472,7 +605,7 @@ def _hla_table(person: dict, S: dict) -> Table:
         ("TEXTCOLOR",     (0, 0), (-1, 0), BLACK),
         ("BACKGROUND",    (0, 1), (-1, 1), C_HLA_ROW),
         ("BACKGROUND",    (0, 2), (-1, 2), C_HLA_ROW),
-        ("GRID",          (0, 0), (-1, -1), 0.5, BLACK),
+        ("GRID",          (0, 0), (-1, -1), 0.5, WHITE),
         ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
         ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
         ("TOPPADDING",    (0, 0), (-1, -1), 4),
@@ -488,17 +621,19 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict) -> 
     elems.append(Spacer(1, 2 * mm))
     elems.append(_hla_table(person, S))
 
-    if person.get("remarks"):
-        remarks = person["remarks"]
-        if len(remarks) > 600:
-            remarks = remarks[:580] + "..."
+    _raw_remarks = person.get("remarks", "")
+    _remarks_display = _clean_display(_raw_remarks) if _raw_remarks else ""
+    if _remarks_display and _remarks_display != "\u2014":
+        if len(_remarks_display) > 600:
+            _remarks_display = _remarks_display[:580] + "..."
         elems.append(Spacer(1, 1 * mm))
-        elems.append(Paragraph(f"<b>Remarks:</b> {remarks}", S["body_small"]))
+        elems.append(Paragraph(f"<b>Remarks:</b> {_remarks_display}", S["body_small"]))
 
-    if match_str:
+    _match_display = _clean_display(match_str) if match_str else ""
+    if _match_display and _match_display != "\u2014":
         elems.append(Spacer(1, 1 * mm))
         elems.append(Paragraph(
-            f"<b>Match: {match_str}</b>",
+            f"<b>Match: {_match_display}</b>",
             ParagraphStyle("ms", fontName=_f("Calibri-Bold","Helvetica-Bold"),
                            fontSize=11, textColor=BLACK, alignment=TA_LEFT,
                            leading=13, spaceBefore=2, spaceAfter=2)
@@ -523,9 +658,13 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict) -> Table:
     col_w = [cw * 0.246, cw * 0.183, cw * 0.184, cw * 0.194, cw * 0.193]
 
     def RL(t): return Paragraph(f"<b>{t}</b>", S["rpl_lbl"])
-    def RV(t): return Paragraph(str(t) if t else "\u2014", S["rpl_val"])
+    def RV(t): return Paragraph(_title_case(_clean_display(t)), S["rpl_val"])
+    # Fix 4: ID/code fields (PIN, Sample Number) must NOT be title-cased.
+    def RR(t): return Paragraph(_clean_display(t), S["rpl_val"])
+    _RAW_LABELS = {"PIN", "Sample Number"}
+    def RVC(label, val): return RR(val) if label in _RAW_LABELS else RV(val)
     def HL(t): return Paragraph(f"<b>{t}</b>", S["rpl_hla_lbl"])
-    def HV(t): return Paragraph(str(t) if t else "\u2014", S["rpl_hla_val"])
+    def HV(t): return Paragraph(_clean_display(t), S["rpl_hla_val"])
     def HDR(t): return Paragraph(f"<b>{t}</b>", S["rpl_hdr_name"])
 
     data = []
@@ -586,8 +725,8 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict) -> Table:
         else:
             d_val = ""
 
-        data.append([RL(p_lbl), RV(p_val), Paragraph("", S["rpl_lbl"]),
-                     RV(d_val), Paragraph("", S["rpl_lbl"])])
+        data.append([RL(p_lbl), RVC(p_lbl, p_val), Paragraph("", S["rpl_lbl"]),
+                     RVC(p_lbl, d_val), Paragraph("", S["rpl_lbl"])])
         spans += [("SPAN", (1, r), (2, r)), ("SPAN", (3, r), (4, r))]
 
     hla_start = len(data)
@@ -640,14 +779,15 @@ def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict) -
     if match_str or match_pct:
         bold_match = f"<b>{match_str} ({match_pct})</b>" if match_str else f"<b>{match_pct}</b>"
         comment = (
-            f"Comment: HLA-A, B, C, DRB1, DQB1 &amp; DPB1 locus typing patterns of the "
+            f"<b>COMMENT:</b> HLA-A, B, C, DRB1, DQB1 &amp; DPB1 locus typing patterns of the "
             f"above individuals indicate {bold_match} matches at High resolution."
         )
         elems.append(Paragraph(comment, S["comment"]))
         elems.append(Spacer(1, 2 * mm))
 
-    # Reference: heading (Calibri-Bold 14, black)
-    elems.append(Paragraph("<b>Reference:</b>", S["ref_hdr"]))
+    # Reference: heading + tables in one unbreakable group
+    # Build all elements first, then wrap together so the heading never orphans.
+    ref_group = [Paragraph("<b>Reference:</b>", S["ref_hdr"])]
 
     # 3-column reference table — headers SegoeUI-Bold 10pt (confirmed by fitz audit)
     # Build the HLA matching cell content: vertical stacking "Overall – X%" and "Class-II – Y%"
@@ -666,9 +806,9 @@ def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict) -
             Paragraph("<b>HLA sharing for Recurrent miscarriage/RIF</b>",     S["lbl"]),
         ],
         [
-            Paragraph(f"{p_name} / {d_name}", S["rpl_val"]),
-            Paragraph(hla_matching_text,      S["rpl_val"]),
-            Paragraph(rpl_ref.get("hla_sharing_rif", ">50%"), S["rpl_val"]),
+            Paragraph(_clean_display(f"{p_name} / {d_name}"), S["rpl_val"]),
+            Paragraph(_clean_display(hla_matching_text),      S["rpl_val"]),
+            Paragraph(_clean_display(rpl_ref.get("hla_sharing_rif", ">50%")), S["rpl_val"]),
         ],
     ]
     # Reference table header uses SegoeUI-Bold 10pt black on white (no colour fill — confirmed)
@@ -683,18 +823,17 @@ def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict) -
         ("TOPPADDING",    (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]))
-    elems.append(ref_t)
+    ref_group.append(ref_t)
 
     # HLA-C supertype table — also plain white, no fills (confirmed)
     hla_c_p = rpl_ref.get("hla_c_patient", "")
     hla_c_d = rpl_ref.get("hla_c_donor",   "")
     if hla_c_p or hla_c_d:
-        elems.append(Spacer(1, 2 * mm))
         c_data = [
             [Paragraph("<b>Maternal HLA-C Type</b>", S["rpl_lbl"]),
              Paragraph("<b>Paternal HLA-C Type</b>",  S["rpl_lbl"])],
-            [Paragraph(hla_c_p or "\u2014", S["rpl_val"]),
-             Paragraph(hla_c_d or "\u2014", S["rpl_val"])],
+            [Paragraph(_clean_display(hla_c_p), S["rpl_val"]),
+             Paragraph(_clean_display(hla_c_d), S["rpl_val"])],
         ]
         c_t = Table(c_data, colWidths=[CONTENT_W * 0.50, CONTENT_W * 0.50])
         c_t.setStyle(TableStyle([
@@ -706,7 +845,11 @@ def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict) -
             ("TOPPADDING",    (0, 0), (-1, -1), 4),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ]))
-        elems.append(c_t)
+        ref_group.append(Spacer(1, 2 * mm))
+        ref_group.append(c_t)
+
+    # Single KeepTogether: heading + ref table + optional HLA-C table all move as one unit
+    elems.append(KeepTogether(ref_group))
 
     return elems
 
@@ -728,7 +871,9 @@ def _methodology_block(case: dict, S: dict) -> list:
     # IMGT/HLA Release - ALWAYS display (as per reference templates)
     elems.append(Paragraph(f"<b>IMGT/HLA Release</b> {imgt}", S["body"]))
 
-    elems.append(Paragraph("<b>Remarks:</b>", S["body"]))
+    # Fix 2: "Remarks:" label removed — do not render an empty label when no
+    # remarks value exists.  Patient/donor remarks are rendered conditionally
+    # inside each person block (_ngs_person_block / _emit_remarks).
     # Coverage: first line inline "Coverage : Class I..." then remaining lines indented
     elems.append(Paragraph(f"<b>Coverage</b>{COVERAGE_LINES[0]}", S["body"]))
     for line in COVERAGE_LINES[1:]:
@@ -814,13 +959,17 @@ def _build_ngs_single(case: dict, S: dict) -> list:
 
     elems = []
 
-    # Patient block - keep together
+    # Patient block - keep together to prevent mid-block page break (Fix 1)
     patient_block = _ngs_person_block(patient, is_donor=False, match_str="", S=S)
     elems.append(KeepTogether(patient_block))
 
-    # Methodology and signatures - keep together to prevent page break
-    methodology_and_sigs = _methodology_block(case, S) + _signature_block(signatories, S)
-    elems.append(KeepTogether(methodology_and_sigs))
+    # Fix 1: Keep methodology and signatures as separate KeepTogether blocks so a
+    # page break between them is allowed if the content is too large to fit together.
+    methodology_items = _methodology_block(case, S)
+    elems.append(KeepTogether(methodology_items))
+    sig_items = _signature_block(signatories, S)
+    if sig_items:
+        elems.append(KeepTogether(sig_items))
 
     return elems
 
@@ -843,18 +992,22 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
 
     elems = []
 
-    # Patient block - keep together
+    # Patient block - keep together to prevent mid-block page break (Fix 1)
     patient_block = _ngs_person_block(patient, is_donor=False, match_str="", S=S)
     elems.append(KeepTogether(patient_block))
 
-    # Each donor block - keep together individually
+    # Each donor block - keep together individually (Fix 1)
     for d in donors:
         donor_block = _ngs_person_block(d, is_donor=True, match_str=d.get("match", ""), S=S)
         elems.append(KeepTogether(donor_block))
 
-    # Methodology and signatures - keep together to prevent page break
-    methodology_and_sigs = _methodology_block(case, S) + _signature_block(signatories, S)
-    elems.append(KeepTogether(methodology_and_sigs))
+    # Fix 1: Keep methodology and signatures as separate KeepTogether blocks so a
+    # page break between them is allowed if the multi-donor content pushes them apart.
+    methodology_items = _methodology_block(case, S)
+    elems.append(KeepTogether(methodology_items))
+    sig_items = _signature_block(signatories, S)
+    if sig_items:
+        elems.append(KeepTogether(sig_items))
 
     return elems
 
@@ -885,42 +1038,104 @@ def _build_rpl_couple(case: dict, S: dict) -> list:
 
     # ── Page 1 content ────────────────────────────────────────────────────────
     if donor:
-        # Unified couple+HLA table - keep together to prevent splitting
-        page1_content = []
-        page1_content.append(_rpl_couple_table(patient, donor, S))
-        page1_content.append(Spacer(1, 3 * mm))
-        # Comment + Reference + HLA-C tables
-        page1_content += _rpl_reference_section(rpl_ref, patient, donor, S)
-
-        # Wrap page 1 content in KeepTogether to prevent table splitting
-        elems.append(KeepTogether(page1_content))
+        # Fix 1: Keep couple table together; let reference section flow naturally
+        # so that the large combined block never forces a bad mid-table page break.
+        elems.append(KeepTogether([_rpl_couple_table(patient, donor, S),
+                                   Spacer(1, 3 * mm)]))
+        # Comment + Reference + HLA-C tables — can flow naturally (small items)
+        elems += _rpl_reference_section(rpl_ref, patient, donor, S)
     else:
         # Single-person RPL: NGS-style patient block
         patient_block = _ngs_person_block(patient, is_donor=False, match_str="", S=S)
         elems.append(KeepTogether(patient_block))
 
+    # Fix 2: Conditional remarks for patient and donor — only render if non-empty.
+    def _emit_remarks(person: dict, label: str):
+        raw = person.get("remarks", "")
+        if not raw or not str(raw).strip():
+            return
+        disp = _clean_display(raw)
+        if disp and disp != "\u2014":
+            if len(disp) > 600:
+                disp = disp[:580] + "..."
+            elems.append(Paragraph(f"<b>{label}:</b> {disp}", S["body_small"]))
+
+    _emit_remarks(patient, "Remarks (Patient)")
+    if donor:
+        _emit_remarks(donor, "Remarks (Donor)")
+
     # Add spacer to help with page flow
     elems.append(Spacer(1, 5 * mm))
 
     # ── Methodology + Background + Disclaimers + Signatures ───────────────────
-    # Keep all of these together as one cohesive section that flows naturally
-    page2_content = []
-    page2_content += _methodology_block(case, S)
-    page2_content.append(Spacer(1, 3 * mm))
-    page2_content.append(Paragraph("<b>BACKGROUND</b>",   S["section_hdr"]))
-    page2_content.append(Paragraph(RPL_BACKGROUND,        S["justify"]))
-    page2_content.append(Spacer(1, 2 * mm))
-    page2_content.append(Paragraph("<b>DISCLAIMERS</b>",  S["section_hdr"]))
-    for i, disc in enumerate(RPL_DISCLAIMERS, 1):
-        page2_content.append(Paragraph(f"{i}.  {disc}", S["disc_item"]))
-    page2_content.append(Spacer(1, 4 * mm))
-    page2_content += _signature_block(signatories, S)
+    # Fix 1: Keep methodology and signatures as separate KeepTogether blocks so
+    # that a page break between them is allowed, but each block never splits internally.
+    methodology_items = _methodology_block(case, S)
+    elems.append(KeepTogether(methodology_items))
 
-    # Keep methodology+background+disclaimers+signatures together as one unit
-    # This will naturally flow to page 2 if page 1 content fills the page
-    elems.append(KeepTogether(page2_content))
+    # Fix 4: Do NOT wrap Background+Disclaimer in KeepTogether — that forces the
+    # entire ~450pt block to the next page when only ~350pt remains, leaving a
+    # large blank gap after Typing Status.  Natural flow fills the available space
+    # on the current page and continues on the next page with zero gap.
+    # (Fix 3 from previous session removed the 3mm spacer here; that stands.)
+    elems.append(Paragraph("<b>BACKGROUND</b>",  S["section_hdr"]))
+    elems.append(Paragraph(RPL_BACKGROUND,        S["justify"]))
+    elems.append(Spacer(1, 2 * mm))
+    # Keep the DISCLAIMERS heading paired with the first item so the heading
+    # never orphans at the bottom of a page.
+    disclaimers_items = [Paragraph("<b>DISCLAIMERS</b>", S["section_hdr"])]
+    for i, disc in enumerate(RPL_DISCLAIMERS, 1):
+        disclaimers_items.append(Paragraph(f"{i}.  {disc}", S["disc_item"]))
+    elems.append(KeepTogether(disclaimers_items[:2]))  # heading + first item together
+    elems.extend(disclaimers_items[2:])
+
+    elems.append(Spacer(1, 4 * mm))
+    sig_items = _signature_block(signatories, S)
+    if sig_items:
+        elems.append(KeepTogether(sig_items))
 
     return elems
+
+
+# ─── Accurate page-count canvas (Fix 4) ──────────────────────────────────────
+
+def _make_numbered_canvas_class(hf_instance):
+    """
+    Return a canvasmaker class that performs a single-pass two-phase render:
+      Phase 1 (showPage calls): record each page's canvas state.
+      Phase 2 (save):          replay each page, drawing header/footer with the
+                               now-known total page count before writing to PDF.
+
+    This eliminates the need for an upfront page-count estimate and ensures
+    "Page X of N" always shows the real N (Fix 4).
+    """
+    from reportlab.pdfgen import canvas as _pdfcanvas
+
+    class _NumberedCanvas(_pdfcanvas.Canvas):
+        def __init__(self, filename, **kwargs):
+            _pdfcanvas.Canvas.__init__(self, filename, **kwargs)
+            self._saved_page_states = []
+
+        def showPage(self):
+            # Snapshot current canvas state before advancing to next page
+            self._saved_page_states.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            total_pages = len(self._saved_page_states)
+            hf_instance.total_pages = total_pages          # update to real count
+            for state in self._saved_page_states:
+                self.__dict__.update(state)                # restore page state
+                page_num = self._pageNumber
+                # Minimal stand-in for the doc object expected by _HFCanvas.__call__
+                class _FakeDoc:
+                    pass
+                _FakeDoc.page = page_num
+                hf_instance(self, _FakeDoc())              # draw header/footer
+                _pdfcanvas.Canvas.showPage(self)           # finalise page
+            _pdfcanvas.Canvas.save(self)
+
+    return _NumberedCanvas
 
 
 # ─── Top-level entry point ────────────────────────────────────────────────────
@@ -968,7 +1183,9 @@ def generate_pdf(case: dict, output_path: str) -> str:
         footer_h = (fh / fw) * CONTENT_W
 
         top_margin    = MARGIN_T + banner_h + 4 * mm
-        bottom_margin = MARGIN_B + footer_h + 4 * mm
+        # Fix 2: extra 4 mm below footer bar for the page number text
+        _PAGE_NUM_AREA = 4 * mm
+        bottom_margin = MARGIN_B + _PAGE_NUM_AREA + footer_h + 4 * mm
     else:
         # Without logo: minimal margins, no header/footer space needed
         banner_h      = 0
@@ -996,18 +1213,12 @@ def generate_pdf(case: dict, output_path: str) -> str:
 
     story = [title_para, Spacer(1, 3 * mm)] + body
 
-    # Total pages: estimate based on report type
-    # For RPL couple: typically 2-3 pages (patient/donor table + methodology/background + signatures)
-    # For NGS: 1 page per person (patient + donors) + 1 for signatures
-    if report_type == "rpl_couple":
-        # RPL reports with donor typically span 2-3 pages, estimate 3 for page numbering
-        total_pages = 3
-    else:
-        # NGS reports: estimate 1 page per patient/donor block
-        total_pages = 1 + len(case.get("donors", []))
-
-    cb = _HFCanvas(case, title, banner_h, footer_h, total_pages=total_pages)
-    doc.build(story, onFirstPage=cb, onLaterPages=cb)
+    # Fix 4: use the numbered-canvas approach for accurate page counting.
+    # total_pages starts at 1 (dummy); _NumberedCanvas updates it in save() before
+    # drawing header/footer, so every page shows the real "Page X of N".
+    cb = _HFCanvas(case, title, banner_h, footer_h, total_pages=1)
+    numbered_canvas_class = _make_numbered_canvas_class(cb)
+    doc.build(story, canvasmaker=numbered_canvas_class)
     return output_path
 
 

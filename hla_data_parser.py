@@ -31,21 +31,27 @@ def c_supertype(allele: Optional[str]) -> Optional[str]:
 
 
 def _fmt_date(val) -> str:
-    """Convert various date formats to DD-MM-YYYY string."""
+    """Convert Excel date values to DD-MM-YYYY string.
+
+    Fix 3: Do NOT auto-parse string dates through strptime — that risks swapping
+    month and day when the locale interpretation differs (e.g. '11/04/2026' read
+    as MM/DD gives November 4 instead of April 11).
+
+    Strategy:
+    - datetime / Timestamp objects (from Excel date-serial cells): format directly
+      with strftime — the serial → date conversion is unambiguous.
+    - String values: split on '/' or '-' and reconstruct as DD-MM-YYYY, trusting
+      that the source is already in DD/MM/YYYY (Indian date format convention).
+    """
     if pd.isna(val) or str(val).strip() in ("", "nan", "NaT"):
         return ""
     if isinstance(val, datetime):
         return val.strftime("%d-%m-%Y")
     s = str(val).strip()
-    # Already DD-MM-YYYY
-    if re.match(r"\d{2}-\d{2}-\d{4}", s):
-        return s
-    # Try common formats
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y"):
-        try:
-            return datetime.strptime(s.split()[0], fmt).strftime("%d-%m-%Y")
-        except ValueError:
-            continue
+    parts = re.split(r"[/\-]", s)
+    if len(parts) == 3:
+        dd, mm, yyyy = parts[0].strip(), parts[1].strip(), parts[2].strip()
+        return f"{dd.zfill(2)}-{mm.zfill(2)}-{yyyy}"
     return s
 
 
@@ -129,6 +135,12 @@ def _clean_allele(val) -> Optional[str]:
     """
     s = _clean_str(val)
     if s in ("-", "", "nan"):
+        return None
+    # Root-cause fix: collapse ALL whitespace before testing for "Insufficient Data".
+    # Excel may store the value with spaces between every character:
+    #   "I n s u f f i c i e n t   d a t a"
+    # Standard regex fails on that form; collapsed comparison catches every variant.
+    if re.sub(r"\s+", "", s).lower() == "insufficientdata":
         return None
     # Truncate to 3-field: keep gene prefix (before *) + first 3 colon fields
     # e.g. "A*02:11:01:01" → "A*02:11:01"  |  "DRB1*04:01:01:01" → "DRB1*04:01:01"
@@ -236,36 +248,49 @@ def _parse_surfseq_results(df_csv: pd.DataFrame) -> dict:
         if not col_a or col_a == "nan" or ";" not in col_a:
             continue
 
-        parts = col_a.split(";")
-        barcode   = parts[0].strip()
-        locus_raw = parts[1].strip().strip('"') if len(parts) > 1 else ""
+        # Strip quotes from all tokens and filter out run-prefix tokens
+        # (tokens containing _R1/_R2 or matching a run-ID pattern like 8+ leading digits)
+        raw_tokens = [t.strip().strip('"').strip("'") for t in col_a.split(";")]
+        if col_b and col_b not in ("nan", ""):
+            raw_tokens.append(col_b.strip().strip('"').strip("'"))
 
-        # Allele comes from col B (Excel overflow), or parts[2] if col B is empty
-        if col_b and col_b != "nan":
-            allele_str = col_b.strip().strip('"').strip("'")
-        elif len(parts) > 2:
-            allele_str = parts[2].strip().strip('"').strip("'")
-        else:
-            allele_str = ""
+        barcode = raw_tokens[0] if raw_tokens else ""
 
-        if not allele_str or allele_str in ("-", "nan"):
-            continue
+        # Filter: remove run-prefix tokens, keep locus headers (HLA_X) and allele tokens (*digits)
+        clean_tokens = []
+        for t in raw_tokens[1:]:   # skip barcode at index 0
+            if not t:
+                continue
+            if re.search(r"_R[12]\b", t, re.I):   # run suffix _R1 / _R2
+                continue
+            if re.match(r"\d{6,}", t):             # timestamp / run-ID (6+ leading digits)
+                continue
+            clean_tokens.append(t)
 
-        # Extract sample number from barcode: HLA-{digits}[_-]
-        m = re.search(r"HLA-(\d+)(?:[_\-])", barcode)
-        if not m:
-            continue
-        sample_num = m.group(1)
-
+        # First clean token = locus header; subsequent tokens = alleles
+        locus_raw = clean_tokens[0] if clean_tokens else ""
         locus = LOCUS_MAP.get(locus_raw)
         if not locus:
             continue
+
+        allele_tokens = [t for t in clean_tokens[1:] if t and t not in ("-", "nan")]
+        if not allele_tokens:
+            continue
+
+        # Extract sample number: try HLA-{digits} first, then any 4-6 digit run in barcode
+        m = re.search(r"HLA-(\d+)(?:[_\-])", barcode)
+        if not m:
+            m = re.search(r"[_\-](\d{4,6})[_\-]", barcode)
+        if not m:
+            continue
+        sample_num = m.group(1)
 
         if sample_num not in raw_results:
             raw_results[sample_num] = {}
         if locus not in raw_results[sample_num]:
             raw_results[sample_num][locus] = []
-        raw_results[sample_num][locus].append(allele_str)
+        for allele_str in allele_tokens:
+            raw_results[sample_num][locus].append(allele_str)
 
     # Convert to [a1, a2] pairs
     results = {}
@@ -345,6 +370,23 @@ def _build_person(row: pd.Series, hla_lookup: dict, join_by: str) -> dict:
     hla = hla_data.get("hla", {locus: [None, None] for locus in ["A", "B", "C", "DRB1", "DQB1", "DPB1"]})
     remarks = hla_data.get("remarks", "")
 
+    # Fix 3 Stage 1: check for "Insufficient Data" BEFORE sanitizing so the
+    # filter in hla_report_generator can still detect it via the flag.
+    _insuff_re = re.compile(r"insufficient\s*data", re.IGNORECASE)
+    _has_insufficient_hla = any(
+        a and _insuff_re.search(str(a))
+        for alleles in hla.values() for a in (alleles or [])
+    )
+    # Now sanitize: replace every "Insufficient Data" allele with None so it
+    # renders as "—" via the normal fallback and never reaches the PDF as raw text.
+    hla = {
+        locus: [
+            None if (a and _insuff_re.search(str(a))) else a
+            for a in (alleles or [])
+        ]
+        for locus, alleles in hla.items()
+    }
+
     # HLA-C supertype (for RPL)
     c_alleles = hla.get("C", [None, None])
     ct1 = c_supertype(c_alleles[0]) if c_alleles[0] else None
@@ -376,9 +418,10 @@ def _build_person(row: pd.Series, hla_lookup: dict, join_by: str) -> dict:
         "report_date":    _fmt_date(row.get("Report date ")),
         # Computed / structured fields
         "match":          _parse_match(row.get("Match", "")),
-        "hla":            hla,
-        "hla_c_type":     hla_c_type,
-        "_join_key":      key,
+        "hla":                   hla,
+        "hla_c_type":            hla_c_type,
+        "_join_key":             key,
+        "_has_insufficient_hla": _has_insufficient_hla,  # Fix 3: pre-sanitisation flag
     }
 
 

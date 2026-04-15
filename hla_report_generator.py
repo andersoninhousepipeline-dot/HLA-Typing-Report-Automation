@@ -41,9 +41,37 @@ except ImportError:
     _fitz = None
     FITZ_OK = False
 
+import re as _re
+
 import hla_assets
 from hla_data_parser import parse_excel, get_case_summary, c_supertype, compute_rpl_reference
 from hla_template import generate_pdf, make_filename
+
+
+# ─── Fix 5: Insufficient-Data filter ─────────────────────────────────────────
+def _has_insufficient_data(person: dict) -> bool:
+    """Return True if any HLA allele for this person was 'Insufficient Data'.
+
+    Fix 3: _build_person now sanitises alleles to None before storing them, so
+    the raw string is no longer present in person['hla'].  Instead it sets a
+    '_has_insufficient_hla' flag before sanitisation — check that first.
+    The string-search fallback handles manually-entered data or older dicts.
+    """
+    if person.get("_has_insufficient_hla", False):
+        return True
+    # Fallback: string scan (covers manual entry or dicts without the flag)
+    hla = person.get("hla", {})
+    for alleles in hla.values():
+        for allele in (alleles or []):
+            if allele and _re.search(r"insufficient\s*data", str(allele), _re.IGNORECASE):
+                return True
+    return False
+
+
+def _filter_valid_cases(cases: list) -> list:
+    """Silently drop any case whose patient has an 'Insufficient Data' HLA value."""
+    return [c for c in cases if not _has_insufficient_data(c.get("patient", {}))]
+
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 HLA_LOCI = ["A", "B", "C", "DRB1", "DQB1", "DPB1", "DRB3", "DRB4", "DRB5"]
@@ -623,7 +651,7 @@ class HLAReportGeneratorApp(QMainWindow):
                 "receipt_date":   d.get("donor_receipt", ""),
                 "report_date":    patient.get("report_date", ""),
                 "match":          d.get("match", ""),
-                "hla": donor_hla, "hla_c_type": "", "remarks": "",
+                "hla": donor_hla, "hla_c_type": "", "remarks": d.get("remarks", ""),
                 "hospital_clinic": patient.get("hospital_clinic", ""),
                 "diagnosis":       patient.get("diagnosis", ""),
                 "specimen":        patient.get("specimen", "Blood - EDTA"),
@@ -645,6 +673,9 @@ class HLAReportGeneratorApp(QMainWindow):
             return
 
         case     = self._collect_manual_case()
+        # Fix 5: silently skip cases with Insufficient Data in any HLA value
+        if _has_insufficient_data(case.get("patient", {})):
+            return
         fname    = make_filename(case)
         out_path = os.path.join(out_dir, fname)
         os.makedirs(out_dir, exist_ok=True)
@@ -692,6 +723,9 @@ class HLAReportGeneratorApp(QMainWindow):
         """Regenerate preview from current form state (picks up latest stamp/logo/template settings)."""
         try:
             case = self._collect_manual_case()
+            # Fix 5: silently suppress preview for cases with Insufficient Data
+            if _has_insufficient_data(case.get("patient", {})):
+                return
             self._start_manual_preview(case)
         except Exception:
             # Form may be empty — fall back to reloading existing file
@@ -763,6 +797,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("donor_collect",    "Collection Date", ""),
             ("donor_receipt",    "Receipt Date",    ""),
             ("match",            "Match Score",     ""),
+            ("remarks",          "Remarks",         ""),
         ]
         d_fields = {}
         for key, lbl, default in DONOR_FIELDS:
@@ -797,6 +832,8 @@ class HLAReportGeneratorApp(QMainWindow):
 
         self._donors_list_layout.addWidget(container)
         self._auto_detect_manual_template()
+        # Fix 6: propagate donor addition immediately to preview
+        self._refresh_manual_preview()
 
     def _remove_manual_donor(self, entry):
         """Remove a donor panel from the manual tab."""
@@ -807,6 +844,8 @@ class HLAReportGeneratorApp(QMainWindow):
             for i, e in enumerate(self._manual_donors):
                 e["group"].setTitle(f"Donor {i + 1}")
             self._auto_detect_manual_template()
+            # Fix 6: propagate donor removal immediately to preview
+            self._refresh_manual_preview()
 
     # ── Signature image overrides (manual tab) ─────────────────────────────────
     # ── Signature name-override helpers ───────────────────────────────────────
@@ -1091,15 +1130,37 @@ class HLAReportGeneratorApp(QMainWindow):
             self.manual_output_label.setText(path)   # sync
             self.qsettings.setValue("last_output_dir", path)
 
+    def _reset_bulk_session(self):
+        """Fix 1: Fully reset all session state before loading a new file/draft.
+        No previously edited alleles, donors, or manual changes must persist."""
+        self.cases             = []
+        self._bulk_current_row = -1
+        self._bulk_fields      = {}
+        self._bulk_hla_pat     = {}
+        self._bulk_donor_fields = []
+        self._bulk_hla_don     = []
+        # Clear the editor UI so no stale widgets remain
+        while self._bulk_editor_layout.count():
+            child = self._bulk_editor_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
     def load_excel(self):
         path = self.bulk_file_label.text()
         if path == "No file selected" or not os.path.exists(path):
             QMessageBox.warning(self, "No File", "Please select a valid Excel file.")
             return
+        # Fix 1: reset all state before parsing so no prior session data leaks in
+        self._reset_bulk_session()
         try:
-            self.cases = parse_excel(path, nabl=self.chk_nabl.isChecked())
+            raw_cases  = parse_excel(path, nabl=self.chk_nabl.isChecked())
+            self.cases = _filter_valid_cases(raw_cases)
+            skipped    = len(raw_cases) - len(self.cases)
             self._populate_bulk_list()
-            self._bulk_log(f"Loaded {len(self.cases)} case(s) from {os.path.basename(path)}")
+            msg = f"Loaded {len(self.cases)} case(s) from {os.path.basename(path)}"
+            if skipped:
+                msg += f" ({skipped} suppressed — Insufficient Data)"
+            self._bulk_log(msg)
         except Exception as e:
             QMessageBox.critical(self, "Parse Error", str(e))
             import traceback; traceback.print_exc()
@@ -1300,6 +1361,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("pin",             "PIN"),
             ("sample_number",   "Sample Number"),
             ("match",           "Match Score"),
+            ("remarks",         "Remarks"),
             ("collection_date", "Collection Date"),
             ("receipt_date",    "Receipt Date"),
             ("report_date",     "Report Date"),
@@ -1409,8 +1471,11 @@ class HLAReportGeneratorApp(QMainWindow):
             if v1 or v2: p["hla"][locus] = [v1, v2]
             else:        p["hla"].pop(locus, None)
 
-        # Report meta — use GLOBAL header bar combos as source
-        case["report_type"] = TEMPLATE_TO_RTYPE.get(self.template_combo.currentText(), "single_hla")
+        # Report meta — per-case combo is authoritative for report_type; global logo combo for logo
+        if hasattr(self, "_bulk_rtype_combo") and self._bulk_rtype_combo is not None:
+            case["report_type"] = TEMPLATE_TO_RTYPE.get(self._bulk_rtype_combo.currentText(), "single_hla")
+        else:
+            case["report_type"] = TEMPLATE_TO_RTYPE.get(self.template_combo.currentText(), "single_hla")
         case["with_logo"]   = self.logo_combo.currentText() == "With Logo"
         
         if hasattr(self, "_bulk_ts_edit"):
@@ -1500,13 +1565,17 @@ class HLAReportGeneratorApp(QMainWindow):
         case["donors"].append({
             "name": "", "relationship": "", "gender_age": "",
             "pin": "", "sample_number": "", "match": "",
+            "remarks": "",
             "collection_date": "", "receipt_date": "",
             "report_date": patient.get("report_date", ""),
-            "hla": {}, "hla_c_type": "", "remarks": "",
+            "hla": {}, "hla_c_type": "",
             "hospital_clinic": patient.get("hospital_clinic", ""),
             "diagnosis":       patient.get("diagnosis", ""),
             "specimen":        patient.get("specimen", "Blood - EDTA"),
         })
+        # Auto-switch: a case with donors cannot stay as single_hla
+        if case.get("report_type", "single_hla") == "single_hla":
+            case["report_type"] = "transplant_donor"
         self._rebuild_bulk_editor(case_idx)
 
     def _remove_bulk_donor(self, case_idx, donor_idx):
@@ -1683,11 +1752,17 @@ class HLAReportGeneratorApp(QMainWindow):
             "JSON Files (*.json);;All Files (*)"
         )
         if not path: return
+        # Fix 1: reset all state before loading draft so no prior session data leaks in
+        self._reset_bulk_session()
         try:
             with open(path) as fh: draft = json.load(fh)
-            self.cases = draft
+            self.cases = _filter_valid_cases(draft)
+            skipped    = len(draft) - len(self.cases)
             self._populate_bulk_list()
-            self._bulk_log(f"Draft loaded: {os.path.basename(path)} ({len(draft)} cases)")
+            msg = f"Draft loaded: {os.path.basename(path)} ({len(self.cases)} cases)"
+            if skipped:
+                msg += f" ({skipped} suppressed — Insufficient Data)"
+            self._bulk_log(msg)
         except Exception as e:
             QMessageBox.critical(self, "Load Error", str(e))
 
