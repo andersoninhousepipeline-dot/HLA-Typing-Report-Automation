@@ -915,7 +915,15 @@ def _signature_block(signatories: list, S: dict) -> list:
         seal_b64 = sig.get("seal_b64")
         if seal_b64:
             seal_data = hla_assets.get_image_bytes(seal_b64)
-            seal_img  = Image(io.BytesIO(seal_data), width=22 * mm, height=22 * mm)
+            _seal_io  = io.BytesIO(seal_data)
+            _seal_tmp = Image(_seal_io)
+            _sw, _sh  = _seal_tmp.imageWidth, _seal_tmp.imageHeight
+            _max      = 28 * mm
+            # Preserve aspect ratio — scale so the longer dimension equals _max
+            if _sw >= _sh:
+                seal_img = Image(io.BytesIO(seal_data), width=_max, height=_max * _sh / _sw)
+            else:
+                seal_img = Image(io.BytesIO(seal_data), width=_max * _sw / _sh, height=_max)
             cell_rows.append([seal_img])
 
         inner = Table(cell_rows, colWidths=[col_each])
