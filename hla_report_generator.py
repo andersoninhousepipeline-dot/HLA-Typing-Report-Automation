@@ -10,6 +10,7 @@ import json
 import copy
 import subprocess
 import platform
+import datetime
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
@@ -78,6 +79,7 @@ HLA_LOCI = ["A", "B", "C", "DRB1", "DQB1", "DPB1", "DRB3", "DRB4", "DRB5"]
 MANUAL_DRAFT_FILE   = os.path.join(os.path.dirname(__file__), "hla_manual_draft.json")
 BULK_DRAFT_FILE     = os.path.join(os.path.dirname(__file__), "hla_bulk_draft.json")
 TEMP_PREVIEW_PATH   = os.path.join(os.path.dirname(__file__), "temp_hla_preview.pdf")
+DRAFTS_DIR          = os.path.join(os.path.dirname(__file__), "drafts")
 
 _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "template")
 
@@ -880,11 +882,13 @@ class HLAReportGeneratorApp(QMainWindow):
                     sig["title"] = title_lookup[name]
 
     def save_manual_draft(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Manual Draft", MANUAL_DRAFT_FILE,
-            "JSON Files (*.json);;All Files (*)"
-        )
-        if not path: return
+        os.makedirs(DRAFTS_DIR, exist_ok=True)
+        name_val  = self.f.get("patient_name", QLineEdit()).text().strip()
+        today     = datetime.date.today().strftime("%Y%m%d")
+        safe_name = _re.sub(r"[^\w\-]", "_", name_val) if name_val else "Unknown"
+        filename  = f"{safe_name}_draft_{today}.json"
+        path      = os.path.join(DRAFTS_DIR, filename)
+
         saved_donors = []
         for entry in self._manual_donors:
             saved_donors.append({
@@ -904,13 +908,15 @@ class HLAReportGeneratorApp(QMainWindow):
         }
         try:
             with open(path, "w") as fh: json.dump(data, fh, indent=2)
-            self.manual_status_label.setText(f"Draft saved: {os.path.basename(path)}")
+            self.manual_status_label.setText(
+                f"Draft saved for {name_val or 'Patient'}: {filename}")
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
 
     def load_manual_draft(self):
+        start_dir = DRAFTS_DIR if os.path.isdir(DRAFTS_DIR) else os.path.dirname(MANUAL_DRAFT_FILE)
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load Manual Draft", os.path.dirname(MANUAL_DRAFT_FILE),
+            self, "Load Manual Draft", start_dir,
             "JSON Files (*.json);;All Files (*)"
         )
         if not path: return
@@ -1019,37 +1025,78 @@ class HLAReportGeneratorApp(QMainWindow):
         left_panel.setMinimumWidth(200)
         left_panel.setMaximumWidth(350)
         left_layout = QVBoxLayout(); left_panel.setLayout(left_layout)
-        left_layout.addWidget(QLabel("Cases:"))
+        left_layout.setSpacing(3)
+
+        # Search row
         self.bulk_search = QLineEdit()
         self.bulk_search.setPlaceholderText("Search by patient name…")
+        self.bulk_search.setFixedHeight(24)
         self.bulk_search.textChanged.connect(self._filter_bulk_list)
         left_layout.addWidget(self.bulk_search)
+
+        # Cases list — takes all available vertical space
         self.bulk_list = QListWidget()
         self.bulk_list.setAlternatingRowColors(True)
         self.bulk_list.currentItemChanged.connect(self._on_bulk_item_changed)
-        left_layout.addWidget(self.bulk_list)
+        self.bulk_list.itemChanged.connect(self._on_bulk_check_changed)
+        left_layout.addWidget(self.bulk_list, 1)
 
-        sel_row = QHBoxLayout()
-        sel_all  = QPushButton("Select All");  sel_all.clicked.connect(self._select_all)
-        sel_none = QPushButton("Select None"); sel_none.clicked.connect(self._select_none)
-        sel_row.addWidget(sel_all); sel_row.addWidget(sel_none)
-        left_layout.addLayout(sel_row)
+        # ── Compact controls row 1: Select All checkbox + Save Draft (Selected) ──
+        ctrl_row1 = QHBoxLayout()
+        ctrl_row1.setSpacing(4)
 
-        # Draft buttons under list (exact PGTA position)
-        draft_row = QHBoxLayout()
-        save_draft_btn = QPushButton("Save All Draft")
-        save_draft_btn.clicked.connect(self.save_bulk_draft)
+        self._sel_all_chk = QCheckBox("Select All")
+        self._sel_all_chk.setTristate(True)
+        self._sel_all_chk.setChecked(True)
+        self._sel_all_chk.setFixedHeight(24)
+        self._sel_all_chk.stateChanged.connect(self._on_sel_all_toggled)
+        ctrl_row1.addWidget(self._sel_all_chk)
+
+        save_sel_btn = QPushButton("Save Draft (Selected)")
+        save_sel_btn.setFixedHeight(24)
+        save_sel_btn.setToolTip("Save drafts for all checked patients to /drafts")
+        save_sel_btn.clicked.connect(self.save_bulk_selected_draft)
+        ctrl_row1.addWidget(save_sel_btn)
+        left_layout.addLayout(ctrl_row1)
+
+        # ── Compact controls row 2: Save All Draft + Load Draft ──────────────────
+        ctrl_row2 = QHBoxLayout()
+        ctrl_row2.setSpacing(4)
+
+        save_all_btn = QPushButton("Save All Draft")
+        save_all_btn.setFixedHeight(24)
+        save_all_btn.clicked.connect(self.save_bulk_draft)
+        ctrl_row2.addWidget(save_all_btn)
+
         load_draft_btn = QPushButton("Load Draft")
+        load_draft_btn.setFixedHeight(24)
         load_draft_btn.clicked.connect(self.load_bulk_draft)
-        draft_row.addWidget(save_draft_btn)
-        draft_row.addWidget(load_draft_btn)
-        left_layout.addLayout(draft_row)
+        ctrl_row2.addWidget(load_draft_btn)
+        left_layout.addLayout(ctrl_row2)
+
+        # ── Report Generation group ───────────────────────────────────────────────
+        gen_group_box = QGroupBox("Report Generation")
+        gen_group_lay = QVBoxLayout(); gen_group_box.setLayout(gen_group_lay)
+        gen_group_lay.setSpacing(3)
+        gen_group_lay.setContentsMargins(4, 4, 4, 4)
+
+        gen_current_btn = QPushButton("Generate Report")
+        gen_current_btn.setFixedHeight(28)
+        gen_current_btn.setStyleSheet(GENERATE_BTN_STYLE)
+        gen_current_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        gen_current_btn.setToolTip("Generate report for the currently selected patient")
+        gen_current_btn.clicked.connect(self.generate_bulk_current)
+        gen_group_lay.addWidget(gen_current_btn)
 
         gen_btn = QPushButton("Generate All Reports")
+        gen_btn.setFixedHeight(28)
         gen_btn.setStyleSheet(GENERATE_BTN_STYLE)
         gen_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        gen_btn.setToolTip("Generate reports for all patients regardless of selection")
         gen_btn.clicked.connect(self.generate_bulk)
-        left_layout.addWidget(gen_btn)
+        gen_group_lay.addWidget(gen_btn)
+
+        left_layout.addWidget(gen_group_box)
 
         # RIGHT: Patient Editor
         editor_widget = QWidget()
@@ -1189,6 +1236,8 @@ class HLAReportGeneratorApp(QMainWindow):
             item.setCheckState(Qt.CheckState.Checked)
             item.setBackground(QColor(colors.get(case.get("report_type",""), "#FFFFFF")))
             self.bulk_list.addItem(item)
+        # Sync button + checkbox state after population
+        self._on_bulk_check_changed(None)
 
     def _filter_bulk_list(self, text):
         for i in range(self.bulk_list.count()):
@@ -1455,12 +1504,22 @@ class HLAReportGeneratorApp(QMainWindow):
             sig_form.addRow(f"Signatory {i+1}:", cmb)
         self._bulk_editor_layout.addWidget(sig_group)
 
-        # Save button for this case
+        # Action buttons row: Apply Edits + Save Draft
+        editor_action_row = QHBoxLayout()
+
         save_btn = QPushButton(f"Apply Edits to Case {idx+1}")
         save_btn.setStyleSheet(GENERATE_BTN_STYLE)
         save_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
         save_btn.clicked.connect(lambda: self._flush_bulk_edits(self._bulk_current_row))
-        self._bulk_editor_layout.addWidget(save_btn)
+        editor_action_row.addWidget(save_btn)
+
+        draft_btn = QPushButton("Save Draft")
+        draft_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
+        draft_btn.setToolTip("Save this patient's data as a draft to the /drafts folder")
+        draft_btn.clicked.connect(self.save_bulk_current_draft)
+        editor_action_row.addWidget(draft_btn)
+
+        self._bulk_editor_layout.addLayout(editor_action_row)
         self._bulk_editor_layout.addStretch()
 
         # Auto-generate preview for this case
@@ -1695,6 +1754,62 @@ class HLAReportGeneratorApp(QMainWindow):
         for i in range(self.bulk_list.count()):
             self.bulk_list.item(i).setCheckState(Qt.CheckState.Unchecked)
 
+    def _on_sel_all_toggled(self, state):
+        """Drive Select All / Select None from the checkbox."""
+        if state == Qt.CheckState.Checked.value:
+            self._select_all()
+        else:
+            self._select_none()
+
+    def _on_bulk_check_changed(self, _item):
+        """Sync the Select All checkbox state whenever a list item checkbox changes."""
+        checked_count = sum(
+            1 for i in range(self.bulk_list.count())
+            if self.bulk_list.item(i).checkState() == Qt.CheckState.Checked
+        )
+        # Sync the Select All checkbox without re-triggering _on_sel_all_toggled
+        if hasattr(self, "_sel_all_chk"):
+            self._sel_all_chk.blockSignals(True)
+            total = self.bulk_list.count()
+            if checked_count == 0:
+                self._sel_all_chk.setCheckState(Qt.CheckState.Unchecked)
+            elif checked_count == total:
+                self._sel_all_chk.setCheckState(Qt.CheckState.Checked)
+            else:
+                self._sel_all_chk.setCheckState(Qt.CheckState.PartiallyChecked)
+            self._sel_all_chk.blockSignals(False)
+
+    def save_bulk_selected_draft(self):
+        """Save drafts only for the currently checked/selected patients."""
+        self._flush_bulk_edits(self._bulk_current_row)
+        checked = [
+            self.cases[self.bulk_list.item(i).data(Qt.ItemDataRole.UserRole)]
+            for i in range(self.bulk_list.count())
+            if self.bulk_list.item(i).checkState() == Qt.CheckState.Checked
+        ]
+        if not checked:
+            QMessageBox.warning(self, "No Selection", "No patients are checked.")
+            return
+        os.makedirs(DRAFTS_DIR, exist_ok=True)
+        today = datetime.date.today().strftime("%Y%m%d")
+        saved, failed = [], []
+        for case in checked:
+            name_val  = case.get("patient", {}).get("name", "Unknown")
+            safe_name = _re.sub(r"[^\w\-]", "_", name_val)
+            filename  = f"{safe_name}_draft_{today}.json"
+            path      = os.path.join(DRAFTS_DIR, filename)
+            draft     = {k: v for k, v in case.items() if k != "signatories"}
+            try:
+                with open(path, "w") as fh: json.dump(draft, fh, indent=2, default=str)
+                saved.append(filename)
+            except Exception as e:
+                failed.append(f"{name_val}: {e}")
+        msg = f"Saved {len(saved)} draft(s) to /drafts."
+        if failed:
+            msg += f"\n{len(failed)} failed: " + "; ".join(failed)
+        self._bulk_log(msg)
+        QMessageBox.information(self, "Drafts Saved", msg)
+
     def _get_checked_cases(self):
         return [self.cases[self.bulk_list.item(i).data(Qt.ItemDataRole.UserRole)]
                 for i in range(self.bulk_list.count())
@@ -1747,23 +1862,34 @@ class HLAReportGeneratorApp(QMainWindow):
         self.bulk_log.append(msg)
 
     def save_bulk_draft(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Bulk Draft", BULK_DRAFT_FILE,
-            "JSON Files (*.json);;All Files (*)"
-        )
-        if not path or not self.cases: return
+        if not self.cases:
+            QMessageBox.warning(self, "No Cases", "No cases loaded to save.")
+            return
         self._flush_bulk_edits(self._bulk_current_row)
-        draft = [{k: v for k, v in c.items() if k != "signatories"}
-                 for c in self.cases]
-        try:
-            with open(path, "w") as fh: json.dump(draft, fh, indent=2, default=str)
-            self._bulk_log(f"Draft saved: {os.path.basename(path)} ({len(draft)} cases)")
-        except Exception as e:
-            QMessageBox.critical(self, "Save Error", str(e))
+        os.makedirs(DRAFTS_DIR, exist_ok=True)
+        today    = datetime.date.today().strftime("%Y%m%d")
+        saved, failed = [], []
+        for case in self.cases:
+            name_val  = case.get("patient", {}).get("name", "Unknown")
+            safe_name = _re.sub(r"[^\w\-]", "_", name_val)
+            filename  = f"{safe_name}_draft_{today}.json"
+            path      = os.path.join(DRAFTS_DIR, filename)
+            draft     = {k: v for k, v in case.items() if k != "signatories"}
+            try:
+                with open(path, "w") as fh: json.dump(draft, fh, indent=2, default=str)
+                saved.append(filename)
+            except Exception as e:
+                failed.append(f"{name_val}: {e}")
+        msg = f"Saved {len(saved)} draft(s) to /drafts."
+        if failed:
+            msg += f"\n{len(failed)} failed: " + "; ".join(failed)
+        self._bulk_log(msg)
+        QMessageBox.information(self, "Drafts Saved", msg)
 
     def load_bulk_draft(self):
+        start_dir = DRAFTS_DIR if os.path.isdir(DRAFTS_DIR) else os.path.dirname(BULK_DRAFT_FILE)
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load Bulk Draft", os.path.dirname(BULK_DRAFT_FILE),
+            self, "Load Draft", start_dir,
             "JSON Files (*.json);;All Files (*)"
         )
         if not path: return
@@ -1771,6 +1897,9 @@ class HLAReportGeneratorApp(QMainWindow):
         self._reset_bulk_session()
         try:
             with open(path) as fh: draft = json.load(fh)
+            # Support both list-of-cases (Save All Draft) and single-case dict (Save Draft)
+            if isinstance(draft, dict):
+                draft = [draft]
             self.cases = _filter_valid_cases(draft)
             skipped    = len(draft) - len(self.cases)
             self._populate_bulk_list()
@@ -1780,6 +1909,59 @@ class HLAReportGeneratorApp(QMainWindow):
             self._bulk_log(msg)
         except Exception as e:
             QMessageBox.critical(self, "Load Error", str(e))
+
+    def save_bulk_current_draft(self):
+        """Save only the currently selected patient's data as a draft to the /drafts folder."""
+        idx = self._bulk_current_row
+        if idx < 0 or idx >= len(self.cases):
+            QMessageBox.warning(self, "No Case Selected", "Please select a patient first.")
+            return
+        self._flush_bulk_edits(idx)
+        case = self.cases[idx]
+
+        os.makedirs(DRAFTS_DIR, exist_ok=True)
+        p         = case.get("patient", {})
+        name_val  = p.get("name", "Unknown")
+        today     = datetime.date.today().strftime("%Y%m%d")
+        safe_name = _re.sub(r"[^\w\-]", "_", name_val)
+        filename  = f"{safe_name}_draft_{today}.json"
+        path      = os.path.join(DRAFTS_DIR, filename)
+
+        draft = {k: v for k, v in case.items() if k != "signatories"}
+        try:
+            with open(path, "w") as fh: json.dump(draft, fh, indent=2, default=str)
+            QMessageBox.information(self, "Draft Saved",
+                f"Draft saved for {name_val}:\n{filename}")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", str(e))
+
+    def generate_bulk_current(self):
+        """Generate a report for the currently selected case only."""
+        idx = self._bulk_current_row
+        if idx < 0 or idx >= len(self.cases):
+            QMessageBox.warning(self, "No Case Selected", "Please select a patient first.")
+            return
+        self._flush_bulk_edits(idx)
+
+        out = self.bulk_output_label.text()
+        if out == "No folder selected":
+            QMessageBox.warning(self, "No Output", "Please select an output folder.")
+            return
+
+        with_logo  = self.logo_combo.currentText() == "With Logo"
+        sigs       = self._get_signatories()
+        sig_single = self.qsettings.value("sig_count_single", 3, type=int)
+        sig_donor  = self.qsettings.value("sig_count_donor",  2, type=int)
+        sig_stamp  = self.qsettings.value("signature_stamp", False, type=bool)
+
+        self.bulk_status_label.setText("Generating…")
+        self.worker = GenerateWorker(
+            [self.cases[idx]], out, with_logo, sigs, sig_single, sig_donor, sig_stamp
+        )
+        self.worker.progress.connect(self._on_bulk_progress)
+        self.worker.finished.connect(self._on_bulk_done)
+        self.worker.error.connect(lambda m: self._bulk_log(f"ERROR: {m}"))
+        self.worker.start()
 
     # ══════════════════════════════════════════════════════════════════════════
     # TAB 3 — SETTINGS

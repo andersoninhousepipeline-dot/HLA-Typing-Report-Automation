@@ -538,6 +538,9 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False) -> Table:
     if is_donor:
         left_rows.insert(2, [L("Relationship"), C(), V(person.get("relationship", ""))])
 
+    # Track the Hospital/Clinic row index (last row of left_rows) for top-alignment
+    hosp_row = len(left_rows) - 1
+
     right_rows = [
         [L("PIN"), C(), R(person.get("pin", ""))],
         [L("Sample Number"), C(), R(person.get("sample_number", ""))],
@@ -565,6 +568,8 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False) -> Table:
         ("LEFTPADDING",   (4, 0), (4, -1), 0),
         ("RIGHTPADDING",  (1, 0), (1, -1), 2),
         ("RIGHTPADDING",  (4, 0), (4, -1), 2),
+        # Hospital/Clinic & Report Date row: top-align so label anchors to first line
+        ("VALIGN",        (0, hosp_row), (-1, hosp_row), "TOP"),
     ]))
     return t
 
@@ -745,6 +750,8 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict) -> Table:
         data.append([HL(f"HLA-{locus}*"), HV(pa1), HV(pa2), HV(da1), HV(da2)])
 
     n_rows = len(data)
+    hosp_row_rpl = next(
+        (i for i, lbl in enumerate(p_labels) if "Hospital" in lbl), None)
     style_cmds = [
         # All cells: plain white, black 0.5pt grid (confirmed by fitz audit — no fills)
         ("BACKGROUND",    (0, 0), (-1, -1),             WHITE),
@@ -761,6 +768,9 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict) -> Table:
         # Demographic value cols centered
         ("ALIGN",         (1, 1), (-1, hla_start - 1), "CENTER"),
     ] + spans
+    # Hospital/Clinic row: top-align so label anchors to first wrapped line
+    if hosp_row_rpl is not None:
+        style_cmds.append(("VALIGN", (0, hosp_row_rpl), (-1, hosp_row_rpl), "TOP"))
 
     t = Table(data, colWidths=col_w)
     t.setStyle(TableStyle(style_cmds))
