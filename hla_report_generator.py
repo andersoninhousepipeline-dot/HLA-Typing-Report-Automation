@@ -46,7 +46,7 @@ import re as _re
 
 import hla_assets
 from hla_data_parser import parse_excel, get_case_summary, c_supertype, compute_rpl_reference
-from hla_template import generate_pdf, make_filename
+from hla_template import generate_pdf, make_filename, unique_output_path
 
 
 # ─── Fix 5: Insufficient-Data filter ─────────────────────────────────────────
@@ -208,7 +208,8 @@ class GenerateWorker(QThread):
                 except Exception:
                     pass
             fname    = make_filename(c)
-            out_path = os.path.join(self.output_dir, fname)
+            out_path = unique_output_path(self.output_dir, fname)
+            fname    = os.path.basename(out_path)   # reflect _(2) suffix if added
             self.progress.emit(int(i / total * 100),
                                f"Generating {fname} ({i+1}/{total})...")
             try:
@@ -305,6 +306,11 @@ def _make_allele_row(allele1="", allele2=""):
     return row_w, a1, a2
 
 
+def _allele_str(val) -> str:
+    """Convert a stored allele value to a display string. None → empty string."""
+    return str(val) if val is not None else ""
+
+
 def _render_pdf_pages(pdf_path: str, width_px: int = 600) -> list:
     """Render every page of a PDF to QPixmap using fitz. Returns list of QPixmap."""
     if not FITZ_OK or not os.path.exists(pdf_path):
@@ -358,7 +364,8 @@ class HLAReportGeneratorApp(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(10, 2, 10, 5)
+        main_layout.setContentsMargins(10, 0, 10, 5)
+        main_layout.setSpacing(2)
         central.setLayout(main_layout)
 
         # Header — matches PGTA exactly
@@ -487,7 +494,8 @@ class HLAReportGeneratorApp(QMainWindow):
             self.hla_pat[locus] = [a1, a2]
 
         # ── Donors section — supports multiple donors ──────────────────────
-        self._manual_donors = []   # list of {container, fields, hla}
+        self._manual_donors  = []   # list of {container, fields, hla}
+        self._loading_draft  = False
         donors_outer = QGroupBox("Donors (Optional)")
         donors_outer_layout = QVBoxLayout()
         donors_outer_layout.setSpacing(2)
@@ -633,6 +641,8 @@ class HLAReportGeneratorApp(QMainWindow):
         sig_stamp = self.qsettings.value("signature_stamp", False, type=bool)
 
         patient = {k: w.text().strip() for k, w in self.f.items()}
+        # Template reads patient.get("name"); form stores it as "patient_name"
+        patient["name"] = patient.get("patient_name", "")
         patient["hla"] = {
             locus: [a[0].text().strip(), a[1].text().strip()]
             for locus, a in self.hla_pat.items()
@@ -655,7 +665,7 @@ class HLAReportGeneratorApp(QMainWindow):
                 "sample_number":  d.get("donor_sample_no", ""),
                 "collection_date":d.get("donor_collect", ""),
                 "receipt_date":   d.get("donor_receipt", ""),
-                "report_date":    patient.get("report_date", ""),
+                "report_date":    d.get("report_date", "") or patient.get("report_date", ""),
                 "match":          d.get("match", ""),
                 "hla": donor_hla, "hla_c_type": "", "remarks": d.get("remarks", ""),
                 "hospital_clinic": patient.get("hospital_clinic", ""),
@@ -683,8 +693,9 @@ class HLAReportGeneratorApp(QMainWindow):
         if _has_insufficient_data(case.get("patient", {})):
             return
         fname    = make_filename(case)
-        out_path = os.path.join(out_dir, fname)
         os.makedirs(out_dir, exist_ok=True)
+        out_path = unique_output_path(out_dir, fname)
+        fname    = os.path.basename(out_path)   # reflect _(2) suffix if added
         try:
             generate_pdf(case, out_path)
             self.manual_status_label.setText(f"✓ Saved: {fname}")
@@ -727,6 +738,8 @@ class HLAReportGeneratorApp(QMainWindow):
 
     def _refresh_manual_preview(self):
         """Regenerate preview from current form state (picks up latest stamp/logo/template settings)."""
+        if self._loading_draft:
+            return  # suppress during draft load to avoid terminating running threads
         try:
             case = self._collect_manual_case()
             # Fix 5: silently suppress preview for cases with Insufficient Data
@@ -794,6 +807,8 @@ class HLAReportGeneratorApp(QMainWindow):
         form.setContentsMargins(4, 1, 4, 1)
         group.setLayout(form)
 
+        _is_rpl_manual = TEMPLATE_TO_RTYPE.get(
+            self.template_combo.currentText(), "single_hla") == "rpl_couple"
         DONOR_FIELDS = [
             ("donor_name",       "Donor Name",      ""),
             ("relationship",     "Relationship",    ""),
@@ -802,14 +817,18 @@ class HLAReportGeneratorApp(QMainWindow):
             ("donor_sample_no",  "Sample Number",   ""),
             ("donor_collect",    "Collection Date", ""),
             ("donor_receipt",    "Receipt Date",    ""),
+            ("report_date",      "Report Date",     ""),
             ("match",            "Match Score",     ""),
-            ("remarks",          "Remarks",         ""),
         ]
+        # Non-RPL templates include donor remarks
+        if not _is_rpl_manual:
+            DONOR_FIELDS.append(("remarks", "Remarks", ""))
         d_fields = {}
         for key, lbl, default in DONOR_FIELDS:
             val = fields.get(key, default)
             w = QLineEdit(val)
             w.setMaximumHeight(24)
+            if "date" in key.lower(): w.setPlaceholderText("DD-MM-YYYY")
             d_fields[key] = w
             form.addRow(lbl + ":", w)
             if key == "relationship":
@@ -819,8 +838,8 @@ class HLAReportGeneratorApp(QMainWindow):
         d_hla = {}
         for locus in HLA_LOCI:
             alleles = hla_data.get(locus, ["", ""])
-            a1_val  = alleles[0] if len(alleles) > 0 else ""
-            a2_val  = alleles[1] if len(alleles) > 1 else ""
+            a1_val  = _allele_str(alleles[0] if len(alleles) > 0 else None)
+            a2_val  = _allele_str(alleles[1] if len(alleles) > 1 else None)
             row_w, a1, a2 = _make_allele_row(a1_val, a2_val)
             form.addRow(f"{locus}:", row_w)
             d_hla[locus] = [a1, a2]
@@ -920,14 +939,52 @@ class HLAReportGeneratorApp(QMainWindow):
             "JSON Files (*.json);;All Files (*)"
         )
         if not path: return
+        self._loading_draft = True
         try:
             with open(path) as fh: data = json.load(fh)
+            # Normalize bulk-format drafts (have "patient" key instead of "patient_fields")
+            if "patient" in data and "patient_fields" not in data:
+                p = data["patient"]
+                p_hla = p.get("hla", {})
+                p_fields = {k: v for k, v in p.items() if k != "hla"}
+                # Excel bulk uses "name"; manual form field key is "patient_name"
+                if "name" in p_fields and "patient_name" not in p_fields:
+                    p_fields["patient_name"] = p_fields.pop("name")
+                manual_donors = []
+                for d in data.get("donors", []):
+                    manual_donors.append({
+                        "fields": {
+                            "donor_name":       d.get("name", ""),
+                            "relationship":     d.get("relationship", ""),
+                            "donor_gender_age": d.get("gender_age", ""),
+                            "donor_pin":        d.get("pin", ""),
+                            "donor_sample_no":  d.get("sample_number", ""),
+                            "donor_collect":    d.get("collection_date", ""),
+                            "donor_receipt":    d.get("receipt_date", ""),
+                            "report_date":      d.get("report_date", ""),
+                            "match":            d.get("match", ""),
+                            "remarks":          d.get("remarks", ""),
+                        },
+                        "hla": d.get("hla", {}),
+                    })
+                data = {
+                    "patient_fields":    p_fields,
+                    "patient_hla":       p_hla,
+                    "donors":            manual_donors,
+                    "report_type":       data.get("report_type", "single_hla"),
+                    "with_logo":         data.get("with_logo", True),
+                    "nabl":              data.get("nabl", True),
+                    "sig_name_overrides": data.get("sig_name_overrides", {}),
+                }
             for k, v in data.get("patient_fields", {}).items():
                 if k in self.f: self.f[k].setText(v)
             _tmpl_name = RTYPE_TO_TEMPLATE.get(data.get("report_type", "single_hla"), TEMPLATE_NAMES[0])
             idx = self.template_combo.findText(_tmpl_name)
             if idx >= 0: self.template_combo.setCurrentIndex(idx)
-            idx = self.logo_combo.findText(data.get("with_logo", "With Logo"))
+            _wl = data.get("with_logo", "With Logo")
+            if isinstance(_wl, bool):
+                _wl = "With Logo" if _wl else "Without Logo"
+            idx = self.logo_combo.findText(_wl)
             if idx >= 0: self.logo_combo.setCurrentIndex(idx)
             # Clear existing donor panels
             for entry in list(self._manual_donors):
@@ -943,8 +1000,8 @@ class HLAReportGeneratorApp(QMainWindow):
                 self._add_manual_donor({"fields": old_fields, "hla": old_hla})
             for locus, vals in data.get("patient_hla", {}).items():
                 if locus in self.hla_pat:
-                    self.hla_pat[locus][0].setText(vals[0] if len(vals) > 0 else "")
-                    self.hla_pat[locus][1].setText(vals[1] if len(vals) > 1 else "")
+                    self.hla_pat[locus][0].setText(_allele_str(vals[0] if len(vals) > 0 else None))
+                    self.hla_pat[locus][1].setText(_allele_str(vals[1] if len(vals) > 1 else None))
             # Restore signature name overrides
             self._manual_sig_name_overrides.clear()
             for slot_s, sig_name in data.get("sig_name_overrides", {}).items():
@@ -959,6 +1016,9 @@ class HLAReportGeneratorApp(QMainWindow):
             self.manual_status_label.setText(f"Draft loaded: {os.path.basename(path)}")
         except Exception as e:
             QMessageBox.critical(self, "Load Error", str(e))
+        finally:
+            self._loading_draft = False
+            self._refresh_manual_preview()  # single preview refresh after everything is loaded
 
     # ══════════════════════════════════════════════════════════════════════════
     # TAB 2 — BULK UPLOAD
@@ -1041,16 +1101,15 @@ class HLAReportGeneratorApp(QMainWindow):
         self.bulk_list.itemChanged.connect(self._on_bulk_check_changed)
         left_layout.addWidget(self.bulk_list, 1)
 
-        # ── Compact controls row 1: Select All checkbox + Save Draft (Selected) ──
+        # ── Compact controls row 1: Select/Deselect All + Save Draft (Selected) ──
         ctrl_row1 = QHBoxLayout()
         ctrl_row1.setSpacing(4)
 
-        self._sel_all_chk = QCheckBox("Select All")
-        self._sel_all_chk.setTristate(True)
-        self._sel_all_chk.setChecked(True)
-        self._sel_all_chk.setFixedHeight(24)
-        self._sel_all_chk.stateChanged.connect(self._on_sel_all_toggled)
-        ctrl_row1.addWidget(self._sel_all_chk)
+        self._sel_all_btn = QPushButton("Select All")
+        self._sel_all_btn.setFixedHeight(24)
+        self._sel_all_btn.setToolTip("Select or deselect all cases")
+        self._sel_all_btn.clicked.connect(self._on_sel_all_toggled)
+        ctrl_row1.addWidget(self._sel_all_btn)
 
         save_sel_btn = QPushButton("Save Draft (Selected)")
         save_sel_btn.setFixedHeight(24)
@@ -1100,17 +1159,39 @@ class HLAReportGeneratorApp(QMainWindow):
 
         # RIGHT: Patient Editor
         editor_widget = QWidget()
+        editor_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         editor_layout = QVBoxLayout(); editor_widget.setLayout(editor_layout)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
         editor_layout.addWidget(QLabel("Patient Editor (select a case from the list):"))
 
         self._bulk_scroll = QScrollArea()
         self._bulk_scroll.setWidgetResizable(True)
+        self._bulk_scroll.setMinimumHeight(60)   # allow shrinking so action buttons always show
         self._bulk_editor_container = QWidget()
         self._bulk_editor_layout    = QVBoxLayout()
         self._bulk_editor_container.setLayout(self._bulk_editor_layout)
         self._bulk_scroll.setWidget(self._bulk_editor_container)
         editor_layout.addWidget(self._bulk_scroll, 1)
-        
+
+        # Persistent action buttons — live OUTSIDE the scroll area so they are
+        # always visible and never overlap scrollable content.
+        _bulk_action_row = QHBoxLayout()
+        _bulk_action_row.setContentsMargins(0, 4, 0, 0)
+        self._bulk_apply_btn = QPushButton("Apply Edits")
+        self._bulk_apply_btn.setStyleSheet(GENERATE_BTN_STYLE)
+        self._bulk_apply_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
+        self._bulk_apply_btn.setEnabled(False)
+        self._bulk_apply_btn.clicked.connect(lambda: self._flush_bulk_edits(self._bulk_current_row))
+        self._bulk_save_draft_btn = QPushButton("Save Draft")
+        self._bulk_save_draft_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
+        self._bulk_save_draft_btn.setToolTip("Save this patient's data as a draft to the /drafts folder")
+        self._bulk_save_draft_btn.setEnabled(False)
+        self._bulk_save_draft_btn.clicked.connect(self.save_bulk_current_draft)
+        _bulk_action_row.addWidget(self._bulk_apply_btn)
+        _bulk_action_row.addWidget(self._bulk_save_draft_btn)
+        _bulk_action_row.addStretch()
+        editor_layout.addLayout(_bulk_action_row)
+
         placeholder = QLabel("Select a case from the list to edit")
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         placeholder.setStyleSheet(STATUS_LABEL_STYLE)
@@ -1375,8 +1456,8 @@ class HLAReportGeneratorApp(QMainWindow):
         hla_data = p.get("hla", {})
         for locus in HLA_LOCI:
             alleles = hla_data.get(locus, ["", ""])
-            a1_val  = alleles[0] if len(alleles) > 0 else ""
-            a2_val  = alleles[1] if len(alleles) > 1 else ""
+            a1_val  = _allele_str(alleles[0] if len(alleles) > 0 else None)
+            a2_val  = _allele_str(alleles[1] if len(alleles) > 1 else None)
             row_w, a1, a2 = _make_allele_row(a1_val, a2_val)
             a1.textChanged.connect(self._on_bulk_field_debounced)
             a2.textChanged.connect(self._on_bulk_field_debounced)
@@ -1416,6 +1497,7 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_donor_fields = []
         self._bulk_hla_don      = []
 
+        _is_rpl = case.get("report_type") == "rpl_couple"
         DONOR_FIELDS_DEF = [
             ("name",            "Name"),
             ("relationship",    "Relationship"),
@@ -1423,11 +1505,14 @@ class HLAReportGeneratorApp(QMainWindow):
             ("pin",             "PIN"),
             ("sample_number",   "Sample Number"),
             ("match",           "Match Score"),
-            ("remarks",         "Remarks"),
+            # "remarks" excluded for RPL donors — only the patient has remarks in RPL
             ("collection_date", "Collection Date"),
             ("receipt_date",    "Receipt Date"),
             ("report_date",     "Report Date"),
         ]
+        # Non-RPL templates still show donor remarks
+        if not _is_rpl:
+            DONOR_FIELDS_DEF.insert(6, ("remarks", "Remarks"))
 
         for di, d in enumerate(case.get("donors", [])):
             d_container = QWidget()
@@ -1442,6 +1527,7 @@ class HLAReportGeneratorApp(QMainWindow):
             d_fields = {}
             for key, lbl in DONOR_FIELDS_DEF:
                 w = QLineEdit(str(d.get(key, ""))); w.setFixedHeight(24)
+                if "date" in key.lower(): w.setPlaceholderText("DD-MM-YYYY")
                 w.textChanged.connect(self._on_bulk_field_debounced)
                 d_fields[key] = w; d_form.addRow(lbl + ":", w)
 
@@ -1451,8 +1537,10 @@ class HLAReportGeneratorApp(QMainWindow):
             d_hla_data = d.get("hla", {})
             for locus in HLA_LOCI:
                 alleles = d_hla_data.get(locus, ["", ""])
-                a1_val  = alleles[0] if len(alleles) > 0 else ""
-                a2_val  = alleles[1] if len(alleles) > 1 else ""
+                a1_raw  = alleles[0] if len(alleles) > 0 else None
+                a2_raw  = alleles[1] if len(alleles) > 1 else None
+                a1_val  = str(a1_raw) if a1_raw is not None else ""
+                a2_val  = str(a2_raw) if a2_raw is not None else ""
                 row_w, a1, a2 = _make_allele_row(a1_val, a2_val)
                 a1.textChanged.connect(self._on_bulk_field_debounced)
                 a2.textChanged.connect(self._on_bulk_field_debounced)
@@ -1503,24 +1591,12 @@ class HLAReportGeneratorApp(QMainWindow):
             self._bulk_sig_combos[i] = cmb
             sig_form.addRow(f"Signatory {i+1}:", cmb)
         self._bulk_editor_layout.addWidget(sig_group)
-
-        # Action buttons row: Apply Edits + Save Draft
-        editor_action_row = QHBoxLayout()
-
-        save_btn = QPushButton(f"Apply Edits to Case {idx+1}")
-        save_btn.setStyleSheet(GENERATE_BTN_STYLE)
-        save_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
-        save_btn.clicked.connect(lambda: self._flush_bulk_edits(self._bulk_current_row))
-        editor_action_row.addWidget(save_btn)
-
-        draft_btn = QPushButton("Save Draft")
-        draft_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
-        draft_btn.setToolTip("Save this patient's data as a draft to the /drafts folder")
-        draft_btn.clicked.connect(self.save_bulk_current_draft)
-        editor_action_row.addWidget(draft_btn)
-
-        self._bulk_editor_layout.addLayout(editor_action_row)
         self._bulk_editor_layout.addStretch()
+
+        # Update persistent action buttons (outside the scroll) for this case.
+        self._bulk_apply_btn.setText(f"Apply Edits to Case {idx+1}")
+        self._bulk_apply_btn.setEnabled(True)
+        self._bulk_save_draft_btn.setEnabled(True)
 
         # Auto-generate preview for this case
         QTimer.singleShot(200, self._refresh_bulk_preview)
@@ -1754,30 +1830,63 @@ class HLAReportGeneratorApp(QMainWindow):
         for i in range(self.bulk_list.count()):
             self.bulk_list.item(i).setCheckState(Qt.CheckState.Unchecked)
 
-    def _on_sel_all_toggled(self, state):
-        """Drive Select All / Select None from the checkbox."""
-        if state == Qt.CheckState.Checked.value:
-            self._select_all()
-        else:
-            self._select_none()
-
-    def _on_bulk_check_changed(self, _item):
-        """Sync the Select All checkbox state whenever a list item checkbox changes."""
-        checked_count = sum(
-            1 for i in range(self.bulk_list.count())
+    def _on_sel_all_toggled(self):
+        """Toggle between Select All and Deselect All on button click."""
+        total = self.bulk_list.count()
+        checked = sum(
+            1 for i in range(total)
             if self.bulk_list.item(i).checkState() == Qt.CheckState.Checked
         )
-        # Sync the Select All checkbox without re-triggering _on_sel_all_toggled
-        if hasattr(self, "_sel_all_chk"):
-            self._sel_all_chk.blockSignals(True)
-            total = self.bulk_list.count()
-            if checked_count == 0:
-                self._sel_all_chk.setCheckState(Qt.CheckState.Unchecked)
-            elif checked_count == total:
-                self._sel_all_chk.setCheckState(Qt.CheckState.Checked)
-            else:
-                self._sel_all_chk.setCheckState(Qt.CheckState.PartiallyChecked)
-            self._sel_all_chk.blockSignals(False)
+        # If all are already checked, deselect all; otherwise select all
+        if checked == total:
+            self._select_none()
+        else:
+            self._select_all()
+
+    def _on_bulk_check_changed(self, _item):
+        """Sync the Select All button label whenever a list item checkbox changes."""
+        total = self.bulk_list.count()
+        checked_count = sum(
+            1 for i in range(total)
+            if self.bulk_list.item(i).checkState() == Qt.CheckState.Checked
+        )
+        if checked_count == total:
+            self._sel_all_btn.setText("Deselect All")
+        else:
+            self._sel_all_btn.setText("Select All")
+
+    def _save_cases_as_drafts(self, cases: list, stacked_prefix: str) -> tuple:
+        """Save each case as an individual file AND as one stacked file.
+        Returns (saved_individual, stacked_filename, failed_list).
+        """
+        os.makedirs(DRAFTS_DIR, exist_ok=True)
+        today = datetime.date.today().strftime("%Y%m%d")
+        saved, failed = [], []
+
+        # ── Individual files ──────────────────────────────────────────────────
+        for case in cases:
+            name_val  = case.get("patient", {}).get("name", "Unknown")
+            safe_name = _re.sub(r"[^\w\-]", "_", name_val)
+            filename  = f"{safe_name}_draft_{today}.json"
+            path      = os.path.join(DRAFTS_DIR, filename)
+            draft     = {k: v for k, v in case.items() if k != "signatories"}
+            try:
+                with open(path, "w") as fh: json.dump(draft, fh, indent=2, default=str)
+                saved.append(filename)
+            except Exception as e:
+                failed.append(f"{name_val}: {e}")
+
+        # ── Stacked file (all cases in one list) ──────────────────────────────
+        stacked_filename = f"{stacked_prefix}_stacked_{today}.json"
+        stacked_path     = os.path.join(DRAFTS_DIR, stacked_filename)
+        all_drafts       = [{k: v for k, v in c.items() if k != "signatories"} for c in cases]
+        try:
+            with open(stacked_path, "w") as fh: json.dump(all_drafts, fh, indent=2, default=str)
+        except Exception as e:
+            stacked_filename = None
+            failed.append(f"stacked file: {e}")
+
+        return saved, stacked_filename, failed
 
     def save_bulk_selected_draft(self):
         """Save drafts only for the currently checked/selected patients."""
@@ -1790,21 +1899,10 @@ class HLAReportGeneratorApp(QMainWindow):
         if not checked:
             QMessageBox.warning(self, "No Selection", "No patients are checked.")
             return
-        os.makedirs(DRAFTS_DIR, exist_ok=True)
-        today = datetime.date.today().strftime("%Y%m%d")
-        saved, failed = [], []
-        for case in checked:
-            name_val  = case.get("patient", {}).get("name", "Unknown")
-            safe_name = _re.sub(r"[^\w\-]", "_", name_val)
-            filename  = f"{safe_name}_draft_{today}.json"
-            path      = os.path.join(DRAFTS_DIR, filename)
-            draft     = {k: v for k, v in case.items() if k != "signatories"}
-            try:
-                with open(path, "w") as fh: json.dump(draft, fh, indent=2, default=str)
-                saved.append(filename)
-            except Exception as e:
-                failed.append(f"{name_val}: {e}")
-        msg = f"Saved {len(saved)} draft(s) to /drafts."
+        saved, stacked, failed = self._save_cases_as_drafts(checked, "selected")
+        msg = f"Saved {len(saved)} individual draft(s) to /drafts."
+        if stacked:
+            msg += f"\nStacked file: {stacked}"
         if failed:
             msg += f"\n{len(failed)} failed: " + "; ".join(failed)
         self._bulk_log(msg)
@@ -1866,21 +1964,10 @@ class HLAReportGeneratorApp(QMainWindow):
             QMessageBox.warning(self, "No Cases", "No cases loaded to save.")
             return
         self._flush_bulk_edits(self._bulk_current_row)
-        os.makedirs(DRAFTS_DIR, exist_ok=True)
-        today    = datetime.date.today().strftime("%Y%m%d")
-        saved, failed = [], []
-        for case in self.cases:
-            name_val  = case.get("patient", {}).get("name", "Unknown")
-            safe_name = _re.sub(r"[^\w\-]", "_", name_val)
-            filename  = f"{safe_name}_draft_{today}.json"
-            path      = os.path.join(DRAFTS_DIR, filename)
-            draft     = {k: v for k, v in case.items() if k != "signatories"}
-            try:
-                with open(path, "w") as fh: json.dump(draft, fh, indent=2, default=str)
-                saved.append(filename)
-            except Exception as e:
-                failed.append(f"{name_val}: {e}")
-        msg = f"Saved {len(saved)} draft(s) to /drafts."
+        saved, stacked, failed = self._save_cases_as_drafts(self.cases, "all")
+        msg = f"Saved {len(saved)} individual draft(s) to /drafts."
+        if stacked:
+            msg += f"\nStacked file: {stacked}"
         if failed:
             msg += f"\n{len(failed)} failed: " + "; ".join(failed)
         self._bulk_log(msg)

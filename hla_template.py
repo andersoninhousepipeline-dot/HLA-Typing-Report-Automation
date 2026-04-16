@@ -316,9 +316,20 @@ def _clean_display(val) -> str:
         return "\u2014"
     if re.search(r"insufficient\s*data", s, re.I):   # catches standard spacing variants
         return "\u2014"
-    if re.fullmatch(r"n/?a", s, re.I):               # whole-string N/A / NA / n/a
-        return "\u2014"
+    # NOTE: "NA" / "N/A" values are kept as-is; only empty cells and Insufficient Data become —
     return s
+
+
+def _capitalize_initials(name: str) -> str:
+    """Capitalize standalone single-letter initials within a name string.
+
+    Handles patterns like:
+      'Mrs Abirami s'   → 'Mrs Abirami S'
+      'Mr Koushik a.m'  → 'Mr Koushik A.M'
+    Single lowercase letters that are surrounded by word boundaries
+    (spaces, dots, start/end) are uppercased.
+    """
+    return re.sub(r'\b([a-z])\b', lambda m: m.group(0).upper(), name)
 
 
 _DEGREE_MAP = {
@@ -432,6 +443,28 @@ def _title_case(text: str) -> str:
     return "".join(_process_token(p) if not re.match(r"^(\s+|,)$", p) else p for p in parts)
 
 
+# ─── NABL seal extracted from the NABL header banner (cached) ────────────────
+_nabl_seal_bytes_cache: bytes | None = None
+
+def _get_nabl_seal_bytes() -> bytes:
+    """Crop the NABL seal out of HEADER_NABL_B64 and return PNG bytes.
+    The seal lives at x=580–740, full height of the 1426×170 header image.
+    Result is cached so the crop only runs once per process.
+    """
+    from PIL import Image as PILImage
+    global _nabl_seal_bytes_cache
+    if _nabl_seal_bytes_cache is not None:
+        return _nabl_seal_bytes_cache
+    raw = hla_assets.get_image_bytes(hla_assets.HEADER_NABL_B64)
+    img = PILImage.open(io.BytesIO(raw)).convert("RGBA")
+    # x=580–740 isolates the seal column; y=38–135 skips the orange+blue bars at top
+    seal = img.crop((580, 38, 740, 135))
+    buf = io.BytesIO()
+    seal.save(buf, format="PNG")
+    _nabl_seal_bytes_cache = buf.getvalue()
+    return _nabl_seal_bytes_cache
+
+
 # ─── Canvas: header + footer on every page ────────────────────────────────────
 class _HFCanvas:
     """Draws header image (or text) and footer image on every page."""
@@ -449,7 +482,6 @@ class _HFCanvas:
         with_logo = self.case.get("with_logo", True)
 
         # ── Header ──────────────────────────────────────────────────────────
-        # Only draw header if with_logo is True
         if with_logo:
             b64 = hla_assets.HEADER_NABL_B64 if nabl else hla_assets.HEADER_NONNABL_B64
             raw = hla_assets.get_image_bytes(b64)
@@ -459,9 +491,21 @@ class _HFCanvas:
                 width=CONTENT_W, height=self.banner_h,
                 preserveAspectRatio=True, mask="auto"
             )
+        elif nabl:
+            # Without logo + NABL enabled: draw seal cropped from the NABL header, centred.
+            raw_seal = _get_nabl_seal_bytes()  # 160×97 px crop from header (bars removed)
+            seal_h   = self.banner_h
+            seal_w   = seal_h * (160 / 97)    # aspect ratio of the cropped region
+            canvas.drawImage(
+                ImageReader(io.BytesIO(raw_seal)),
+                MARGIN_L + (CONTENT_W - seal_w) / 2,
+                PAGE_H - MARGIN_T - self.banner_h,
+                width=seal_w, height=seal_h,
+                preserveAspectRatio=True, mask="auto"
+            )
+        # Without logo + NABL disabled: header space is reserved but nothing is drawn.
 
         # ── Footer ──────────────────────────────────────────────────────────
-        # Only draw footer if with_logo is True
         if with_logo:
             raw_f = hla_assets.get_image_bytes(hla_assets.FOOTER_BAR_B64)
             # Footer bar sits above the page-number area (Fix 2: page number below footer)
@@ -481,7 +525,7 @@ class _HFCanvas:
                 MARGIN_B,
                 f"Page {doc.page} of {self.total_pages}"
             )
-        # No logo mode: no header/footer and no page numbers (Fix 3)
+        # Without logo: footer image and page numbers are omitted; space is still reserved.
 
         canvas.restoreState()
 
@@ -778,15 +822,16 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict) -> Table:
 
 
 # ─── RPL: reference table + HLA-C supertype table ─────────────────────────────
-def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict) -> list:
+def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict,
+                            include_comment: bool = True) -> list:
     elems = []
     p_name    = patient.get("name", "")
     d_name    = donor.get("name",   "")
     match_str = rpl_ref.get("match_str", "")
     match_pct = rpl_ref.get("match_pct", "")
 
-    # Comment block
-    if match_str or match_pct:
+    # Comment block (can be suppressed when caller emits it separately)
+    if include_comment and (match_str or match_pct):
         bold_match = f"<b>{match_str} ({match_pct})</b>" if match_str else f"<b>{match_pct}</b>"
         comment = (
             f"<b>COMMENT:</b> HLA-A, B, C, DRB1, DQB1 &amp; DPB1 locus typing patterns of the "
@@ -816,7 +861,7 @@ def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict) -
             Paragraph("<b>HLA sharing for Recurrent miscarriage/RIF</b>",     S["lbl"]),
         ],
         [
-            Paragraph(_clean_display(f"{p_name} / {d_name}"), S["rpl_val"]),
+            Paragraph(_clean_display(f"{_capitalize_initials(p_name)} / {_capitalize_initials(d_name)}"), S["rpl_val"]),
             Paragraph(_clean_display(hla_matching_text),      S["rpl_val"]),
             Paragraph(_clean_display(rpl_ref.get("hla_sharing_rif", ">50%")), S["rpl_val"]),
         ],
@@ -1054,20 +1099,7 @@ def _build_rpl_couple(case: dict, S: dict) -> list:
 
     elems = []
 
-    # ── Page 1 content ────────────────────────────────────────────────────────
-    if donor:
-        # Fix 1: Keep couple table together; let reference section flow naturally
-        # so that the large combined block never forces a bad mid-table page break.
-        elems.append(KeepTogether([_rpl_couple_table(patient, donor, S),
-                                   Spacer(1, 3 * mm)]))
-        # Comment + Reference + HLA-C tables — can flow naturally (small items)
-        elems += _rpl_reference_section(rpl_ref, patient, donor, S)
-    else:
-        # Single-person RPL: NGS-style patient block
-        patient_block = _ngs_person_block(patient, is_donor=False, match_str="", S=S)
-        elems.append(KeepTogether(patient_block))
-
-    # Fix 2: Conditional remarks for patient and donor — only render if non-empty.
+    # Helper: emit a person's remarks if non-empty.
     def _emit_remarks(person: dict, label: str):
         raw = person.get("remarks", "")
         if not raw or not str(raw).strip():
@@ -1078,9 +1110,35 @@ def _build_rpl_couple(case: dict, S: dict) -> list:
                 disp = disp[:580] + "..."
             elems.append(Paragraph(f"<b>{label}:</b> {disp}", S["body_small"]))
 
-    _emit_remarks(patient, "Remarks (Patient)")
+    # ── Page 1 content ────────────────────────────────────────────────────────
     if donor:
-        _emit_remarks(donor, "Remarks (Donor)")
+        # Keep couple table together; let reference section flow naturally.
+        elems.append(KeepTogether([_rpl_couple_table(patient, donor, S),
+                                   Spacer(1, 3 * mm)]))
+
+        # Emit COMMENT paragraph first (extracted so remarks can follow immediately).
+        match_str = rpl_ref.get("match_str", "")
+        match_pct = rpl_ref.get("match_pct", "")
+        if match_str or match_pct:
+            bold_match = f"<b>{match_str} ({match_pct})</b>" if match_str else f"<b>{match_pct}</b>"
+            comment_text = (
+                f"<b>COMMENT:</b> HLA-A, B, C, DRB1, DQB1 &amp; DPB1 locus typing patterns of the "
+                f"above individuals indicate {bold_match} matches at High resolution."
+            )
+            elems.append(Paragraph(comment_text, S["comment"]))
+            elems.append(Spacer(1, 2 * mm))
+
+        # Patient/donor remarks immediately below the comment.
+        _emit_remarks(patient, "Remarks (Patient)")
+        _emit_remarks(donor,   "Remarks (Donor)")
+
+        # Reference + HLA-C tables (comment already emitted above, skip it here).
+        elems += _rpl_reference_section(rpl_ref, patient, donor, S, include_comment=False)
+    else:
+        # Single-person RPL: NGS-style patient block
+        patient_block = _ngs_person_block(patient, is_donor=False, match_str="", S=S)
+        elems.append(KeepTogether(patient_block))
+        _emit_remarks(patient, "Remarks (Patient)")
 
     # Add spacer to help with page flow
     elems.append(Spacer(1, 5 * mm))
@@ -1184,32 +1242,25 @@ def generate_pdf(case: dict, output_path: str) -> str:
     title_style = S["title_rpl"] if report_type == "rpl_couple" else S["title_ngs"]
     title_para  = Paragraph(title, title_style)
 
-    # Compute header/footer heights and adjust margins accordingly
+    # Compute header/footer heights — always use real image dimensions so the
+    # content area position is identical whether or not logos are shown.
     from PIL import Image as PILImage
 
-    if with_logo:
-        # With logo: reserve space for header and footer banners
-        b64  = hla_assets.HEADER_NABL_B64 if nabl else hla_assets.HEADER_NONNABL_B64
-        raw  = hla_assets.get_image_bytes(b64)
-        pil  = PILImage.open(io.BytesIO(raw))
-        ow, oh   = pil.size
-        banner_h = (oh / ow) * CONTENT_W
+    b64  = hla_assets.HEADER_NABL_B64 if nabl else hla_assets.HEADER_NONNABL_B64
+    raw  = hla_assets.get_image_bytes(b64)
+    pil  = PILImage.open(io.BytesIO(raw))
+    ow, oh   = pil.size
+    banner_h = (oh / ow) * CONTENT_W
 
-        raw_f    = hla_assets.get_image_bytes(hla_assets.FOOTER_BAR_B64)
-        pil_f    = PILImage.open(io.BytesIO(raw_f))
-        fw, fh   = pil_f.size
-        footer_h = (fh / fw) * CONTENT_W
+    raw_f    = hla_assets.get_image_bytes(hla_assets.FOOTER_BAR_B64)
+    pil_f    = PILImage.open(io.BytesIO(raw_f))
+    fw, fh   = pil_f.size
+    footer_h = (fh / fw) * CONTENT_W
 
-        top_margin    = MARGIN_T + banner_h + 4 * mm
-        # Fix 2: extra 4 mm below footer bar for the page number text
-        _PAGE_NUM_AREA = 4 * mm
-        bottom_margin = MARGIN_B + _PAGE_NUM_AREA + footer_h + 4 * mm
-    else:
-        # Without logo: minimal margins, no header/footer space needed
-        banner_h      = 0
-        footer_h      = 0
-        top_margin    = MARGIN_T
-        bottom_margin = MARGIN_B
+    top_margin    = MARGIN_T + banner_h + 4 * mm
+    # Fix 2: extra 4 mm below footer bar for the page number text
+    _PAGE_NUM_AREA = 4 * mm
+    bottom_margin = MARGIN_B + _PAGE_NUM_AREA + footer_h + 4 * mm
 
     doc = SimpleDocTemplate(
         output_path,
@@ -1246,9 +1297,25 @@ def make_filename(case: dict) -> str:
     def safe(s):
         return re.sub(r"[^\w.\-]", "_", str(s).strip()).strip("_") or "Unknown"
     p = safe(case["patient"].get("name", ""))
-    donors = "_".join(safe(d.get("name", "")) for d in case.get("donors", []))
+    donors = "_".join(
+        safe(d.get("name", ""))
+        for d in case.get("donors", [])
+        if str(d.get("name", "")).strip()
+    )
     rtype = {"single_hla": "HLA_NGS", "transplant_donor": "HLA_NGS",
              "rpl_couple": "RPL"}.get(case.get("report_type", ""), "HLA")
     logo  = "WITH_LOGO" if case.get("with_logo", True) else "WITHOUT_LOGO"
     parts = [p] + ([donors] if donors else []) + [rtype, logo]
     return "_".join(parts) + ".pdf"
+
+
+def unique_output_path(out_dir: str, filename: str) -> str:
+    """Return a collision-free path: if filename already exists in out_dir,
+    append _(2), _(3), … until a free slot is found."""
+    base, ext = os.path.splitext(filename)
+    candidate = os.path.join(out_dir, filename)
+    counter = 2
+    while os.path.exists(candidate):
+        candidate = os.path.join(out_dir, f"{base}_({counter}){ext}")
+        counter += 1
+    return candidate
