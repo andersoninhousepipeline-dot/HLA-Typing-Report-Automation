@@ -190,6 +190,10 @@ def _styles() -> dict:
             "lbl", fontName=F_SEGOE_BOLD, fontSize=10,
             textColor=BLACK, leading=12
         ),
+        "lbl_center": ParagraphStyle(
+            "lbl_center", fontName=F_SEGOE_BOLD, fontSize=10,
+            textColor=BLACK, alignment=TA_CENTER, leading=12
+        ),
         "val": ParagraphStyle(
             "val", fontName=F_SEGOE_BOLD, fontSize=10,
             textColor=BLACK, leading=12
@@ -228,6 +232,10 @@ def _styles() -> dict:
         "rpl_lbl": ParagraphStyle(
             "rpl_lbl", fontName=F_CALI_BOLD, fontSize=11,
             textColor=BLACK, leading=13
+        ),
+        "rpl_lbl_center": ParagraphStyle(
+            "rpl_lbl_center", fontName=F_CALI_BOLD, fontSize=11,
+            textColor=BLACK, alignment=TA_CENTER, leading=13
         ),
         "rpl_val": ParagraphStyle(
             "rpl_val", fontName=F_CALI, fontSize=11,
@@ -318,6 +326,46 @@ def _clean_display(val) -> str:
         return "\u2014"
     # NOTE: "NA" / "N/A" values are kept as-is; only empty cells and Insufficient Data become —
     return s
+
+
+def _format_relationship(rel: str, other_name: str) -> str:
+    """Return 'Rel of Other Name'. Skips when rel is empty/NA or already contains 'of'."""
+    r = (rel or "").strip()
+    if not r or r.upper() in ("NA", "N/A") or r == "\u2014":
+        return r
+    if " of " in r.lower():
+        return r  # already formatted
+    name = (other_name or "").strip()
+    if not name:
+        return r
+    return f"{r} of {name}"
+
+
+def _normalize_age(gender_age: str) -> str:
+    """Reformat the age portion of a combined 'Gender / Age' string.
+    Rule: if years present → keep years only, drop months and days.
+          if months only   → keep months only, drop days.
+    Examples: '14 Years 24 D / Male'       → '14 Years / Male'
+              '2 Years 3 Months / Female'  → '2 Years / Female'
+              '3 Months 5 Days / Male'     → '3 Months / Male'
+              '33Y/Female'                 → '33 Years/Female'
+    """
+    if not gender_age:
+        return gender_age
+    _DAY = r'(?:\s*\d+\s*[Dd](?:ays?)?)?'
+    # Group 1 = years, Group 2 = months alongside years, Group 3 = standalone months
+    _PAT = (r'(\d+)\s*[Yy](?:ears?)?(?:\s*(\d+)\s*[Mm](?:onths?)?)?' + _DAY +
+            r'|(\d+)\s*[Mm](?:onths?)?' + _DAY)
+    def _repl(m):
+        y, mo_with_y, mo_only = m.group(1), m.group(2), m.group(3)
+        if y:
+            years = int(y) + (int(mo_with_y) // 12 if mo_with_y else 0)
+            return f"{years} Years"
+        months = int(mo_only)
+        if months >= 12:
+            return f"{months // 12} Years"
+        return f"{months} Months"
+    return re.sub(_PAT, _repl, gender_age)
 
 
 def _capitalize_initials(name: str) -> str:
@@ -494,12 +542,13 @@ class _HFCanvas:
         elif nabl:
             # Without logo + NABL enabled: draw seal cropped from the NABL header, centred.
             raw_seal = _get_nabl_seal_bytes()  # 160×97 px crop from header (bars removed)
-            seal_h   = self.banner_h
-            seal_w   = seal_h * (160 / 97)    # aspect ratio of the cropped region
+            seal_h   = self.banner_h * 0.72    # slightly smaller than full banner height
+            seal_w   = seal_h * (160 / 97)     # aspect ratio of the cropped region
+            seal_y   = PAGE_H - MARGIN_T - self.banner_h + (self.banner_h - seal_h) / 2
             canvas.drawImage(
                 ImageReader(io.BytesIO(raw_seal)),
                 MARGIN_L + (CONTENT_W - seal_w) / 2,
-                PAGE_H - MARGIN_T - self.banner_h,
+                seal_y,
                 width=seal_w, height=seal_h,
                 preserveAspectRatio=True, mask="auto"
             )
@@ -550,7 +599,7 @@ def _ngs_section_bar(text: str, S: dict) -> Table:
 # Widths proportioned from PGTA reference: [108, 12, 161, 108, 12, 89] on 490pt
 # Scaled to CONTENT_W ≈ 510pt: [112, 13, 168, 112, 13, 92]
 
-def _ngs_info_table(person: dict, S: dict, is_donor: bool = False) -> Table:
+def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name: str = "") -> Table:
     pf = "Donor" if is_donor else "Patient"
     cw = CONTENT_W
 
@@ -566,7 +615,7 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False) -> Table:
 
     left_rows = [
         [L(f"{pf} Name"), C(), V(person.get("name", ""))],
-        [L("Gender / Age"), C(), V(person.get("gender_age", ""))],
+        [L("Gender / Age"), C(), V(_normalize_age(person.get("gender_age", "")))],
         [L("Hospital MR No"), C(), R(person.get("hospital_mr_no", ""))],
     ]
 
@@ -580,10 +629,8 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False) -> Table:
     ])
 
     if is_donor:
-        left_rows.insert(2, [L("Relationship"), C(), V(person.get("relationship", ""))])
-
-    # Track the Hospital/Clinic row index (last row of left_rows) for top-alignment
-    hosp_row = len(left_rows) - 1
+        rel_display = _format_relationship(person.get("relationship", ""), patient_name)
+        left_rows.insert(2, [L("Relationship"), C(), V(rel_display)])
 
     right_rows = [
         [L("PIN"), C(), R(person.get("pin", ""))],
@@ -602,7 +649,7 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False) -> Table:
     t = Table(rows, colWidths=col_w)
     t.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, -1), C_INFO_BG),
-        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
         ("TOPPADDING",    (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ("LEFTPADDING",   (0, 0), (-1, -1), 4),
@@ -612,8 +659,6 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False) -> Table:
         ("LEFTPADDING",   (4, 0), (4, -1), 0),
         ("RIGHTPADDING",  (1, 0), (1, -1), 2),
         ("RIGHTPADDING",  (4, 0), (4, -1), 2),
-        # Hospital/Clinic & Report Date row: top-align so label anchors to first line
-        ("VALIGN",        (0, hosp_row), (-1, hosp_row), "TOP"),
     ]))
     return t
 
@@ -664,9 +709,9 @@ def _hla_table(person: dict, S: dict) -> Table:
 
 
 # ─── NGS: one person block (info + HLA + optional match + remarks) ────────────
-def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict) -> list:
+def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, patient_name: str = "") -> list:
     elems = []
-    elems.append(_ngs_info_table(person, S, is_donor=is_donor))
+    elems.append(_ngs_info_table(person, S, is_donor=is_donor, patient_name=patient_name))
     elems.append(Spacer(1, 2 * mm))
     elems.append(_hla_table(person, S))
 
@@ -731,7 +776,7 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict) -> Table:
     ]
     p_vals = [
         patient.get("name", ""), patient.get("relationship", "") or "NA",
-        patient.get("gender_age", ""), patient.get("diagnosis") or "NA",
+        _normalize_age(patient.get("gender_age", "")), patient.get("diagnosis") or "NA",
         patient.get("referred_by", ""), patient.get("hospital_clinic", ""),
         patient.get("pin", ""), patient.get("sample_number", ""),
         patient.get("specimen") or "Blood - EDTA",
@@ -748,7 +793,7 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict) -> Table:
     ]
     d_vals = [
         donor.get("name", ""), donor.get("relationship", "") or "NA",
-        donor.get("gender_age", ""),
+        _normalize_age(donor.get("gender_age", "")),
         donor.get("referred_by", ""), donor.get("hospital_clinic", ""),
         donor.get("pin", ""), donor.get("sample_number", ""),
         donor.get("specimen") or "Blood - EDTA",
@@ -762,17 +807,15 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict) -> Table:
         # Patient side
         p_lbl = p_labels[i] if i < len(p_labels) else ""
         p_val = p_vals[i] if i < len(p_vals) else ""
-        # Donor side - for diagnosis row (index 3), show empty
-        if i < len(d_labels):
-            if p_lbl == "Diagnosis":
-                # Diagnosis row - patient has it, donor doesn't
-                d_val = ""
-            else:
-                # Find matching donor value (offset by 1 after diagnosis)
-                d_idx = i if i < 3 else i - 1  # Before diagnosis row: same index, after: offset by -1
-                d_val = d_vals[d_idx] if d_idx < len(d_vals) else ""
-        else:
+        # Donor side: diagnosis row (index 3) belongs only to patient;
+        # all other rows are offset by -1 after that row.
+        # d_idx is computed unconditionally so the last patient row (i=11,
+        # Report date) still resolves to the correct donor row (d_idx=10).
+        if p_lbl == "Diagnosis":
             d_val = ""
+        else:
+            d_idx = i if i < 3 else i - 1  # Before diagnosis: same index; after: -1 offset
+            d_val = d_vals[d_idx] if d_idx < len(d_vals) else ""
 
         data.append([RL(p_lbl), RVC(p_lbl, p_val), Paragraph("", S["rpl_lbl"]),
                      RVC(p_lbl, d_val), Paragraph("", S["rpl_lbl"])])
@@ -856,9 +899,9 @@ def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict,
 
     ref_data = [
         [
-            Paragraph("<b>Names/Code</b>",                                    S["lbl"]),
-            Paragraph("<b>HLA matching between couples</b>",                  S["lbl"]),
-            Paragraph("<b>HLA sharing for Recurrent miscarriage/RIF</b>",     S["lbl"]),
+            Paragraph("<b>Names/Code</b>",                                    S["lbl_center"]),
+            Paragraph("<b>HLA matching between couples</b>",                  S["lbl_center"]),
+            Paragraph("<b>HLA sharing for Recurrent miscarriage/RIF</b>",     S["lbl_center"]),
         ],
         [
             Paragraph(_clean_display(f"{_capitalize_initials(p_name)} / {_capitalize_initials(d_name)}"), S["rpl_val"]),
@@ -885,8 +928,8 @@ def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict,
     hla_c_d = rpl_ref.get("hla_c_donor",   "")
     if hla_c_p or hla_c_d:
         c_data = [
-            [Paragraph("<b>Maternal HLA-C Type</b>", S["rpl_lbl"]),
-             Paragraph("<b>Paternal HLA-C Type</b>",  S["rpl_lbl"])],
+            [Paragraph("<b>Maternal HLA-C Type</b>", S["rpl_lbl_center"]),
+             Paragraph("<b>Paternal HLA-C Type</b>",  S["rpl_lbl_center"])],
             [Paragraph(_clean_display(hla_c_p), S["rpl_val"]),
              Paragraph(_clean_display(hla_c_d), S["rpl_val"])],
         ]
@@ -900,7 +943,7 @@ def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict,
             ("TOPPADDING",    (0, 0), (-1, -1), 4),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ]))
-        ref_group.append(Spacer(1, 2 * mm))
+        ref_group.append(Spacer(1, 4 * mm))
         ref_group.append(c_t)
 
     # Single KeepTogether: heading + ref table + optional HLA-C table all move as one unit
@@ -929,9 +972,9 @@ def _methodology_block(case: dict, S: dict) -> list:
     # Fix 2: "Remarks:" label removed — do not render an empty label when no
     # remarks value exists.  Patient/donor remarks are rendered conditionally
     # inside each person block (_ngs_person_block / _emit_remarks).
-    # Coverage: first line inline "Coverage : Class I..." then remaining lines indented
-    elems.append(Paragraph(f"<b>Coverage</b>{COVERAGE_LINES[0]}", S["body"]))
-    for line in COVERAGE_LINES[1:]:
+    # Coverage: label on its own line, then all Class lines at the same indent
+    elems.append(Paragraph("<b>Coverage</b>", S["body"]))
+    for line in COVERAGE_LINES:
         elems.append(Paragraph(line, S["coverage"]))
 
     elems.append(Spacer(1, 1 * mm))
@@ -1060,8 +1103,10 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
     elems.append(KeepTogether(patient_block))
 
     # Each donor block - keep together individually (Fix 1)
+    _p_name = patient.get("name", "")
     for d in donors:
-        donor_block = _ngs_person_block(d, is_donor=True, match_str=d.get("match", ""), S=S)
+        donor_block = _ngs_person_block(d, is_donor=True, match_str=d.get("match", ""), S=S,
+                                        patient_name=_p_name)
         elems.append(KeepTogether(donor_block))
 
     # Fix 1: Keep methodology and signatures as separate KeepTogether blocks so a

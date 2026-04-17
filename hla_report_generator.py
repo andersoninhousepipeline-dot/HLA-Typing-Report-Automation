@@ -820,9 +820,8 @@ class HLAReportGeneratorApp(QMainWindow):
             ("report_date",      "Report Date",     ""),
             ("match",            "Match Score",     ""),
         ]
-        # Non-RPL templates include donor remarks
-        if not _is_rpl_manual:
-            DONOR_FIELDS.append(("remarks", "Remarks", ""))
+        # Always include donor remarks (shown in report for all templates)
+        DONOR_FIELDS.append(("remarks", "Remarks", ""))
         d_fields = {}
         for key, lbl, default in DONOR_FIELDS:
             val = fields.get(key, default)
@@ -1505,14 +1504,11 @@ class HLAReportGeneratorApp(QMainWindow):
             ("pin",             "PIN"),
             ("sample_number",   "Sample Number"),
             ("match",           "Match Score"),
-            # "remarks" excluded for RPL donors — only the patient has remarks in RPL
+            ("remarks",         "Remarks"),
             ("collection_date", "Collection Date"),
             ("receipt_date",    "Receipt Date"),
             ("report_date",     "Report Date"),
         ]
-        # Non-RPL templates still show donor remarks
-        if not _is_rpl:
-            DONOR_FIELDS_DEF.insert(6, ("remarks", "Remarks"))
 
         for di, d in enumerate(case.get("donors", [])):
             d_container = QWidget()
