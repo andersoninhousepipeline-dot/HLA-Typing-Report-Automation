@@ -426,6 +426,8 @@ class HLAReportGeneratorApp(QMainWindow):
     def _create_manual_tab(self):
         tab = QWidget()
         main_layout = QHBoxLayout()
+        main_layout.setContentsMargins(2, 2, 2, 2)
+        main_layout.setSpacing(2)
         tab.setLayout(main_layout)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -435,6 +437,8 @@ class HLAReportGeneratorApp(QMainWindow):
         left_widget = QWidget()
         left_widget.setMaximumWidth(500)
         left_layout = QVBoxLayout()
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(2)
         left_widget.setLayout(left_layout)
 
         scroll = QScrollArea()
@@ -562,7 +566,10 @@ class HLAReportGeneratorApp(QMainWindow):
 
         # Fast Report Generation group — mirrors PGTA's gen_group
         gen_group  = QGroupBox("Fast Report Generation")
-        gen_layout = QVBoxLayout(); gen_group.setLayout(gen_layout)
+        gen_layout = QVBoxLayout()
+        gen_layout.setContentsMargins(4, 4, 4, 4)
+        gen_layout.setSpacing(2)
+        gen_group.setLayout(gen_layout)
 
         out_row = QHBoxLayout()
         self.manual_output_label = QLabel("No directory selected")
@@ -592,11 +599,10 @@ class HLAReportGeneratorApp(QMainWindow):
         right_widget = QGroupBox("Report Preview")
         right_widget.setMinimumWidth(600)
         right_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        right_layout = QVBoxLayout(); right_widget.setLayout(right_layout)
-
-        preview_label = QLabel("Report Preview (PDF)")
-        preview_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        right_layout.addWidget(preview_label)
+        right_layout = QVBoxLayout()
+        right_layout.setContentsMargins(2, 4, 2, 2)
+        right_layout.setSpacing(2)
+        right_widget.setLayout(right_layout)
 
         if QTPDF_OK:
             self._manual_pdf_doc  = QPdfDocument(self)
