@@ -405,7 +405,7 @@ _DEGREE_MAP = {
     "dnb": "DNB", "phd": "PhD", "dgo": "DGO", "frcs": "FRCS", "mrcp": "MRCP",
 }
 # Fix 2: expanded to include medical/lab abbreviations that must always be uppercased.
-_ABBREV_SET = {"edta", "dna", "rna", "pcr", "bmt", "hla", "rpl", "rif", "nips", "poc", "ngs", "wbc", "rbc"}
+_ABBREV_SET = {"edta", "dna", "rna", "pcr", "bmt", "hla", "rpl", "rif", "nips", "poc", "ngs", "wbc", "rbc", "idd"}
 _PREFIX_MAP_TC = {"mr": "Mr", "mrs": "Mrs", "ms": "Ms", "master": "Master", "dr": "Dr"}
 
 
@@ -522,6 +522,7 @@ def _title_case(text: str) -> str:
     result = "".join(_process_token(p) if not re.match(r"^(\s+|,)$", p) else p for p in parts)
     # Normalise standalone prefix before a name: "Mr Arun" / "Dr. Priya" → "Mr.Arun" / "Dr.Priya"
     result = re.sub(r'(?<!\w)(Mr|Mrs|Ms|Miss|Master|Dr|Prof)\.?\s+(?=[A-Za-z])', r'\1.', result)
+    result = re.sub(r'(?<!\w)(Mr|Mrs|Ms|Miss|Master|Dr|Prof)\.?\s+(?=\d)', r'\1. ', result)
     return result
 
 
