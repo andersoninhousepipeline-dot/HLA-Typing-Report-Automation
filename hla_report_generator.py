@@ -435,7 +435,6 @@ class HLAReportGeneratorApp(QMainWindow):
 
         # ── Left: form ─────────────────────────────────────────────────────
         left_widget = QWidget()
-        left_widget.setMaximumWidth(500)
         left_layout = QVBoxLayout()
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(2)
@@ -449,7 +448,7 @@ class HLAReportGeneratorApp(QMainWindow):
         scroll_layout.setContentsMargins(2, 2, 2, 2)
         scroll_widget.setLayout(scroll_layout)
         scroll.setWidget(scroll_widget)
-        left_layout.addWidget(scroll)
+        left_layout.addWidget(scroll, 1)
 
         # Patient Information
         pat_group = QGroupBox("Patient Information")
@@ -630,13 +629,10 @@ class HLAReportGeneratorApp(QMainWindow):
 
         self._manual_preview_worker = None
 
-        # Manual Entry layout: Left (form) + Right (Fixed 620px Preview)
-        right_widget.setFixedWidth(620)
-
         splitter.addWidget(left_widget)
         splitter.addWidget(right_widget)
         splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 0)
+        splitter.setStretchFactor(1, 1)
         return tab
 
     def browse_manual_output(self):
