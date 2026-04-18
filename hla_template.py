@@ -353,19 +353,33 @@ def _normalize_age(gender_age: str) -> str:
     if not gender_age:
         return gender_age
     _DAY = r'(?:\s*\d+\s*[Dd](?:ays?)?)?'
-    # Group 1 = years, Group 2 = months alongside years, Group 3 = standalone months
+    # Group 1=years, Group 2=months-with-years, Group 3=standalone-months, Group 4=plain-number
     _PAT = (r'(\d+)\s*[Yy](?:ears?)?(?:\s*(\d+)\s*[Mm](?:onths?)?)?' + _DAY +
-            r'|(\d+)\s*[Mm](?:onths?)?' + _DAY)
+            r'|(\d+)\s*[Mm](?:onths?)?' + _DAY +
+            r'|(?<![/\w])(\d+)(?![/\w])')   # plain integer not adjacent to / or word chars
     def _repl(m):
-        y, mo_with_y, mo_only = m.group(1), m.group(2), m.group(3)
+        y, mo_with_y, mo_only, plain = m.group(1), m.group(2), m.group(3), m.group(4)
         if y:
             years = int(y) + (int(mo_with_y) // 12 if mo_with_y else 0)
             return f"{years} Years"
-        months = int(mo_only)
-        if months >= 12:
-            return f"{months // 12} Years"
-        return f"{months} Months"
+        if mo_only:
+            months = int(mo_only)
+            return f"{months // 12} Years" if months >= 12 else f"{months} Months"
+        # Plain standalone integer — treat as years
+        return f"{int(plain)} Years"
     return re.sub(_PAT, _repl, gender_age)
+
+
+def _append_match_pct(match_str: str) -> str:
+    """Append (X%) to 'N of M' match strings when no % is already present."""
+    if not match_str or "%" in match_str:
+        return match_str
+    m = re.search(r'(\d+)\s+of\s+(\d+)', match_str, re.I)
+    if m:
+        x, y = int(m.group(1)), int(m.group(2))
+        pct = round(x / y * 100) if y else 0
+        return f"{match_str} ({pct}%)"
+    return match_str
 
 
 def _capitalize_initials(name: str) -> str:
@@ -619,9 +633,8 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
         [L("Hospital MR No"), C(), R(person.get("hospital_mr_no", ""))],
     ]
 
-    # Add diagnosis only for patients, not donors
-    if not is_donor:
-        left_rows.append([L("Diagnosis"), C(), V(person.get("diagnosis") or "NA")])
+    # Diagnosis for both patients and donors
+    left_rows.append([L("Diagnosis"), C(), V(person.get("diagnosis") or "NA")])
 
     left_rows.extend([
         [L("Referred By"), C(), V(person.get("referred_by", ""))],
@@ -723,7 +736,7 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
         elems.append(Spacer(1, 1 * mm))
         elems.append(Paragraph(f"<b>Remarks:</b> {_remarks_display}", S["body_small"]))
 
-    _match_display = _clean_display(match_str) if match_str else ""
+    _match_display = _append_match_pct(_clean_display(match_str)) if match_str else ""
     if _match_display and _match_display != "\u2014":
         elems.append(Spacer(1, 1 * mm))
         elems.append(Paragraph(
@@ -1016,7 +1029,7 @@ def _signature_block(signatories: list, S: dict) -> list:
             _seal_io  = io.BytesIO(seal_data)
             _seal_tmp = Image(_seal_io)
             _sw, _sh  = _seal_tmp.imageWidth, _seal_tmp.imageHeight
-            _max      = 28 * mm
+            _max      = 40 * mm   # ~43 % larger than previous 28 mm
             # Preserve aspect ratio — scale so the longer dimension equals _max
             if _sw >= _sh:
                 seal_img = Image(io.BytesIO(seal_data), width=_max, height=_max * _sh / _sw)

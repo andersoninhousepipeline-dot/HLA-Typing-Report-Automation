@@ -433,7 +433,7 @@ class HLAReportGeneratorApp(QMainWindow):
 
         # ── Left: form ─────────────────────────────────────────────────────
         left_widget = QWidget()
-        left_widget.setMaximumWidth(540)
+        left_widget.setMaximumWidth(500)
         left_layout = QVBoxLayout()
         left_widget.setLayout(left_layout)
 
@@ -441,6 +441,8 @@ class HLAReportGeneratorApp(QMainWindow):
         scroll.setWidgetResizable(True)
         scroll_widget = QWidget()
         scroll_layout = QVBoxLayout()
+        scroll_layout.setSpacing(2)
+        scroll_layout.setContentsMargins(2, 2, 2, 2)
         scroll_widget.setLayout(scroll_layout)
         scroll.setWidget(scroll_widget)
         left_layout.addWidget(scroll)
@@ -448,7 +450,7 @@ class HLAReportGeneratorApp(QMainWindow):
         # Patient Information
         pat_group = QGroupBox("Patient Information")
         pat_form  = QFormLayout(); pat_group.setLayout(pat_form)
-        pat_form.setSpacing(1); pat_form.setContentsMargins(4, 1, 4, 1)
+        pat_form.setSpacing(1); pat_form.setContentsMargins(4, 2, 4, 2)
         scroll_layout.addWidget(pat_group)
 
         self.f = {}
@@ -480,12 +482,17 @@ class HLAReportGeneratorApp(QMainWindow):
         self._manual_nabl_chk.setChecked(self.qsettings.value("nabl_stamp", True, type=bool))
         pat_form.addRow(self._manual_nabl_chk)
 
+        self._manual_seal_chk = QCheckBox("Signature Seal")
+        self._manual_seal_chk.setChecked(self.qsettings.value("signature_stamp", False, type=bool))
+        self._manual_seal_chk.stateChanged.connect(self._refresh_manual_preview)
+        pat_form.addRow(self._manual_seal_chk)
+
         # Report Options moved to global header
 
         # Patient HLA Results (FormLayout, one locus per row, two alleles side-by-side)
         hla_group = QGroupBox("HLA Results — Patient")
         hla_form  = QFormLayout(); hla_group.setLayout(hla_form)
-        hla_form.setSpacing(1); hla_form.setContentsMargins(4, 1, 4, 1)
+        hla_form.setSpacing(1); hla_form.setContentsMargins(4, 2, 4, 2)
         scroll_layout.addWidget(hla_group)
         self.hla_pat = {}
         for locus in HLA_LOCI:
@@ -498,7 +505,7 @@ class HLAReportGeneratorApp(QMainWindow):
         self._loading_draft  = False
         donors_outer = QGroupBox("Donors (Optional)")
         donors_outer_layout = QVBoxLayout()
-        donors_outer_layout.setSpacing(2)
+        donors_outer_layout.setSpacing(1)
         donors_outer_layout.setContentsMargins(4, 2, 4, 2)
         donors_outer.setLayout(donors_outer_layout)
 
@@ -518,9 +525,9 @@ class HLAReportGeneratorApp(QMainWindow):
         self._manual_sig_name_overrides = {}   # {slot_idx: sig_name_string}
         self._manual_sig_combos         = {}   # {slot_idx: QComboBox}
 
-        sig_group = QGroupBox("Signature Override (select from Settings signatories)")
+        sig_group = QGroupBox("Signature Override")
         sig_form  = QFormLayout()
-        sig_form.setSpacing(2)
+        sig_form.setSpacing(1)
         sig_form.setContentsMargins(4, 2, 4, 2)
         sig_group.setLayout(sig_form)
 
@@ -532,7 +539,7 @@ class HLAReportGeneratorApp(QMainWindow):
             cmb.currentTextChanged.connect(
                 lambda text, slot=i: self._on_manual_sig_changed(slot, text))
             self._manual_sig_combos[i] = cmb
-            sig_form.addRow(f"Signatory {i+1}:", cmb)
+            sig_form.addRow(f"Sig {i+1}:", cmb)
 
         scroll_layout.addWidget(sig_group)
 
@@ -638,7 +645,7 @@ class HLAReportGeneratorApp(QMainWindow):
         with_logo = self.logo_combo.currentText() == "With Logo"
         rtype     = TEMPLATE_TO_RTYPE.get(self.template_combo.currentText(), "single_hla")
         nabl      = self._manual_nabl_chk.isChecked()
-        sig_stamp = self.qsettings.value("signature_stamp", False, type=bool)
+        sig_stamp = self._manual_seal_chk.isChecked()
 
         patient = {k: w.text().strip() for k, w in self.f.items()}
         # Template reads patient.get("name"); form stores it as "patient_name"
@@ -661,6 +668,8 @@ class HLAReportGeneratorApp(QMainWindow):
                 "name":           d.get("donor_name", ""),
                 "relationship":   d.get("relationship", ""),
                 "gender_age":     d.get("donor_gender_age", ""),
+                "diagnosis":      d.get("donor_diagnosis", "") or patient.get("diagnosis", ""),
+                "referred_by":    d.get("donor_referred_by", "") or patient.get("referred_by", ""),
                 "pin":            d.get("donor_pin", ""),
                 "sample_number":  d.get("donor_sample_no", ""),
                 "collection_date":d.get("donor_collect", ""),
@@ -669,7 +678,6 @@ class HLAReportGeneratorApp(QMainWindow):
                 "match":          d.get("match", ""),
                 "hla": donor_hla, "hla_c_type": "", "remarks": d.get("remarks", ""),
                 "hospital_clinic": patient.get("hospital_clinic", ""),
-                "diagnosis":       patient.get("diagnosis", ""),
                 "specimen":        patient.get("specimen", "Blood - EDTA"),
             })
 
@@ -804,24 +812,25 @@ class HLAReportGeneratorApp(QMainWindow):
         group = QGroupBox(f"Donor {di + 1}")
         form  = QFormLayout()
         form.setSpacing(1)
-        form.setContentsMargins(4, 1, 4, 1)
+        form.setContentsMargins(4, 2, 4, 2)
         group.setLayout(form)
 
         _is_rpl_manual = TEMPLATE_TO_RTYPE.get(
             self.template_combo.currentText(), "single_hla") == "rpl_couple"
         DONOR_FIELDS = [
-            ("donor_name",       "Donor Name",      ""),
-            ("relationship",     "Relationship",    ""),
-            ("donor_gender_age", "Gender / Age",    ""),
-            ("donor_pin",        "Donor PIN",       ""),
-            ("donor_sample_no",  "Sample Number",   ""),
-            ("donor_collect",    "Collection Date", ""),
-            ("donor_receipt",    "Receipt Date",    ""),
-            ("report_date",      "Report Date",     ""),
-            ("match",            "Match Score",     ""),
+            ("donor_name",        "Donor Name",      ""),
+            ("relationship",      "Relationship",    ""),
+            ("donor_gender_age",  "Gender / Age",    ""),
+            ("donor_diagnosis",   "Diagnosis",       ""),
+            ("donor_referred_by", "Referred By",     ""),
+            ("donor_pin",         "Donor PIN",       ""),
+            ("donor_sample_no",   "Sample Number",   ""),
+            ("donor_collect",     "Collection Date", ""),
+            ("donor_receipt",     "Receipt Date",    ""),
+            ("report_date",       "Report Date",     ""),
+            ("match",             "Match Score",     ""),
+            ("remarks",           "Remarks",         ""),
         ]
-        # Always include donor remarks (shown in report for all templates)
-        DONOR_FIELDS.append(("remarks", "Remarks", ""))
         d_fields = {}
         for key, lbl, default in DONOR_FIELDS:
             val = fields.get(key, default)
@@ -1501,6 +1510,8 @@ class HLAReportGeneratorApp(QMainWindow):
             ("name",            "Name"),
             ("relationship",    "Relationship"),
             ("gender_age",      "Gender / Age"),
+            ("diagnosis",       "Diagnosis"),
+            ("referred_by",     "Referred By"),
             ("pin",             "PIN"),
             ("sample_number",   "Sample Number"),
             ("match",           "Match Score"),
