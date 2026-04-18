@@ -500,6 +500,14 @@ class HLAReportGeneratorApp(QMainWindow):
         rs_group = QGroupBox("Report Settings")
         rs_form  = QFormLayout(); rs_group.setLayout(rs_form)
         rs_form.setSpacing(1); rs_form.setContentsMargins(4, 2, 4, 2)
+
+        self._manual_rtype_combo = ClickOnlyComboBox()
+        self._manual_rtype_combo.addItems(TEMPLATE_NAMES)
+        self._manual_rtype_combo.setFixedHeight(24)
+        self._manual_rtype_combo.setCurrentIndex(self.template_combo.currentIndex())
+        self._manual_rtype_combo.currentIndexChanged.connect(self._on_manual_rtype_changed)
+        rs_form.addRow("Report Type:", self._manual_rtype_combo)
+
         self._manual_report_settings = {}
         RS_FIELDS = [
             ("typing_status", "Typing Status",     "Complete"),
@@ -509,7 +517,7 @@ class HLAReportGeneratorApp(QMainWindow):
         ]
         for key, lbl, default in RS_FIELDS:
             w = QLineEdit(default)
-            w.setMaximumHeight(24)
+            w.setFixedHeight(24)
             self._manual_report_settings[key] = w
             rs_form.addRow(lbl + ":", w)
             w.textChanged.connect(self._on_manual_field_debounced)
@@ -601,7 +609,7 @@ class HLAReportGeneratorApp(QMainWindow):
             cmb.currentTextChanged.connect(
                 lambda text, slot=i: self._on_manual_sig_changed(slot, text))
             self._manual_sig_combos[i] = cmb
-            sig_form.addRow(f"Sig {i+1}:", cmb)
+            sig_form.addRow(f"Signatory {i+1}:", cmb)
 
         scroll_layout.addWidget(sig_group)
 
@@ -654,7 +662,7 @@ class HLAReportGeneratorApp(QMainWindow):
         gen_layout.addWidget(self.manual_status_label)
         left_layout.addWidget(gen_group)
 
-        # ── Right: PDF preview (exact PGTA layout) ───────────────────────────
+        # ── Right: PDF preview ───────────────────────────────────────────────
         right_widget = QGroupBox("Report Preview")
         right_widget.setMinimumWidth(600)
         right_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -662,6 +670,13 @@ class HLAReportGeneratorApp(QMainWindow):
         right_layout.setContentsMargins(2, 4, 2, 2)
         right_layout.setSpacing(2)
         right_widget.setLayout(right_layout)
+
+        prev_top = QHBoxLayout()
+        self._manual_preview_status = QLabel("Fill in the form to preview")
+        self._manual_preview_status.setStyleSheet("color:gray; font-style:italic;")
+        self._manual_preview_status.setWordWrap(True)
+        prev_top.addWidget(self._manual_preview_status, 1)
+        right_layout.addLayout(prev_top)
 
         if QTPDF_OK:
             self._manual_pdf_doc  = QPdfDocument(self)
@@ -693,7 +708,6 @@ class HLAReportGeneratorApp(QMainWindow):
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
 
-        self.template_combo.currentIndexChanged.connect(self._update_manual_rpl_visibility)
         self._update_manual_rpl_visibility()
         return tab
 
@@ -708,12 +722,14 @@ class HLAReportGeneratorApp(QMainWindow):
     def _collect_manual_case(self) -> dict:
         """Build a case dict from the current Manual tab form state + current settings."""
         with_logo = self.logo_combo.currentText() == "With Logo"
-        rtype     = TEMPLATE_TO_RTYPE.get(self.template_combo.currentText(), "single_hla")
+        rtype     = TEMPLATE_TO_RTYPE.get(
+            self._manual_rtype_combo.currentText()
+            if hasattr(self, "_manual_rtype_combo") else self.template_combo.currentText(),
+            "single_hla")
         nabl      = self._manual_nabl_chk.isChecked()
         sig_stamp = self._manual_seal_chk.isChecked()
 
         patient = {k: w.text().strip() for k, w in self.f.items()}
-        # Template reads patient.get("name"); form stores it as "patient_name"
         patient["name"] = patient.get("patient_name", "")
         patient["hla"] = {
             locus: [a[0].text().strip(), a[1].text().strip()]
@@ -730,17 +746,17 @@ class HLAReportGeneratorApp(QMainWindow):
                 if a[0].text().strip() or a[1].text().strip()
             }
             donors.append({
-                "name":           d.get("donor_name", ""),
-                "relationship":   d.get("relationship", ""),
-                "gender_age":     d.get("donor_gender_age", ""),
-                "diagnosis":      d.get("donor_diagnosis", "") or patient.get("diagnosis", ""),
-                "referred_by":    d.get("donor_referred_by", "") or patient.get("referred_by", ""),
-                "pin":            d.get("donor_pin", ""),
-                "sample_number":  d.get("donor_sample_no", ""),
-                "collection_date":d.get("donor_collect", ""),
-                "receipt_date":   d.get("donor_receipt", ""),
-                "report_date":    d.get("report_date", "") or patient.get("report_date", ""),
-                "match":          d.get("match", ""),
+                "name":            d.get("name", ""),
+                "relationship":    d.get("relationship", ""),
+                "gender_age":      d.get("gender_age", ""),
+                "diagnosis":       d.get("diagnosis", "") or patient.get("diagnosis", ""),
+                "referred_by":     d.get("referred_by", "") or patient.get("referred_by", ""),
+                "pin":             d.get("pin", ""),
+                "sample_number":   d.get("sample_number", ""),
+                "collection_date": d.get("collection_date", ""),
+                "receipt_date":    d.get("receipt_date", ""),
+                "report_date":     d.get("report_date", "") or patient.get("report_date", ""),
+                "match":           d.get("match", ""),
                 "hla": donor_hla, "hla_c_type": "", "remarks": d.get("remarks", ""),
                 "hospital_clinic": patient.get("hospital_clinic", ""),
                 "specimen":        patient.get("specimen", "Blood - EDTA"),
@@ -748,13 +764,36 @@ class HLAReportGeneratorApp(QMainWindow):
 
         case = self._build_case(rtype, nabl, with_logo, sig_stamp, patient, donors)
 
-        # Report settings
         for key, w in self._manual_report_settings.items():
             case[key] = w.text().strip()
 
-        # RPL reference
+        # RPL reference: use form values, then auto-recalculate from HLA if donor present
         if rtype == "rpl_couple":
-            case["rpl_reference"] = {k: w.text().strip() for k, w in self._manual_rpl_fields.items()}
+            ref = {k: w.text().strip() for k, w in self._manual_rpl_fields.items()}
+            if donors:
+                pc = patient["hla"].get("C", [None, None])
+                ct1 = c_supertype(pc[0]) if pc[0] else None
+                ct2 = c_supertype(pc[1]) if pc[1] else None
+                new_pc = ",".join(filter(None, [ct1, ct2]))
+                dc = donors[0]["hla"].get("C", [None, None])
+                dt1 = c_supertype(dc[0]) if dc[0] else None
+                dt2 = c_supertype(dc[1]) if dc[1] else None
+                new_dc = ",".join(filter(None, [dt1, dt2]))
+                calc = compute_rpl_reference(patient, donors[0])
+                calc["hla_c_patient"] = new_pc
+                calc["hla_c_donor"]   = new_dc
+                for k, v in calc.items():
+                    if k in ref and not ref[k]:   # only fill blank fields
+                        ref[k] = v
+                # Always push HLA-C supertypes back to UI
+                for ui_key, val in (("hla_c_patient", new_pc), ("hla_c_donor", new_dc)):
+                    w = self._manual_rpl_fields.get(ui_key)
+                    if w and w.text().strip() != val:
+                        w.blockSignals(True); w.setText(val); w.blockSignals(False)
+                        ref[ui_key] = val
+                patient["hla_c_type"]    = new_pc
+                donors[0]["hla_c_type"]  = new_dc
+            case["rpl_reference"] = ref
 
         self._apply_sig_name_overrides(case, self._manual_sig_name_overrides)
         return case
@@ -800,7 +839,8 @@ class HLAReportGeneratorApp(QMainWindow):
         self._manual_preview_worker.start()
 
     def _on_manual_preview_generated(self, pdf_path: str):
-        """Load generated preview — PGTA on_preview_generated pattern."""
+        if hasattr(self, "_manual_preview_status"):
+            self._manual_preview_status.setText("")
         if QTPDF_OK and self._manual_pdf_doc is not None and os.path.exists(pdf_path):
             try:
                 self._manual_pdf_doc.close()
@@ -821,24 +861,38 @@ class HLAReportGeneratorApp(QMainWindow):
     def _refresh_manual_preview(self):
         """Regenerate preview from current form state (picks up latest stamp/logo/template settings)."""
         if self._loading_draft:
-            return  # suppress during draft load to avoid terminating running threads
+            return
+        if hasattr(self, "_manual_preview_status"):
+            self._manual_preview_status.setText("Generating preview…")
         try:
             case = self._collect_manual_case()
-            # Fix 5: silently suppress preview for cases with Insufficient Data
             if _has_insufficient_data(case.get("patient", {})):
                 return
             self._start_manual_preview(case)
         except Exception:
-            # Form may be empty — fall back to reloading existing file
             if os.path.exists(TEMP_PREVIEW_PATH):
                 self._on_manual_preview_generated(TEMP_PREVIEW_PATH)
+            if hasattr(self, "_manual_preview_status"):
+                self._manual_preview_status.setText("Preview unavailable")
 
     def _on_manual_field_debounced(self):
-        self._manual_edit_timer.start(600)
+        self._manual_edit_timer.start(400)
+
+    def _on_manual_rtype_changed(self):
+        """Sync global template_combo when the per-case Report Type combo changes."""
+        if hasattr(self, "_manual_rtype_combo"):
+            name = self._manual_rtype_combo.currentText()
+            idx  = self.template_combo.findText(name)
+            if idx >= 0:
+                self.template_combo.blockSignals(True)
+                self.template_combo.setCurrentIndex(idx)
+                self.template_combo.blockSignals(False)
+        self._update_manual_rpl_visibility()
+        self._on_manual_field_debounced()
 
     def _update_manual_rpl_visibility(self):
-        if hasattr(self, "_manual_rpl_group"):
-            rtype = TEMPLATE_TO_RTYPE.get(self.template_combo.currentText(), "single_hla")
+        if hasattr(self, "_manual_rpl_group") and hasattr(self, "_manual_rtype_combo"):
+            rtype = TEMPLATE_TO_RTYPE.get(self._manual_rtype_combo.currentText(), "single_hla")
             self._manual_rpl_group.setVisible(rtype == "rpl_couple")
 
     def _auto_detect_manual_template(self):
@@ -862,11 +916,14 @@ class HLAReportGeneratorApp(QMainWindow):
             rtype = "transplant_donor"
 
         name = RTYPE_TO_TEMPLATE.get(rtype, TEMPLATE_NAMES[0])
-        idx  = self.template_combo.findText(name)
-        if idx >= 0:
-            self.template_combo.blockSignals(True)
-            self.template_combo.setCurrentIndex(idx)
-            self.template_combo.blockSignals(False)
+        for combo in (self.template_combo,
+                      getattr(self, "_manual_rtype_combo", None)):
+            if combo is None: continue
+            idx = combo.findText(name)
+            if idx >= 0:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(idx)
+                combo.blockSignals(False)
         self._update_manual_rpl_visibility()
 
     def _clear_manual_form(self):
@@ -885,10 +942,35 @@ class HLAReportGeneratorApp(QMainWindow):
     def _add_manual_donor(self, donor_data=None):
         """Create and insert a new donor panel into the manual tab."""
         di = len(self._manual_donors)
-        fields = donor_data.get("fields", {}) if isinstance(donor_data, dict) and "fields" in donor_data else (donor_data or {})
-        hla_data = donor_data.get("hla", {}) if isinstance(donor_data, dict) and "hla" in donor_data else {}
+        raw_fields = donor_data.get("fields", {}) if isinstance(donor_data, dict) and "fields" in donor_data else (donor_data or {})
+        hla_data   = donor_data.get("hla", {})    if isinstance(donor_data, dict) and "hla"    in donor_data else {}
 
-        # Container widget (group + remove button)
+        # Backward-compat: normalise old donor_* key names to bulk-style keys
+        _key_map = {
+            "donor_name": "name", "donor_gender_age": "gender_age",
+            "donor_diagnosis": "diagnosis", "donor_referred_by": "referred_by",
+            "donor_pin": "pin", "donor_sample_no": "sample_number",
+            "donor_collect": "collection_date", "donor_receipt": "receipt_date",
+        }
+        fields = {}
+        for k, v in raw_fields.items():
+            fields[_key_map.get(k, k)] = v
+
+        # Auto-switch: adding first donor to a single-HLA case → transplant_donor
+        if di == 0 and hasattr(self, "_manual_rtype_combo"):
+            cur_rtype = TEMPLATE_TO_RTYPE.get(self._manual_rtype_combo.currentText(), "single_hla")
+            if cur_rtype == "single_hla":
+                td_name = RTYPE_TO_TEMPLATE.get("transplant_donor", TEMPLATE_NAMES[0])
+                td_idx  = self._manual_rtype_combo.findText(td_name)
+                if td_idx >= 0:
+                    self._manual_rtype_combo.blockSignals(True)
+                    self._manual_rtype_combo.setCurrentIndex(td_idx)
+                    self._manual_rtype_combo.blockSignals(False)
+                self.template_combo.blockSignals(True)
+                gt_idx = self.template_combo.findText(td_name)
+                if gt_idx >= 0: self.template_combo.setCurrentIndex(gt_idx)
+                self.template_combo.blockSignals(False)
+
         container = QWidget()
         c_lay = QVBoxLayout(container)
         c_lay.setContentsMargins(0, 0, 0, 2)
@@ -900,30 +982,29 @@ class HLAReportGeneratorApp(QMainWindow):
         form.setContentsMargins(4, 2, 4, 2)
         group.setLayout(form)
 
-        _is_rpl_manual = TEMPLATE_TO_RTYPE.get(
-            self.template_combo.currentText(), "single_hla") == "rpl_couple"
         DONOR_FIELDS = [
-            ("donor_name",        "Donor Name",      ""),
-            ("relationship",      "Relationship",    ""),
-            ("donor_gender_age",  "Gender / Age",    ""),
-            ("donor_diagnosis",   "Diagnosis",       ""),
-            ("donor_referred_by", "Referred By",     ""),
-            ("donor_pin",         "Donor PIN",       ""),
-            ("donor_sample_no",   "Sample Number",   ""),
-            ("donor_collect",     "Collection Date", ""),
-            ("donor_receipt",     "Receipt Date",    ""),
-            ("report_date",       "Report Date",     ""),
-            ("match",             "Match Score",     ""),
-            ("remarks",           "Remarks",         ""),
+            ("name",            "Donor Name",      ""),
+            ("relationship",    "Relationship",    ""),
+            ("gender_age",      "Gender / Age",    ""),
+            ("diagnosis",       "Diagnosis",       ""),
+            ("referred_by",     "Referred By",     ""),
+            ("pin",             "Donor PIN",       ""),
+            ("sample_number",   "Sample Number",   ""),
+            ("collection_date", "Collection Date", ""),
+            ("receipt_date",    "Receipt Date",    ""),
+            ("report_date",     "Report Date",     ""),
+            ("match",           "Match Score",     ""),
+            ("remarks",         "Remarks",         ""),
         ]
         d_fields = {}
         for key, lbl, default in DONOR_FIELDS:
             val = fields.get(key, default)
             w = QLineEdit(val)
-            w.setMaximumHeight(24)
+            w.setFixedHeight(24)
             if "date" in key.lower(): w.setPlaceholderText("DD-MM-YYYY")
             d_fields[key] = w
             form.addRow(lbl + ":", w)
+            w.textChanged.connect(self._on_manual_field_debounced)
             if key == "relationship":
                 w.textChanged.connect(self._auto_detect_manual_template)
 
@@ -934,7 +1015,9 @@ class HLAReportGeneratorApp(QMainWindow):
             a1_val  = _allele_str(alleles[0] if len(alleles) > 0 else None)
             a2_val  = _allele_str(alleles[1] if len(alleles) > 1 else None)
             row_w, a1, a2 = _make_allele_row(a1_val, a2_val)
-            form.addRow(f"{locus}:", row_w)
+            a1.textChanged.connect(self._on_manual_field_debounced)
+            a2.textChanged.connect(self._on_manual_field_debounced)
+            form.addRow(f"  {locus}:", row_w)
             d_hla[locus] = [a1, a2]
 
         remove_btn = QPushButton(f"Remove Donor {di + 1}")
@@ -950,7 +1033,6 @@ class HLAReportGeneratorApp(QMainWindow):
 
         self._donors_list_layout.addWidget(container)
         self._auto_detect_manual_template()
-        # Fix 6: propagate donor addition immediately to preview
         self._refresh_manual_preview()
 
     def _remove_manual_donor(self, entry):
@@ -1008,9 +1090,13 @@ class HLAReportGeneratorApp(QMainWindow):
                 "hla":    {locus: [a[0].text().strip(), a[1].text().strip()]
                            for locus, a in entry["hla"].items()},
             })
+        rtype = TEMPLATE_TO_RTYPE.get(
+            self._manual_rtype_combo.currentText()
+            if hasattr(self, "_manual_rtype_combo") else self.template_combo.currentText(),
+            "single_hla")
         data = {
             "patient_fields": {k: w.text().strip() for k, w in self.f.items()},
-            "report_type": TEMPLATE_TO_RTYPE.get(self.template_combo.currentText(), "single_hla"),
+            "report_type": rtype,
             "with_logo":   self.logo_combo.currentText(),
             "donors":      saved_donors,
             "patient_hla": {locus: [a[0].text().strip(), a[1].text().strip()]
@@ -1049,16 +1135,18 @@ class HLAReportGeneratorApp(QMainWindow):
                 for d in data.get("donors", []):
                     manual_donors.append({
                         "fields": {
-                            "donor_name":       d.get("name", ""),
-                            "relationship":     d.get("relationship", ""),
-                            "donor_gender_age": d.get("gender_age", ""),
-                            "donor_pin":        d.get("pin", ""),
-                            "donor_sample_no":  d.get("sample_number", ""),
-                            "donor_collect":    d.get("collection_date", ""),
-                            "donor_receipt":    d.get("receipt_date", ""),
-                            "report_date":      d.get("report_date", ""),
-                            "match":            d.get("match", ""),
-                            "remarks":          d.get("remarks", ""),
+                            "name":            d.get("name", ""),
+                            "relationship":    d.get("relationship", ""),
+                            "gender_age":      d.get("gender_age", ""),
+                            "diagnosis":       d.get("diagnosis", ""),
+                            "referred_by":     d.get("referred_by", ""),
+                            "pin":             d.get("pin", ""),
+                            "sample_number":   d.get("sample_number", ""),
+                            "collection_date": d.get("collection_date", ""),
+                            "receipt_date":    d.get("receipt_date", ""),
+                            "report_date":     d.get("report_date", ""),
+                            "match":           d.get("match", ""),
+                            "remarks":         d.get("remarks", ""),
                         },
                         "hla": d.get("hla", {}),
                     })
@@ -1081,8 +1169,14 @@ class HLAReportGeneratorApp(QMainWindow):
             for k, v in data.get("patient_fields", {}).items():
                 if k in self.f: self.f[k].setText(v)
             _tmpl_name = RTYPE_TO_TEMPLATE.get(data.get("report_type", "single_hla"), TEMPLATE_NAMES[0])
-            idx = self.template_combo.findText(_tmpl_name)
-            if idx >= 0: self.template_combo.setCurrentIndex(idx)
+            for combo in (self.template_combo,
+                          getattr(self, "_manual_rtype_combo", None)):
+                if combo is None: continue
+                idx = combo.findText(_tmpl_name)
+                if idx >= 0:
+                    combo.blockSignals(True)
+                    combo.setCurrentIndex(idx)
+                    combo.blockSignals(False)
             _wl = data.get("with_logo", "With Logo")
             if isinstance(_wl, bool):
                 _wl = "With Logo" if _wl else "Without Logo"
@@ -1877,6 +1971,13 @@ class HLAReportGeneratorApp(QMainWindow):
         """Called when Template or Logo selection in the global header changes."""
         idx = self.tabs.currentIndex()
         if idx == 0: # Manual Tab
+            # Sync per-case combo with global selection
+            if hasattr(self, "_manual_rtype_combo"):
+                ti = self.template_combo.currentIndex()
+                self._manual_rtype_combo.blockSignals(True)
+                self._manual_rtype_combo.setCurrentIndex(ti)
+                self._manual_rtype_combo.blockSignals(False)
+            self._update_manual_rpl_visibility()
             self._refresh_manual_preview()
         elif idx == 1: # Bulk Tab
             b_idx = self._bulk_current_row
