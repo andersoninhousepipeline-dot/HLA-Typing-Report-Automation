@@ -357,16 +357,22 @@ def _normalize_age(gender_age: str) -> str:
     _PAT = (r'(\d+)\s*[Yy](?:ears?)?(?:\s*(\d+)\s*[Mm](?:onths?)?)?' + _DAY +
             r'|(\d+)\s*[Mm](?:onths?)?' + _DAY +
             r'|(?<![/\w])(\d+)(?![/\w])')   # plain integer not adjacent to / or word chars
+    def _yr(n):  return f"{n} {'Year' if n == 1 else 'Years'}"
+    def _mo(n):  return f"{n} {'Month' if n == 1 else 'Months'}"
     def _repl(m):
         y, mo_with_y, mo_only, plain = m.group(1), m.group(2), m.group(3), m.group(4)
         if y:
-            years = int(y) + (int(mo_with_y) // 12 if mo_with_y else 0)
-            return f"{years} Years"
+            base  = int(y)
+            extra = int(mo_with_y) if mo_with_y else 0
+            years = base + extra // 12
+            if years > 0:
+                return _yr(years)
+            # 0 years → fall back to remaining months
+            return _mo(extra) if extra else _yr(0)
         if mo_only:
             months = int(mo_only)
-            return f"{months // 12} Years" if months >= 12 else f"{months} Months"
-        # Plain standalone integer — treat as years
-        return f"{int(plain)} Years"
+            return _yr(months // 12) if months >= 12 else _mo(months)
+        return _yr(int(plain))
     return re.sub(_PAT, _repl, gender_age)
 
 
@@ -460,11 +466,19 @@ def _title_case(text: str) -> str:
         if len(token) > 1 and token == token.upper() and token.isalpha():
             return token
         lower = token.lower()
-        # Rule 2: Known degrees → fixed form
+        # Rule 2a: Known name prefix (checked before degree map to avoid "Ms" → "MS")
+        if lower in _PREFIX_MAP_TC:
+            return _PREFIX_MAP_TC[lower]
+        # Rule 2b: Known degrees → fixed form
         if lower in _DEGREE_MAP:
             return _DEGREE_MAP[lower]
-        # Rule 3: Period-concatenated token (e.g. Dr.S.k.gupta or S.K.)
+        # Rule 3: Period-concatenated token (e.g. Dr.Priya, S.K.Gupta, MD.)
         if "." in token:
+            # Fast-path: whole token without dots maps to a known degree (e.g. Ph.D → PhD)
+            _no_dots = token.replace(".", "").lower()
+            if _no_dots in _DEGREE_MAP:
+                return _DEGREE_MAP[_no_dots] + ("." if token.endswith(".") else "")
+            has_trailing_dot = token.endswith(".")
             parts = [p for p in token.split(".") if p]
             if not parts:
                 return token
@@ -483,13 +497,16 @@ def _title_case(text: str) -> str:
                     result_parts.append(part.upper())
                 else:
                     result_parts.append(part[0].upper() + part[1:].lower())
-            return " ".join(result_parts)
+            # Prefix + name → "Prefix.Name" (no space)
+            if result_parts[0] in _PREFIX_MAP_TC.values():
+                rest = ".".join(result_parts[1:])
+                return result_parts[0] + "." + rest if rest else result_parts[0]
+            # Initials / degrees → join with ".", preserve trailing "."
+            joined = ".".join(result_parts)
+            return joined + "." if has_trailing_dot else joined
         # Rule 4: Single-letter initial (e.g. "r" in "Ramya r") → uppercase
         if len(token) == 1 and token.isalpha():
             return token.upper()
-        # Rule 5: Known name prefix → canonical casing (Dr, Mr, Mrs, Ms, Master)
-        if lower in _PREFIX_MAP_TC:
-            return _PREFIX_MAP_TC[lower]
         # Rule 6a: Known lab/specimen abbreviation whitelist → always uppercase (checked before vowel rule)
         if lower in _ABBREV_SET:
             return token.upper()
@@ -502,7 +519,10 @@ def _title_case(text: str) -> str:
 
     # Split preserving whitespace and comma delimiters
     parts = re.split(r"(\s+|,)", text)
-    return "".join(_process_token(p) if not re.match(r"^(\s+|,)$", p) else p for p in parts)
+    result = "".join(_process_token(p) if not re.match(r"^(\s+|,)$", p) else p for p in parts)
+    # Normalise standalone prefix before a name: "Mr Arun" / "Dr. Priya" → "Mr.Arun" / "Dr.Priya"
+    result = re.sub(r'(?<!\w)(Mr|Mrs|Ms|Miss|Master|Dr|Prof)\.?\s+(?=[A-Za-z])', r'\1.', result)
+    return result
 
 
 # ─── NABL seal extracted from the NABL header banner (cached) ────────────────
@@ -633,8 +653,9 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
         [L("Hospital MR No"), C(), R(person.get("hospital_mr_no", ""))],
     ]
 
-    # Diagnosis for both patients and donors
-    left_rows.append([L("Diagnosis"), C(), V(person.get("diagnosis") or "NA")])
+    # Diagnosis for patient only, not donor
+    if not is_donor:
+        left_rows.append([L("Diagnosis"), C(), V(person.get("diagnosis") or "NA")])
 
     left_rows.extend([
         [L("Referred By"), C(), V(person.get("referred_by", ""))],
