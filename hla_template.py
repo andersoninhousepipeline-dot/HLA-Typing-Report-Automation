@@ -938,7 +938,7 @@ def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict,
             Paragraph("<b>HLA sharing for Recurrent miscarriage/RIF</b>",     S["lbl_center"]),
         ],
         [
-            Paragraph(_clean_display(f"{_capitalize_initials(p_name)} / {_capitalize_initials(d_name)}"), S["rpl_val"]),
+            Paragraph(_clean_display(f"{_title_case(_capitalize_initials(p_name))} / {_title_case(_capitalize_initials(d_name))}"), S["rpl_val"]),
             Paragraph(_clean_display(hla_matching_text),      S["rpl_val"]),
             Paragraph(_clean_display(rpl_ref.get("hla_sharing_rif", ">50%")), S["rpl_val"]),
         ],
