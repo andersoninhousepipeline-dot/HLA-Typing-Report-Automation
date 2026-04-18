@@ -346,10 +346,14 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_donor_fields  = []   # list of dicts per donor
         self._bulk_hla_don     = []   # list of {locus: [a1, a2]} per donor
         
-        # Debounce timer for real-time updates
+        # Debounce timers for real-time preview
         self._edit_timer = QTimer()
         self._edit_timer.setSingleShot(True)
         self._edit_timer.timeout.connect(self._refresh_bulk_preview)
+
+        self._manual_edit_timer = QTimer()
+        self._manual_edit_timer.setSingleShot(True)
+        self._manual_edit_timer.timeout.connect(self._refresh_manual_preview)
 
         self.init_ui()
         self._load_persistent()
@@ -480,9 +484,11 @@ class HLAReportGeneratorApp(QMainWindow):
             pat_form.addRow(lbl + ":", w)
             if key == "diagnosis":
                 w.textChanged.connect(self._auto_detect_manual_template)
+            w.textChanged.connect(self._on_manual_field_debounced)
 
         self._manual_nabl_chk = QCheckBox("NABL Accreditation")
         self._manual_nabl_chk.setChecked(self.qsettings.value("nabl_stamp", True, type=bool))
+        self._manual_nabl_chk.stateChanged.connect(self._on_manual_field_debounced)
         pat_form.addRow(self._manual_nabl_chk)
 
         self._manual_seal_chk = QCheckBox("Signature Seal")
@@ -490,9 +496,60 @@ class HLAReportGeneratorApp(QMainWindow):
         self._manual_seal_chk.stateChanged.connect(self._refresh_manual_preview)
         pat_form.addRow(self._manual_seal_chk)
 
-        # Report Options moved to global header
+        # ── Report Settings ────────────────────────────────────────────────────
+        rs_group = QGroupBox("Report Settings")
+        rs_form  = QFormLayout(); rs_group.setLayout(rs_form)
+        rs_form.setSpacing(1); rs_form.setContentsMargins(4, 2, 4, 2)
+        self._manual_report_settings = {}
+        RS_FIELDS = [
+            ("typing_status", "Typing Status",     "Complete"),
+            ("imgt_release",  "IMGT Release",      ""),
+            ("methodology",   "Methodology",       ""),
+            ("coverage",      "Coverage Override", ""),
+        ]
+        for key, lbl, default in RS_FIELDS:
+            w = QLineEdit(default)
+            w.setMaximumHeight(24)
+            self._manual_report_settings[key] = w
+            rs_form.addRow(lbl + ":", w)
+            w.textChanged.connect(self._on_manual_field_debounced)
+        scroll_layout.addWidget(rs_group)
 
-        # Patient HLA Results (FormLayout, one locus per row, two alleles side-by-side)
+        # ── RPL Reference (shown only when RPL template selected) ──────────────
+        self._manual_rpl_group = QGroupBox("RPL / Fertility Reference (calculated, editable)")
+        rpl_form = QFormLayout(); self._manual_rpl_group.setLayout(rpl_form)
+        rpl_form.setSpacing(1); rpl_form.setContentsMargins(4, 2, 4, 2)
+        self._manual_rpl_fields = {}
+        RPL_FIELDS_MANUAL = [
+            ("match_str",       "Match (Overall)"),
+            ("match_pct",       "Overall %"),
+            ("class2_pct",      "Class-II %"),
+            ("hla_sharing_rif", "HLA Sharing (RIF)"),
+            ("hla_c_patient",   "Maternal HLA-C Type"),
+            ("hla_c_donor",     "Paternal HLA-C Type"),
+        ]
+        for key, lbl in RPL_FIELDS_MANUAL:
+            w = QLineEdit()
+            w.setMaximumHeight(24)
+            self._manual_rpl_fields[key] = w
+            rpl_form.addRow(lbl + ":", w)
+            w.textChanged.connect(self._on_manual_field_debounced)
+
+        def _on_manual_match_str_changed(text, _fields=self._manual_rpl_fields):
+            m = _re.search(r'(\d+)\s+of\s+(\d+)', text, _re.I)
+            pct_w = _fields.get("match_pct")
+            if m and pct_w:
+                n, total = int(m.group(1)), int(m.group(2))
+                pct = round(n / total * 100) if total else 0
+                pct_w.blockSignals(True)
+                pct_w.setText(f"{pct}%")
+                pct_w.blockSignals(False)
+        self._manual_rpl_fields["match_str"].textChanged.connect(_on_manual_match_str_changed)
+
+        scroll_layout.addWidget(self._manual_rpl_group)
+        self._manual_rpl_group.setVisible(False)
+
+        # ── Patient HLA Results ────────────────────────────────────────────────
         hla_group = QGroupBox("HLA Results — Patient")
         hla_form  = QFormLayout(); hla_group.setLayout(hla_form)
         hla_form.setSpacing(1); hla_form.setContentsMargins(4, 2, 4, 2)
@@ -502,6 +559,8 @@ class HLAReportGeneratorApp(QMainWindow):
             row_w, a1, a2 = _make_allele_row()
             hla_form.addRow(f"{locus}:", row_w)
             self.hla_pat[locus] = [a1, a2]
+            a1.textChanged.connect(self._on_manual_field_debounced)
+            a2.textChanged.connect(self._on_manual_field_debounced)
 
         # ── Donors section — supports multiple donors ──────────────────────
         self._manual_donors  = []   # list of {container, fields, hla}
@@ -633,6 +692,9 @@ class HLAReportGeneratorApp(QMainWindow):
         splitter.addWidget(right_widget)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
+
+        self.template_combo.currentIndexChanged.connect(self._update_manual_rpl_visibility)
+        self._update_manual_rpl_visibility()
         return tab
 
     def browse_manual_output(self):
@@ -685,6 +747,15 @@ class HLAReportGeneratorApp(QMainWindow):
             })
 
         case = self._build_case(rtype, nabl, with_logo, sig_stamp, patient, donors)
+
+        # Report settings
+        for key, w in self._manual_report_settings.items():
+            case[key] = w.text().strip()
+
+        # RPL reference
+        if rtype == "rpl_couple":
+            case["rpl_reference"] = {k: w.text().strip() for k, w in self._manual_rpl_fields.items()}
+
         self._apply_sig_name_overrides(case, self._manual_sig_name_overrides)
         return case
 
@@ -762,6 +833,14 @@ class HLAReportGeneratorApp(QMainWindow):
             if os.path.exists(TEMP_PREVIEW_PATH):
                 self._on_manual_preview_generated(TEMP_PREVIEW_PATH)
 
+    def _on_manual_field_debounced(self):
+        self._manual_edit_timer.start(600)
+
+    def _update_manual_rpl_visibility(self):
+        if hasattr(self, "_manual_rpl_group"):
+            rtype = TEMPLATE_TO_RTYPE.get(self.template_combo.currentText(), "single_hla")
+            self._manual_rpl_group.setVisible(rtype == "rpl_couple")
+
     def _auto_detect_manual_template(self):
         """Intelligently update the Template combo based on donor+relationship+diagnosis."""
         has_donors = bool(self._manual_donors)
@@ -788,12 +867,15 @@ class HLAReportGeneratorApp(QMainWindow):
             self.template_combo.blockSignals(True)
             self.template_combo.setCurrentIndex(idx)
             self.template_combo.blockSignals(False)
+        self._update_manual_rpl_visibility()
 
     def _clear_manual_form(self):
         for w in self.f.values(): w.clear()
         for locus in HLA_LOCI:
             self.hla_pat[locus][0].clear(); self.hla_pat[locus][1].clear()
-        # Remove all donor panels
+        for w in self._manual_report_settings.values(): w.clear()
+        self._manual_report_settings.get("typing_status", QLineEdit()).setText("Complete")
+        for w in self._manual_rpl_fields.values(): w.clear()
         for entry in list(self._manual_donors):
             entry["container"].deleteLater()
         self._manual_donors.clear()
@@ -934,7 +1016,9 @@ class HLAReportGeneratorApp(QMainWindow):
             "patient_hla": {locus: [a[0].text().strip(), a[1].text().strip()]
                             for locus, a in self.hla_pat.items()},
             "sig_name_overrides": {str(k): v for k, v in self._manual_sig_name_overrides.items()},
-            "nabl": self._manual_nabl_chk.isChecked(),
+            "nabl":            self._manual_nabl_chk.isChecked(),
+            "report_settings": {k: w.text().strip() for k, w in self._manual_report_settings.items()},
+            "rpl_reference":   {k: w.text().strip() for k, w in self._manual_rpl_fields.items()},
         }
         try:
             with open(path, "w") as fh: json.dump(data, fh, indent=2)
@@ -986,6 +1070,13 @@ class HLAReportGeneratorApp(QMainWindow):
                     "with_logo":         data.get("with_logo", True),
                     "nabl":              data.get("nabl", True),
                     "sig_name_overrides": data.get("sig_name_overrides", {}),
+                    "report_settings": {
+                        "typing_status": data.get("typing_status", "Complete"),
+                        "imgt_release":  data.get("imgt_release", ""),
+                        "methodology":   data.get("methodology", ""),
+                        "coverage":      data.get("coverage", ""),
+                    },
+                    "rpl_reference": data.get("rpl_reference", {}),
                 }
             for k, v in data.get("patient_fields", {}).items():
                 if k in self.f: self.f[k].setText(v)
@@ -1024,6 +1115,13 @@ class HLAReportGeneratorApp(QMainWindow):
                     idx = cmb.findText(sig_name)
                     if idx >= 0: cmb.setCurrentIndex(idx)
             self._manual_nabl_chk.setChecked(data.get("nabl", True))
+            for k, v in data.get("report_settings", {}).items():
+                if k in self._manual_report_settings:
+                    self._manual_report_settings[k].setText(str(v))
+            for k, v in data.get("rpl_reference", {}).items():
+                if k in self._manual_rpl_fields:
+                    self._manual_rpl_fields[k].setText(str(v))
+            self._update_manual_rpl_visibility()
             self.manual_status_label.setText(f"Draft loaded: {os.path.basename(path)}")
         except Exception as e:
             QMessageBox.critical(self, "Load Error", str(e))
