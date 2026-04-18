@@ -464,20 +464,22 @@ def _title_case(text: str) -> str:
         """
         # Rule 1: Preserve all-uppercase words of length > 1 (already in caps)
         if len(token) > 1 and token == token.upper() and token.isalpha():
+            if token.lower() in _DEGREE_MAP:
+                return _DEGREE_MAP[token.lower()] + "."
             return token
         lower = token.lower()
         # Rule 2a: Known name prefix (checked before degree map to avoid "Ms" → "MS")
         if lower in _PREFIX_MAP_TC:
             return _PREFIX_MAP_TC[lower]
-        # Rule 2b: Known degrees → fixed form
+        # Rule 2b: Known degrees → fixed form with trailing dot
         if lower in _DEGREE_MAP:
-            return _DEGREE_MAP[lower]
+            return _DEGREE_MAP[lower] + "."
         # Rule 3: Period-concatenated token (e.g. Dr.Priya, S.K.Gupta, MD.)
         if "." in token:
             # Fast-path: whole token without dots maps to a known degree (e.g. Ph.D → PhD)
             _no_dots = token.replace(".", "").lower()
             if _no_dots in _DEGREE_MAP:
-                return _DEGREE_MAP[_no_dots] + ("." if token.endswith(".") else "")
+                return _DEGREE_MAP[_no_dots] + "."
             has_trailing_dot = token.endswith(".")
             parts = [p for p in token.split(".") if p]
             if not parts:
