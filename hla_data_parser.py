@@ -341,19 +341,35 @@ def _detect_report_type(patient_row: pd.Series, donor_rows: list) -> str:
 # ─── Parse match column ──────────────────────────────────────────────────────
 
 def _parse_match(val) -> str:
-    """Extract clean match string like '6 of 12 at High Resolution' from any format."""
+    """Extract 'N of M at High Resolution (X%)' from any match format.
+    Percentage is always auto-calculated from N and M."""
     s = _clean_str(val)
     if not s or s.lower() in ("nan", ""):
         return ""
-    # Extract 'X of Y' pattern from potentially long text
-    m = re.search(r"(\d+)\s+of\s+(\d+)(?:\s*\([\d%]+\))?(?:\s+(?:at\s+)?[\w\s]+)?", s, re.I)
+    m = re.search(r"(\d+)\s+of\s+(\d+)", s, re.I)
     if m:
-        matched = m.group(1)
-        total = m.group(2)
-        # Check for 'at High Resolution' qualifier
+        matched, total = int(m.group(1)), int(m.group(2))
+        pct = round(matched / total * 100) if total else 0
         qualifier = "at High Resolution" if "high resolution" in s.lower() else ""
-        return f"{matched} of {total} {qualifier}".strip()
+        base = f"{matched} of {total} {qualifier}".strip()
+        return f"{base} ({pct}%)"
     return s.strip()
+
+
+# ─── Gender/Age combiner ─────────────────────────────────────────────────────
+
+def _build_gender_age(row) -> str:
+    """Return a combined 'Gender / Age' string.
+    Tries the combined column first; falls back to separate 'Gender' and 'Age' columns.
+    Result format: 'Female / 40 Y 0 M 0 D' — _normalize_age in the template strips
+    it to 'Female / 40 Years' at render time."""
+    combined = _clean_str(row.get("Gender / Age", ""))
+    if combined:
+        return _sentence_case(combined)
+    gender = _sentence_case(row.get("Gender", ""))
+    age    = _clean_str(row.get("Age", ""))
+    parts  = [p for p in (gender, age) if p]
+    return " / ".join(parts)
 
 
 # ─── Build person dict ───────────────────────────────────────────────────────
@@ -401,7 +417,7 @@ def _build_person(row: pd.Series, hla_lookup: dict, join_by: str) -> dict:
     return {
         # Text fields → sentence case (first char upper, rest lower)
         "name":           _sentence_case(row.get(" name", "")),
-        "gender_age":     _sentence_case(row.get("Gender / Age", "")),
+        "gender_age":     _build_gender_age(row),
         "diagnosis":      _sentence_case(row.get("Diagnosis", "")),
         "referred_by":    _sentence_case(row.get("Referred By", "")),
         "hospital_clinic":_sentence_case(row.get("Hospital/Clinic", "")),
