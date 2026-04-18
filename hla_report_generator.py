@@ -566,6 +566,7 @@ class HLAReportGeneratorApp(QMainWindow):
 
         # Fast Report Generation group — mirrors PGTA's gen_group
         gen_group  = QGroupBox("Fast Report Generation")
+        gen_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         gen_layout = QVBoxLayout()
         gen_layout.setContentsMargins(4, 4, 4, 4)
         gen_layout.setSpacing(2)
@@ -1503,6 +1504,20 @@ class HLAReportGeneratorApp(QMainWindow):
                 w.textChanged.connect(self._on_bulk_field_debounced)
                 self._bulk_rpl_fields[key] = w
                 rpl_form.addRow(lbl + ":", w)
+
+            # Auto-calculate Overall % whenever Match (Overall) changes
+            def _on_match_str_changed(text, _fields=self._bulk_rpl_fields):
+                import re as _re
+                m = _re.search(r'(\d+)\s+of\s+(\d+)', text, _re.I)
+                pct_w = _fields.get("match_pct")
+                if m and pct_w:
+                    n, total = int(m.group(1)), int(m.group(2))
+                    pct = round(n / total * 100) if total else 0
+                    pct_w.blockSignals(True)
+                    pct_w.setText(f"{pct}%")
+                    pct_w.blockSignals(False)
+            self._bulk_rpl_fields["match_str"].textChanged.connect(_on_match_str_changed)
+
             self._bulk_editor_layout.addWidget(rpl_group)
 
         self._bulk_editor_layout.addWidget(hla_pat_group)
