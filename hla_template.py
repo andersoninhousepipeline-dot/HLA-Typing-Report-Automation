@@ -976,7 +976,7 @@ def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict,
             ("TOPPADDING",    (0, 0), (-1, -1), 4),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ]))
-        ref_group.append(Spacer(1, 4 * mm))
+        ref_group.append(Spacer(1, 8 * mm))
         ref_group.append(c_t)
 
     # Single KeepTogether: heading + ref table + optional HLA-C table all move as one unit
