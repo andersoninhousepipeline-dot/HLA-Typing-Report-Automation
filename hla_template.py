@@ -747,17 +747,20 @@ def _hla_table(person: dict, S: dict) -> Table:
 
 # ─── NGS: one person block (info + HLA + optional match + remarks) ────────────
 def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, patient_name: str = "") -> list:
-    elems = []
-    elems.append(_ngs_info_table(person, S, is_donor=is_donor, patient_name=patient_name))
-    elems.append(Spacer(1, 2 * mm))
-    elems.append(_hla_table(person, S))
+    # Keep info table + HLA table together as one unit; let remarks/match flow freely.
+    core = [
+        _ngs_info_table(person, S, is_donor=is_donor, patient_name=patient_name),
+        Spacer(1, 4 * mm),
+        _hla_table(person, S),
+        Spacer(1, 4 * mm),
+    ]
+    elems = [KeepTogether(core)]
 
     _raw_remarks = person.get("remarks", "")
     _remarks_display = _clean_display(_raw_remarks) if _raw_remarks else ""
     if _remarks_display and _remarks_display != "\u2014":
         if len(_remarks_display) > 600:
             _remarks_display = _remarks_display[:580] + "..."
-        elems.append(Spacer(1, 1 * mm))
         elems.append(Paragraph(f"<b>Remarks:</b> {_remarks_display}",
                                ParagraphStyle("remarks_j", parent=S["body_small"],
                                               alignment=TA_LEFT, spaceAfter=6)))
@@ -772,7 +775,7 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
                            leading=13, spaceBefore=2, spaceAfter=2)
         ))
 
-    elems.append(Spacer(1, 3 * mm))
+    elems.append(Spacer(1, 2 * mm))
     return elems
 
 
@@ -1095,14 +1098,9 @@ def _build_ngs_single(case: dict, S: dict) -> list:
 
     elems = []
 
-    # Patient block - keep together to prevent mid-block page break (Fix 1)
-    patient_block = _ngs_person_block(patient, is_donor=False, match_str="", S=S)
-    elems.append(KeepTogether(patient_block))
+    elems.extend(_ngs_person_block(patient, is_donor=False, match_str="", S=S))
 
-    # Fix 1: Keep methodology and signatures as separate KeepTogether blocks so a
-    # page break between them is allowed if the content is too large to fit together.
-    methodology_items = _methodology_block(case, S)
-    elems.append(KeepTogether(methodology_items))
+    elems.extend(_methodology_block(case, S))
     sig_items = _signature_block(signatories, S)
     if sig_items:
         elems.append(KeepTogether(sig_items))
@@ -1128,21 +1126,14 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
 
     elems = []
 
-    # Patient block - keep together to prevent mid-block page break (Fix 1)
-    patient_block = _ngs_person_block(patient, is_donor=False, match_str="", S=S)
-    elems.append(KeepTogether(patient_block))
+    elems.extend(_ngs_person_block(patient, is_donor=False, match_str="", S=S))
 
-    # Each donor block - keep together individually (Fix 1)
     _p_name = patient.get("name", "")
     for d in donors:
-        donor_block = _ngs_person_block(d, is_donor=True, match_str=d.get("match", ""), S=S,
-                                        patient_name=_p_name)
-        elems.append(KeepTogether(donor_block))
+        elems.extend(_ngs_person_block(d, is_donor=True, match_str=d.get("match", ""), S=S,
+                                       patient_name=_p_name))
 
-    # Fix 1: Keep methodology and signatures as separate KeepTogether blocks so a
-    # page break between them is allowed if the multi-donor content pushes them apart.
-    methodology_items = _methodology_block(case, S)
-    elems.append(KeepTogether(methodology_items))
+    elems.extend(_methodology_block(case, S))
     sig_items = _signature_block(signatories, S)
     if sig_items:
         elems.append(KeepTogether(sig_items))
