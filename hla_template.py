@@ -758,9 +758,11 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
         if len(_remarks_display) > 600:
             _remarks_display = _remarks_display[:580] + "..."
         elems.append(Spacer(1, 1 * mm))
-        elems.append(Paragraph(f"<b>Remarks:</b> {_remarks_display}", S["body_small"]))
+        elems.append(Paragraph(f"<b>Remarks:</b> {_remarks_display}",
+                               ParagraphStyle("remarks_j", parent=S["body_small"],
+                                              alignment=TA_LEFT, spaceAfter=6)))
 
-    _match_display = _append_match_pct(_clean_display(match_str)) if match_str else ""
+    _match_display = _clean_display(match_str) if match_str else ""
     if _match_display and _match_display != "\u2014":
         elems.append(Spacer(1, 1 * mm))
         elems.append(Paragraph(
@@ -1181,7 +1183,9 @@ def _build_rpl_couple(case: dict, S: dict) -> list:
         if disp and disp != "\u2014":
             if len(disp) > 600:
                 disp = disp[:580] + "..."
-            elems.append(Paragraph(f"<b>{label}:</b> {disp}", S["body_small"]))
+            elems.append(Paragraph(f"<b>{label}:</b> {disp}",
+                                   ParagraphStyle("remarks_j", parent=S["body_small"],
+                                                  alignment=TA_LEFT, spaceAfter=6)))
 
     # ── Page 1 content ────────────────────────────────────────────────────────
     if donor:
