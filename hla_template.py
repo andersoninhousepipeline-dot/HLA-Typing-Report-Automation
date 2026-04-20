@@ -821,16 +821,16 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict) -> Table:
         patient.get("report_date", ""),
     ]
 
-    # Donor labels (11 rows without diagnosis)
+    # Donor labels (12 rows, matching patient — including diagnosis)
     d_labels = [
         "Name", "Relationship stated/\nClaimed", "Age/Gender",
-        "Referred By", "Hospital/Clinic",
+        "Diagnosis", "Referred By", "Hospital/Clinic",
         "PIN", "Sample Number", "Specimen",
         "Collection Date", "Sample receipt date", "Report date",
     ]
     d_vals = [
         donor.get("name", ""), donor.get("relationship", "") or "NA",
-        _normalize_age(donor.get("gender_age", "")),
+        _normalize_age(donor.get("gender_age", "")), donor.get("diagnosis") or "NA",
         donor.get("referred_by", ""), donor.get("hospital_clinic", ""),
         donor.get("pin", ""), donor.get("sample_number", ""),
         donor.get("specimen") or "Blood - EDTA",
@@ -838,21 +838,12 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict) -> Table:
         donor.get("report_date", ""),
     ]
     demo_start = 0
-    # Build rows - patient has 12 rows, donor has 11 (no diagnosis)
-    for i in range(max(len(p_labels), len(d_labels))):
+    # Build rows - both patient and donor have 12 rows
+    for i in range(len(p_labels)):
         r = demo_start + i
-        # Patient side
-        p_lbl = p_labels[i] if i < len(p_labels) else ""
-        p_val = p_vals[i] if i < len(p_vals) else ""
-        # Donor side: diagnosis row (index 3) belongs only to patient;
-        # all other rows are offset by -1 after that row.
-        # d_idx is computed unconditionally so the last patient row (i=11,
-        # Report date) still resolves to the correct donor row (d_idx=10).
-        if p_lbl == "Diagnosis":
-            d_val = ""
-        else:
-            d_idx = i if i < 3 else i - 1  # Before diagnosis: same index; after: -1 offset
-            d_val = d_vals[d_idx] if d_idx < len(d_vals) else ""
+        p_lbl = p_labels[i]
+        p_val = p_vals[i]
+        d_val = d_vals[i]
 
         data.append([RL(p_lbl), RVC(p_lbl, p_val), Paragraph("", S["rpl_lbl"]),
                      RVC(p_lbl, d_val), Paragraph("", S["rpl_lbl"])])
