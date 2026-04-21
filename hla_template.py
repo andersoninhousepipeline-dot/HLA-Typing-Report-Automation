@@ -259,8 +259,8 @@ def _styles() -> dict:
             textColor=BLACK, alignment=TA_LEFT, leading=13, spaceAfter=3
         ),
         "comment": ParagraphStyle(
-            "comment", fontName=F_CALI, fontSize=11,
-            textColor=BLACK, leading=13, spaceAfter=3
+            "comment", fontName=F_CALI, fontSize=12,
+            textColor=BLACK, leading=14, spaceAfter=3
         ),
         # ── Reference heading ─────────────────────────────────────────────────
         "ref_hdr": ParagraphStyle(
@@ -275,11 +275,11 @@ def _styles() -> dict:
         # ── RPL body/disclaimers ──────────────────────────────────────────────
         "justify": ParagraphStyle(
             "justify", fontName=F_CALI, fontSize=11,
-            textColor=BLACK, leading=13, alignment=TA_JUSTIFY, spaceAfter=2
+            textColor=BLACK, leading=15, alignment=TA_JUSTIFY, spaceAfter=4
         ),
         "disc_item": ParagraphStyle(
             "disc_item", fontName=F_CALI, fontSize=11,
-            textColor=BLACK, leading=13, alignment=TA_JUSTIFY, leftIndent=12, spaceAfter=1
+            textColor=BLACK, leading=15, alignment=TA_JUSTIFY, leftIndent=12, spaceAfter=3
         ),
         # ── Signature block ───────────────────────────────────────────────────
         # Cambria-Bold 12.2pt in reference PDF; SegoeUI-Bold is closest available
@@ -687,8 +687,8 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
     t.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, -1), C_INFO_BG),
         ("VALIGN",        (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING",    (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING",    (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
         ("LEFTPADDING",   (0, 0), (-1, -1), 4),
         ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
         # Colon columns: no left padding so colon sits flush next to label
@@ -785,7 +785,7 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
 # All cells WHITE with black 0.5pt grid.  Header row: black bg, white text.
 # Column widths derived from fitz measurements of Mrs.Hemalatha RPL PDF.
 
-def _rpl_couple_table(patient: dict, donor: dict, S: dict) -> Table:
+def _rpl_couple_table(patient: dict, donor: dict, S: dict, comment_text: str = "") -> Table:
     p_name = patient.get("name", "\u2014")
     d_name = donor.get("name",   "\u2014")
     cw = CONTENT_W
@@ -869,6 +869,10 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict) -> Table:
         da2 = _strip_prefix(da[1]) if da and len(da) > 1 and da[1] else "\u2014"
         data.append([HL(f"HLA-{locus}*"), HV(pa1), HV(pa2), HV(da1), HV(da2)])
 
+    if comment_text:
+        data.append([Paragraph(comment_text, S["comment"]), "", "", "", ""])
+        spans.append(("SPAN", (0, len(data) - 1), (4, len(data) - 1)))
+
     n_rows = len(data)
     hosp_row_rpl = next(
         (i for i, lbl in enumerate(p_labels) if "Hospital" in lbl), None)
@@ -916,8 +920,8 @@ def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict,
         elems.append(Paragraph(comment, S["comment"]))
         elems.append(Spacer(1, 2 * mm))
 
-    # Reference: heading + tables in one unbreakable group
-    # Build all elements first, then wrap together so the heading never orphans.
+    # Reference heading + ref table kept together; HLA-C table separate so it
+    # can flow to the previous page if space allows.
     ref_group = [Paragraph("<b>Reference:</b>", S["ref_hdr"])]
 
     # 3-column reference table — headers SegoeUI-Bold 10pt (confirmed by fitz audit)
@@ -976,12 +980,12 @@ def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict,
             ("TOPPADDING",    (0, 0), (-1, -1), 4),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ]))
-        ref_group.append(Spacer(1, 8 * mm))
-        ref_group.append(c_t)
+        elems.append(KeepTogether(ref_group))
+        elems.append(Spacer(1, 8 * mm))
+        elems.append(KeepTogether([c_t]))
+        return elems
 
-    # Single KeepTogether: heading + ref table + optional HLA-C table all move as one unit
     elems.append(KeepTogether(ref_group))
-
     return elems
 
 
@@ -1176,31 +1180,31 @@ def _build_rpl_couple(case: dict, S: dict) -> list:
                 disp = disp[:580] + "..."
             elems.append(Paragraph(f"<b>{label}:</b> {disp}",
                                    ParagraphStyle("remarks_j", parent=S["body_small"],
+                                                  fontSize=12, leading=14,
                                                   alignment=TA_LEFT, spaceAfter=6)))
 
     # ── Page 1 content ────────────────────────────────────────────────────────
     if donor:
-        # Keep couple table together; let reference section flow naturally.
-        elems.append(KeepTogether([_rpl_couple_table(patient, donor, S),
-                                   Spacer(1, 3 * mm)]))
-
-        # Emit COMMENT paragraph first (extracted so remarks can follow immediately).
+        # Build comment text and embed it as the last row of the couple table.
         match_str = rpl_ref.get("match_str", "")
         match_pct = rpl_ref.get("match_pct", "")
+        _comment_text = ""
         if match_str or match_pct:
             bold_match = f"<b>{match_str} ({match_pct})</b>" if match_str else f"<b>{match_pct}</b>"
-            comment_text = (
+            _comment_text = (
                 f"<b>COMMENT:</b> HLA-A, B, C, DRB1, DQB1 &amp; DPB1 locus typing patterns of the "
                 f"above individuals indicate {bold_match} matches at High resolution."
             )
-            elems.append(Paragraph(comment_text, S["comment"]))
-            elems.append(Spacer(1, 2 * mm))
 
-        # Patient/donor remarks immediately below the comment.
+        # Keep couple table (with embedded comment row) together.
+        elems.append(KeepTogether([_rpl_couple_table(patient, donor, S, comment_text=_comment_text),
+                                   Spacer(1, 3 * mm)]))
+
+        # Patient/donor remarks immediately below the table.
         _emit_remarks(patient, "Remarks (Patient)")
         _emit_remarks(donor,   "Remarks (Donor)")
 
-        # Reference + HLA-C tables (comment already emitted above, skip it here).
+        # Reference + HLA-C tables (no separate comment needed).
         elems += _rpl_reference_section(rpl_ref, patient, donor, S, include_comment=False)
     else:
         # Single-person RPL: NGS-style patient block
