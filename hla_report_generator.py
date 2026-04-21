@@ -11,6 +11,7 @@ import copy
 import subprocess
 import platform
 import datetime
+import tempfile
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
@@ -47,6 +48,7 @@ import re as _re
 import hla_assets
 from hla_data_parser import parse_excel, get_case_summary, c_supertype, compute_rpl_reference
 from hla_template import generate_pdf, make_filename, unique_output_path
+import gdrive_upload
 
 
 # ─── Fix 5: Insufficient-Data filter ─────────────────────────────────────────
@@ -152,7 +154,7 @@ class GenerateWorker(QThread):
     error    = pyqtSignal(str)
 
     def __init__(self, cases, output_dir, with_logo, signatories,
-                 sig_count_single, sig_count_donor, signature_stamp):
+                 sig_count_single, sig_count_donor, signature_stamp, with_qr=False):
         super().__init__()
         self.cases            = cases
         self.output_dir       = output_dir
@@ -161,6 +163,7 @@ class GenerateWorker(QThread):
         self.sig_count_single = sig_count_single
         self.sig_count_donor  = sig_count_donor
         self.signature_stamp  = signature_stamp
+        self.with_qr          = with_qr
 
     def run(self):
         os.makedirs(self.output_dir, exist_ok=True)
@@ -213,7 +216,25 @@ class GenerateWorker(QThread):
             self.progress.emit(int(i / total * 100),
                                f"Generating {fname} ({i+1}/{total})...")
             try:
-                generate_pdf(c, out_path)
+                if self.with_qr:
+                    # Step 1: generate without QR to a temp file
+                    tmp = tempfile.mktemp(suffix=".pdf")
+                    generate_pdf(c, tmp)
+                    # Step 2: upload to Drive → get share URL
+                    self.progress.emit(int(i / total * 100),
+                                       f"Uploading {fname} to Google Drive…")
+                    file_id, share_url = gdrive_upload.upload_pdf(tmp, fname)
+                    # Step 3: re-generate with QR embedded
+                    c["qr_url"] = share_url
+                    generate_pdf(c, out_path)
+                    # Step 4: replace Drive file with QR version
+                    gdrive_upload.update_pdf(file_id, out_path)
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+                else:
+                    generate_pdf(c, out_path)
                 success.append(fname)
             except Exception as e:
                 failed.append((fname, str(e)))
@@ -649,10 +670,19 @@ class HLAReportGeneratorApp(QMainWindow):
         gen_layout.addLayout(out_row)
 
         action_row = QHBoxLayout()
+        self.manual_qr_chk = QCheckBox("Include QR Code")
+        self.manual_qr_chk.setToolTip(
+            "Upload report to Google Drive and embed a QR code linking to it.\n"
+            "Requires credentials.json in the app folder."
+        )
+        if not gdrive_upload.is_configured():
+            self.manual_qr_chk.setEnabled(False)
+            self.manual_qr_chk.setToolTip("Place credentials.json in the app folder to enable QR upload.")
         self.manual_generate_btn = QPushButton("Generate Report")
         self.manual_generate_btn.setStyleSheet(GENERATE_BTN_STYLE)
         self.manual_generate_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
         self.manual_generate_btn.clicked.connect(self.generate_manual)
+        action_row.addWidget(self.manual_qr_chk)
         action_row.addStretch()
         action_row.addWidget(self.manual_generate_btn)
         gen_layout.addLayout(action_row)
@@ -818,7 +848,22 @@ class HLAReportGeneratorApp(QMainWindow):
         out_path = unique_output_path(out_dir, fname)
         fname    = os.path.basename(out_path)   # reflect _(2) suffix if added
         try:
-            generate_pdf(case, out_path)
+            with_qr = self.manual_qr_chk.isChecked()
+            if with_qr:
+                self.manual_status_label.setText("Generating & uploading to Drive…")
+                QApplication.processEvents()
+                tmp = tempfile.mktemp(suffix=".pdf")
+                generate_pdf(case, tmp)
+                file_id, share_url = gdrive_upload.upload_pdf(tmp, fname)
+                case["qr_url"] = share_url
+                generate_pdf(case, out_path)
+                gdrive_upload.update_pdf(file_id, out_path)
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            else:
+                generate_pdf(case, out_path)
             self.manual_status_label.setText(f"✓ Saved: {fname}")
             self.statusBar().showMessage(f"Generated: {fname}")
             self._start_manual_preview(case)
@@ -1341,6 +1386,16 @@ class HLAReportGeneratorApp(QMainWindow):
         gen_group_lay = QVBoxLayout(); gen_group_box.setLayout(gen_group_lay)
         gen_group_lay.setSpacing(3)
         gen_group_lay.setContentsMargins(4, 4, 4, 4)
+
+        self.bulk_qr_chk = QCheckBox("Include QR Code (uploads to Google Drive)")
+        self.bulk_qr_chk.setToolTip(
+            "Upload each report to Google Drive and embed a QR code linking to it.\n"
+            "Requires credentials.json in the app folder."
+        )
+        if not gdrive_upload.is_configured():
+            self.bulk_qr_chk.setEnabled(False)
+            self.bulk_qr_chk.setToolTip("Place credentials.json in the app folder to enable QR upload.")
+        gen_group_lay.addWidget(self.bulk_qr_chk)
 
         gen_current_btn = QPushButton("Generate Report")
         gen_current_btn.setFixedHeight(28)
@@ -2159,7 +2214,8 @@ class HLAReportGeneratorApp(QMainWindow):
         self.bulk_log.clear()
 
         self.worker = GenerateWorker(
-            cases, out, with_logo, sigs, sig_single, sig_donor, sig_stamp
+            cases, out, with_logo, sigs, sig_single, sig_donor, sig_stamp,
+            with_qr=self.bulk_qr_chk.isChecked()
         )
         self.worker.progress.connect(self._on_bulk_progress)
         self.worker.finished.connect(self._on_bulk_done)
@@ -2266,7 +2322,8 @@ class HLAReportGeneratorApp(QMainWindow):
 
         self.bulk_status_label.setText("Generating…")
         self.worker = GenerateWorker(
-            [self.cases[idx]], out, with_logo, sigs, sig_single, sig_donor, sig_stamp
+            [self.cases[idx]], out, with_logo, sigs, sig_single, sig_donor, sig_stamp,
+            with_qr=self.bulk_qr_chk.isChecked()
         )
         self.worker.progress.connect(self._on_bulk_progress)
         self.worker.finished.connect(self._on_bulk_done)

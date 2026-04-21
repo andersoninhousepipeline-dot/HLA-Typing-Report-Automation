@@ -14,6 +14,7 @@ Colors: Audited via PyMuPDF from all Manual-Report reference PDFs.
 import io
 import os
 import re
+import tempfile
 from typing import Optional
 
 from reportlab.lib import colors
@@ -554,12 +555,14 @@ def _get_nabl_seal_bytes() -> bytes:
 class _HFCanvas:
     """Draws header image (or text) and footer image on every page."""
 
-    def __init__(self, case: dict, title: str, banner_h: float, footer_h: float, total_pages: int = 1):
+    def __init__(self, case: dict, title: str, banner_h: float, footer_h: float, total_pages: int = 1, qr_url: str = ""):
         self.case        = case
         self.title       = title
         self.banner_h    = banner_h
         self.footer_h    = footer_h
         self.total_pages = total_pages
+        self.qr_url      = qr_url
+        self._qr_cache   = None  # cached QR image bytes
 
     def __call__(self, canvas, doc):
         canvas.saveState()
@@ -612,6 +615,34 @@ class _HFCanvas:
                 f"Page {doc.page} of {self.total_pages}"
             )
         # Without logo: footer image and page numbers are omitted; space is still reserved.
+
+        # ── QR Code (last page only) ─────────────────────────────────────────
+        if self.qr_url and doc.page == self.total_pages:
+            if self._qr_cache is None:
+                try:
+                    import qrcode as _qrcode
+                    qr = _qrcode.QRCode(
+                        error_correction=_qrcode.constants.ERROR_CORRECT_M,
+                        box_size=8, border=2,
+                    )
+                    qr.add_data(self.qr_url)
+                    qr.make(fit=True)
+                    from PIL import Image as _PILImg
+                    img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG")
+                    self._qr_cache = buf.getvalue()
+                except Exception:
+                    self._qr_cache = b""
+            if self._qr_cache:
+                _QR_SIZE = 20 * mm
+                _qr_x = PAGE_W - MARGIN_R - _QR_SIZE
+                _qr_y = 0
+                canvas.drawImage(
+                    ImageReader(io.BytesIO(self._qr_cache)),
+                    _qr_x, _qr_y, width=_QR_SIZE, height=_QR_SIZE,
+                    preserveAspectRatio=True, mask="auto",
+                )
 
         canvas.restoreState()
 
@@ -1357,7 +1388,8 @@ def generate_pdf(case: dict, output_path: str) -> str:
     # Fix 4: use the numbered-canvas approach for accurate page counting.
     # total_pages starts at 1 (dummy); _NumberedCanvas updates it in save() before
     # drawing header/footer, so every page shows the real "Page X of N".
-    cb = _HFCanvas(case, title, banner_h, footer_h, total_pages=1)
+    qr_url = case.get("qr_url", "")
+    cb = _HFCanvas(case, title, banner_h, footer_h, total_pages=1, qr_url=qr_url)
     numbered_canvas_class = _make_numbered_canvas_class(cb)
     doc.build(story, canvasmaker=numbered_canvas_class)
     return output_path
