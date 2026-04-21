@@ -14,7 +14,6 @@ Colors: Audited via PyMuPDF from all Manual-Report reference PDFs.
 import io
 import os
 import re
-import tempfile
 from typing import Optional
 
 from reportlab.lib import colors
@@ -555,14 +554,12 @@ def _get_nabl_seal_bytes() -> bytes:
 class _HFCanvas:
     """Draws header image (or text) and footer image on every page."""
 
-    def __init__(self, case: dict, title: str, banner_h: float, footer_h: float, total_pages: int = 1, qr_url: str = ""):
+    def __init__(self, case: dict, title: str, banner_h: float, footer_h: float, total_pages: int = 1):
         self.case        = case
         self.title       = title
         self.banner_h    = banner_h
         self.footer_h    = footer_h
         self.total_pages = total_pages
-        self.qr_url      = qr_url
-        self._qr_cache   = None  # cached QR image bytes
 
     def __call__(self, canvas, doc):
         canvas.saveState()
@@ -615,34 +612,6 @@ class _HFCanvas:
                 f"Page {doc.page} of {self.total_pages}"
             )
         # Without logo: footer image and page numbers are omitted; space is still reserved.
-
-        # ── QR Code (last page only) ─────────────────────────────────────────
-        if self.qr_url and doc.page == self.total_pages:
-            if self._qr_cache is None:
-                try:
-                    import qrcode as _qrcode
-                    qr = _qrcode.QRCode(
-                        error_correction=_qrcode.constants.ERROR_CORRECT_M,
-                        box_size=8, border=2,
-                    )
-                    qr.add_data(self.qr_url)
-                    qr.make(fit=True)
-                    from PIL import Image as _PILImg
-                    img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-                    buf = io.BytesIO()
-                    img.save(buf, format="PNG")
-                    self._qr_cache = buf.getvalue()
-                except Exception:
-                    self._qr_cache = b""
-            if self._qr_cache:
-                _QR_SIZE = 20 * mm
-                _qr_x = PAGE_W - MARGIN_R - _QR_SIZE
-                _qr_y = 0
-                canvas.drawImage(
-                    ImageReader(io.BytesIO(self._qr_cache)),
-                    _qr_x, _qr_y, width=_QR_SIZE, height=_QR_SIZE,
-                    preserveAspectRatio=True, mask="auto",
-                )
 
         canvas.restoreState()
 
@@ -1034,16 +1003,15 @@ def _methodology_block(case: dict, S: dict) -> list:
 
     elems = [Spacer(1, 2 * mm)]
 
-    # IMGT/HLA Release - ALWAYS display (as per reference templates)
-    elems.append(Paragraph(f"<b>IMGT/HLA Release</b> {imgt}", S["body"]))
-
-    # Fix 2: "Remarks:" label removed — do not render an empty label when no
-    # remarks value exists.  Patient/donor remarks are rendered conditionally
-    # inside each person block (_ngs_person_block / _emit_remarks).
-    # Coverage: label on its own line, then all Class lines at the same indent
-    elems.append(Paragraph("<b>Coverage</b>", S["body"]))
+    # Keep IMGT heading + Coverage heading + all coverage lines together so they
+    # never break across pages.
+    imgt_coverage = [
+        Paragraph(f"<b>IMGT/HLA Release</b> {imgt}", S["body"]),
+        Paragraph("<b>Coverage</b>", S["body"]),
+    ]
     for line in COVERAGE_LINES:
-        elems.append(Paragraph(line, S["coverage"]))
+        imgt_coverage.append(Paragraph(line, S["coverage"]))
+    elems.append(KeepTogether(imgt_coverage))
 
     elems.append(Spacer(1, 1 * mm))
     elems.append(Paragraph(f"<b>Methodology:</b>  {method}", S["body"]))
@@ -1247,10 +1215,8 @@ def _build_rpl_couple(case: dict, S: dict) -> list:
     elems.append(Spacer(1, 5 * mm))
 
     # ── Methodology + Background + Disclaimers + Signatures ───────────────────
-    # Fix 1: Keep methodology and signatures as separate KeepTogether blocks so
-    # that a page break between them is allowed, but each block never splits internally.
     methodology_items = _methodology_block(case, S)
-    elems.append(KeepTogether(methodology_items))
+    elems.extend(methodology_items)
 
     # Fix 4: Do NOT wrap Background+Disclaimer in KeepTogether — that forces the
     # entire ~450pt block to the next page when only ~350pt remains, leaving a
@@ -1388,8 +1354,7 @@ def generate_pdf(case: dict, output_path: str) -> str:
     # Fix 4: use the numbered-canvas approach for accurate page counting.
     # total_pages starts at 1 (dummy); _NumberedCanvas updates it in save() before
     # drawing header/footer, so every page shows the real "Page X of N".
-    qr_url = case.get("qr_url", "")
-    cb = _HFCanvas(case, title, banner_h, footer_h, total_pages=1, qr_url=qr_url)
+    cb = _HFCanvas(case, title, banner_h, footer_h, total_pages=1)
     numbered_canvas_class = _make_numbered_canvas_class(cb)
     doc.build(story, canvasmaker=numbered_canvas_class)
     return output_path
