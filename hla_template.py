@@ -747,35 +747,46 @@ def _hla_table(person: dict, S: dict) -> Table:
 
 # ─── NGS: one person block (info + HLA + optional match + remarks) ────────────
 def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, patient_name: str = "") -> list:
-    # Keep info table + HLA table together as one unit; let remarks/match flow freely.
+    _raw_remarks = person.get("remarks", "")
+    _remarks_display = _clean_display(_raw_remarks) if _raw_remarks else ""
+    if _remarks_display == "—":
+        _remarks_display = ""
+    if len(_remarks_display) > 600:
+        _remarks_display = _remarks_display[:580] + "..."
+
+    _match_display = _clean_display(match_str) if match_str else ""
+    if _match_display == "—":
+        _match_display = ""
+
+    has_remarks = bool(_remarks_display)
+    has_match   = bool(_match_display)
+
+    # When remarks exist: compress the gap between demography and locus tables
+    # so that remarks + match score stay on the same page as the tables.
+    # When no remarks: preserve the full 4 mm gap.
+    inner_gap = 2 * mm if has_remarks else 4 * mm
+
     core = [
         _ngs_info_table(person, S, is_donor=is_donor, patient_name=patient_name),
-        Spacer(1, 4 * mm),
+        Spacer(1, inner_gap),
         _hla_table(person, S),
         Spacer(1, 4 * mm),
     ]
-    elems = [KeepTogether(core)]
 
-    _raw_remarks = person.get("remarks", "")
-    _remarks_display = _clean_display(_raw_remarks) if _raw_remarks else ""
-    if _remarks_display and _remarks_display != "\u2014":
-        if len(_remarks_display) > 600:
-            _remarks_display = _remarks_display[:580] + "..."
-        elems.append(Paragraph(f"<b>Remarks:</b> {_remarks_display}",
-                               ParagraphStyle("remarks_j", parent=S["body_small"],
-                                              alignment=TA_LEFT, spaceAfter=6)))
-
-    _match_display = _clean_display(match_str) if match_str else ""
-    if _match_display and _match_display != "\u2014":
-        elems.append(Spacer(1, 1 * mm))
-        elems.append(Paragraph(
+    if has_remarks:
+        core.append(Paragraph(f"<b>Remarks:</b> {_remarks_display}",
+                              ParagraphStyle("remarks_j", parent=S["body_small"],
+                                             alignment=TA_LEFT, spaceAfter=6)))
+    if has_match:
+        core.append(Spacer(1, 1 * mm))
+        core.append(Paragraph(
             f"<b>Match: {_match_display}</b>",
             ParagraphStyle("ms", fontName=_f("Calibri-Bold","Helvetica-Bold"),
                            fontSize=11, textColor=BLACK, alignment=TA_LEFT,
                            leading=13, spaceBefore=2, spaceAfter=2)
         ))
 
-    elems.append(Spacer(1, 2 * mm))
+    elems = [KeepTogether(core), Spacer(1, 2 * mm)]
     return elems
 
 

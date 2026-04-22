@@ -758,7 +758,7 @@ class HLAReportGeneratorApp(QMainWindow):
                 "report_date":     d.get("report_date", "") or patient.get("report_date", ""),
                 "match":           d.get("match", ""),
                 "hla": donor_hla, "hla_c_type": "", "remarks": d.get("remarks", ""),
-                "hospital_clinic": patient.get("hospital_clinic", ""),
+                "hospital_clinic": d.get("hospital_clinic", "") or patient.get("hospital_clinic", ""),
                 "specimen":        patient.get("specimen", "Blood - EDTA"),
             })
 
@@ -988,6 +988,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("gender_age",      "Gender / Age",    ""),
             ("diagnosis",       "Diagnosis",       ""),
             ("referred_by",     "Referred By",     ""),
+            ("hospital_clinic", "Hospital / Clinic", ""),
             ("pin",             "Donor PIN",       ""),
             ("sample_number",   "Sample Number",   ""),
             ("collection_date", "Collection Date", ""),
@@ -1721,6 +1722,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("gender_age",      "Gender / Age"),
             ("diagnosis",       "Diagnosis"),
             ("referred_by",     "Referred By"),
+            ("hospital_clinic", "Hospital / Clinic"),
             ("pin",             "PIN"),
             ("sample_number",   "Sample Number"),
             ("match",           "Match Score"),
