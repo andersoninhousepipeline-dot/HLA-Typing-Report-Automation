@@ -768,15 +768,22 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
     has_remarks = bool(_remarks_display)
     has_match   = bool(_match_display)
 
-    # No remarks and no match → widen the gap to fill vertical space naturally.
-    # Either present → compact gap so remarks/match stay close to the tables.
-    inner_gap = 2 * mm if (has_remarks or has_match) else 8 * mm
+    # 3-way inner gap (info table → HLA table):
+    #   remarks present → 2mm compact (remarks need the space below)
+    #   match only      → 4mm moderate (match is one line, a bit of breathing room)
+    #   neither         → 8mm spacious (fills vertical space on the page)
+    if has_remarks:
+        inner_gap = 2 * mm
+    elif has_match:
+        inner_gap = 4 * mm
+    else:
+        inner_gap = 8 * mm
 
     core = [
         _ngs_info_table(person, S, is_donor=is_donor, patient_name=patient_name),
         Spacer(1, inner_gap),
         _hla_table(person, S),
-        Spacer(1, 2 * mm),
+        Spacer(1, 4 * mm),   # space between HLA table bottom and any remarks/match below
     ]
 
     # Demography + HLA table kept together; remarks and match flow naturally
@@ -797,7 +804,7 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
         ))
         elems.append(HRFlowable(width="100%", thickness=0.5, color=BLACK, spaceAfter=1))
 
-    elems.append(Spacer(1, 2 * mm))
+    elems.append(Spacer(1, 6 * mm))   # inter-block gap before next person's demography
     return elems
 
 
