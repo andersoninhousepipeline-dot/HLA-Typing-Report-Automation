@@ -36,8 +36,8 @@ import hla_assets
 PAGE_W, PAGE_H = A4            # 595.28 × 841.89 pts
 MARGIN_L = 15 * mm            # ≈ 42.5 pts  → actual content starts ~43 pts
 MARGIN_R = 15 * mm
-MARGIN_T = 8  * mm
-MARGIN_B = 18 * mm
+MARGIN_T = 2  * mm
+MARGIN_B = 3  * mm
 CONTENT_W = PAGE_W - MARGIN_L - MARGIN_R   # ≈ 510 pts
 
 # ─── Colour palette — extracted precisely via PyMuPDF from all Manual-Report PDFs ─
@@ -259,8 +259,8 @@ def _styles() -> dict:
             textColor=BLACK, alignment=TA_LEFT, leading=13, spaceAfter=3
         ),
         "comment": ParagraphStyle(
-            "comment", fontName=F_CALI, fontSize=12,
-            textColor=BLACK, leading=14, spaceAfter=3
+            "comment", fontName=F_CALI, fontSize=11,
+            textColor=BLACK, leading=13, spaceAfter=3
         ),
         # ── Reference heading ─────────────────────────────────────────────────
         "ref_hdr": ParagraphStyle(
@@ -386,6 +386,13 @@ def _append_match_pct(match_str: str) -> str:
         pct = round(x / y * 100) if y else 0
         return f"{match_str} ({pct}%)"
     return match_str
+
+
+def _underline_match_score(match_str: str) -> str:
+    """Underline the score numerator in an 'N of M' match string for PDF markup."""
+    if not match_str:
+        return match_str
+    return re.sub(r'(\d+\s+of\s+\d+)', r'<u>\1</u>', match_str, count=1)
 
 
 def _capitalize_initials(name: str) -> str:
@@ -784,7 +791,7 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
     if has_match:
         elems.append(Spacer(1, 1 * mm))
         elems.append(Paragraph(
-            f"<b>Match: {_match_display}</b>",
+            f"<b>Match: {_underline_match_score(_match_display)}</b>",
             ParagraphStyle("ms", fontName=_f("Calibri-Bold","Helvetica-Bold"),
                            fontSize=11, textColor=BLACK, alignment=TA_LEFT,
                            leading=13, spaceBefore=2, spaceAfter=2)
@@ -933,7 +940,8 @@ def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict,
 
     # Comment block (can be suppressed when caller emits it separately)
     if include_comment and (match_str or match_pct):
-        bold_match = f"<b>{match_str} ({match_pct})</b>" if match_str else f"<b>{match_pct}</b>"
+        _ul_match  = _underline_match_score(match_str) if match_str else ""
+        bold_match = f"<b>{_ul_match} ({match_pct})</b>" if match_str else f"<b>{match_pct}</b>"
         comment = (
             f"<b>COMMENT:</b> HLA-A, B, C, DRB1, DQB1 &amp; DPB1 locus typing patterns of the "
             f"above individuals indicate {bold_match} matches at High resolution."
@@ -1210,7 +1218,8 @@ def _build_rpl_couple(case: dict, S: dict) -> list:
         match_pct = rpl_ref.get("match_pct", "")
         _comment_text = ""
         if match_str or match_pct:
-            bold_match = f"<b>{match_str} ({match_pct})</b>" if match_str else f"<b>{match_pct}</b>"
+            _ul_match = _underline_match_score(match_str) if match_str else ""
+            bold_match = f"<b>{_ul_match} ({match_pct})</b>" if match_str else f"<b>{match_pct}</b>"
             _comment_text = (
                 f"<b>COMMENT:</b> HLA-A, B, C, DRB1, DQB1 &amp; DPB1 locus typing patterns of the "
                 f"above individuals indicate {bold_match} matches at High resolution."
