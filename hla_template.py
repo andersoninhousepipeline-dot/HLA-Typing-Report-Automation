@@ -653,7 +653,7 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
     left_rows = [
         [L(f"{pf} Name"), C(), V(person.get("name", ""))],
         [L("Gender / Age"), C(), V(_normalize_age(person.get("gender_age", "")))],
-        [L("Hospital MR No"), C(), R(person.get("hospital_mr_no", ""))],
+        [L("Hospital MR No"), C(), R(person.get("hospital_mr_no", "") or "NA")],
     ]
 
     # Diagnosis for patient only, not donor
@@ -770,23 +770,27 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
         _ngs_info_table(person, S, is_donor=is_donor, patient_name=patient_name),
         Spacer(1, inner_gap),
         _hla_table(person, S),
-        Spacer(1, 4 * mm),
+        Spacer(1, 2 * mm),
     ]
 
+    # Demography + HLA table kept together; remarks and match flow naturally
+    # after the core block so long remarks don't push the next person to a new page.
+    elems = [KeepTogether(core)]
+
     if has_remarks:
-        core.append(Paragraph(f"<b>Remarks:</b> {_remarks_display}",
-                              ParagraphStyle("remarks_j", parent=S["body_small"],
-                                             alignment=TA_LEFT, spaceAfter=6)))
+        elems.append(Paragraph(f"<b>Remarks:</b> {_remarks_display}",
+                               ParagraphStyle("remarks_j", parent=S["body_small"],
+                                              alignment=TA_LEFT, spaceAfter=4)))
     if has_match:
-        core.append(Spacer(1, 1 * mm))
-        core.append(Paragraph(
+        elems.append(Spacer(1, 1 * mm))
+        elems.append(Paragraph(
             f"<b>Match: {_match_display}</b>",
             ParagraphStyle("ms", fontName=_f("Calibri-Bold","Helvetica-Bold"),
                            fontSize=11, textColor=BLACK, alignment=TA_LEFT,
                            leading=13, spaceBefore=2, spaceAfter=2)
         ))
 
-    elems = [KeepTogether(core), Spacer(1, 2 * mm)]
+    elems.append(Spacer(1, 2 * mm))
     return elems
 
 
@@ -820,16 +824,19 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict, comment_text: str = "
     # No header row — reference PDF starts directly with demographic rows (confirmed by fitz audit)
 
     # Demographic rows - patient has diagnosis, donor does not
-    # Patient labels (12 rows with diagnosis)
+    # Patient labels (13 rows with diagnosis + hospital_mr_no)
     p_labels = [
         "Name", "Relationship stated/\nClaimed", "Age/Gender",
+        "Hospital MR No",
         "Diagnosis", "Referred By", "Hospital/Clinic",
         "PIN", "Sample Number", "Specimen",
         "Collection Date", "Sample receipt date", "Report date",
     ]
     p_vals = [
         patient.get("name", ""), patient.get("relationship", "") or "NA",
-        _normalize_age(patient.get("gender_age", "")), patient.get("diagnosis") or "NA",
+        _normalize_age(patient.get("gender_age", "")),
+        patient.get("hospital_mr_no", "") or "NA",
+        patient.get("diagnosis") or "NA",
         patient.get("referred_by", ""), patient.get("hospital_clinic", ""),
         patient.get("pin", ""), patient.get("sample_number", ""),
         patient.get("specimen") or "Blood - EDTA",
@@ -837,16 +844,19 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict, comment_text: str = "
         patient.get("report_date", ""),
     ]
 
-    # Donor labels (12 rows, matching patient — including diagnosis)
+    # Donor labels (13 rows, matching patient)
     d_labels = [
         "Name", "Relationship stated/\nClaimed", "Age/Gender",
+        "Hospital MR No",
         "Diagnosis", "Referred By", "Hospital/Clinic",
         "PIN", "Sample Number", "Specimen",
         "Collection Date", "Sample receipt date", "Report date",
     ]
     d_vals = [
         donor.get("name", ""), donor.get("relationship", "") or "NA",
-        _normalize_age(donor.get("gender_age", "")), donor.get("diagnosis") or "NA",
+        _normalize_age(donor.get("gender_age", "")),
+        donor.get("hospital_mr_no", "") or "NA",
+        donor.get("diagnosis") or "NA",
         donor.get("referred_by", ""), donor.get("hospital_clinic", ""),
         donor.get("pin", ""), donor.get("sample_number", ""),
         donor.get("specimen") or "Blood - EDTA",
@@ -854,7 +864,7 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict, comment_text: str = "
         donor.get("report_date", ""),
     ]
     demo_start = 0
-    # Build rows - both patient and donor have 12 rows
+    # Build rows - both patient and donor have 13 rows
     for i in range(len(p_labels)):
         r = demo_start + i
         p_lbl = p_labels[i]

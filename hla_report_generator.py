@@ -464,7 +464,7 @@ class HLAReportGeneratorApp(QMainWindow):
         PAT_FIELDS = [
             ("patient_name",    "Patient Name *",       ""),
             ("gender_age",      "Gender / Age",         ""),
-            ("hospital_mr_no",  "Hospital MR No.",      ""),
+            ("hospital_mr_no",  "Hospital MR No.",      "NA"),
             ("diagnosis",       "Diagnosis",            ""),
             ("referred_by",     "Referred By",          ""),
             ("hospital_clinic", "Hospital / Clinic",    ""),
@@ -749,6 +749,7 @@ class HLAReportGeneratorApp(QMainWindow):
                 "name":            d.get("name", ""),
                 "relationship":    d.get("relationship", ""),
                 "gender_age":      d.get("gender_age", ""),
+                "hospital_mr_no":  d.get("hospital_mr_no", "NA") or "NA",
                 "diagnosis":       d.get("diagnosis", "") or patient.get("diagnosis", ""),
                 "referred_by":     d.get("referred_by", "") or patient.get("referred_by", ""),
                 "pin":             d.get("pin", ""),
@@ -783,7 +784,13 @@ class HLAReportGeneratorApp(QMainWindow):
                 calc["hla_c_patient"] = new_pc
                 calc["hla_c_donor"]   = new_dc
                 for k, v in calc.items():
-                    if k in ref and not ref[k]:   # only fill blank fields
+                    if k in ("match_str", "match_pct") and donors[0].get("match", "").strip():
+                        # Always sync match from donor's Match Score field; update widget too
+                        ref[k] = v
+                        w = self._manual_rpl_fields.get(k)
+                        if w and w.text().strip() != v:
+                            w.blockSignals(True); w.setText(v); w.blockSignals(False)
+                    elif k in ref and not ref[k]:
                         ref[k] = v
                 # Always push HLA-C supertypes back to UI
                 for ui_key, val in (("hla_c_patient", new_pc), ("hla_c_donor", new_dc)):
@@ -986,6 +993,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("name",            "Donor Name",      ""),
             ("relationship",    "Relationship",    ""),
             ("gender_age",      "Gender / Age",    ""),
+            ("hospital_mr_no",  "Hospital MR No.", "NA"),
             ("diagnosis",       "Diagnosis",       ""),
             ("referred_by",     "Referred By",     ""),
             ("hospital_clinic", "Hospital / Clinic", ""),
@@ -1139,6 +1147,7 @@ class HLAReportGeneratorApp(QMainWindow):
                             "name":            d.get("name", ""),
                             "relationship":    d.get("relationship", ""),
                             "gender_age":      d.get("gender_age", ""),
+                            "hospital_mr_no":  d.get("hospital_mr_no", "NA") or "NA",
                             "diagnosis":       d.get("diagnosis", ""),
                             "referred_by":     d.get("referred_by", ""),
                             "pin":             d.get("pin", ""),
@@ -1598,7 +1607,8 @@ class HLAReportGeneratorApp(QMainWindow):
             ("remarks",          "Remarks"),
         ]
         for key, lbl in PAT_FIELDS:
-            w = QLineEdit(str(p.get(key, "")))
+            _def = "NA" if key == "hospital_mr_no" else ""
+            w = QLineEdit(str(p.get(key, _def) or _def))
             w.setFixedHeight(24)
             if "date" in key.lower(): w.setPlaceholderText("DD-MM-YYYY")
             w.textChanged.connect(self._on_bulk_field_debounced)
@@ -1720,6 +1730,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("name",            "Name"),
             ("relationship",    "Relationship"),
             ("gender_age",      "Gender / Age"),
+            ("hospital_mr_no",  "Hospital MR No."),
             ("diagnosis",       "Diagnosis"),
             ("referred_by",     "Referred By"),
             ("hospital_clinic", "Hospital / Clinic"),
@@ -1744,7 +1755,9 @@ class HLAReportGeneratorApp(QMainWindow):
             d_form.setContentsMargins(4, 4, 4, 2)
             d_fields = {}
             for key, lbl in DONOR_FIELDS_DEF:
-                w = QLineEdit(str(d.get(key, ""))); w.setFixedHeight(24)
+                _default = "NA" if key == "hospital_mr_no" else ""
+                _val = str(d.get(key, _default) or _default)
+                w = QLineEdit(_val); w.setFixedHeight(24)
                 if "date" in key.lower(): w.setPlaceholderText("DD-MM-YYYY")
                 w.textChanged.connect(self._on_bulk_field_debounced)
                 d_fields[key] = w; d_form.addRow(lbl + ":", w)
@@ -1883,7 +1896,8 @@ class HLAReportGeneratorApp(QMainWindow):
         # If alleles changed, update the CALCULATED fields in the UI.
         # We detect change by comparing current HLA to a cached version.
         current_hla_str = json.dumps(case["patient"].get("hla", {})) + \
-                          json.dumps([d.get("hla", {}) for d in case.get("donors", [])])
+                          json.dumps([d.get("hla", {}) for d in case.get("donors", [])]) + \
+                          json.dumps([d.get("match", "") for d in case.get("donors", [])])
         
         last_hla = case.get("_last_hla_sync", "")
         if current_hla_str != last_hla:
@@ -1932,6 +1946,7 @@ class HLAReportGeneratorApp(QMainWindow):
         patient = case.get("patient", {})
         case["donors"].append({
             "name": "", "relationship": "", "gender_age": "",
+            "hospital_mr_no": "NA",
             "pin": "", "sample_number": "", "match": "",
             "remarks": "",
             "collection_date": "", "receipt_date": "",
