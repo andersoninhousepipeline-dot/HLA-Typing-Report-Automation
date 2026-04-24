@@ -791,11 +791,12 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
     if has_match:
         elems.append(Spacer(1, 1 * mm))
         elems.append(Paragraph(
-            f"<b>Match: {_underline_match_score(_match_display)}</b>",
+            f"<b>Match: {_match_display}</b>",
             ParagraphStyle("ms", fontName=_f("Calibri-Bold","Helvetica-Bold"),
                            fontSize=11, textColor=BLACK, alignment=TA_LEFT,
                            leading=13, spaceBefore=2, spaceAfter=2)
         ))
+        elems.append(HRFlowable(width="100%", thickness=0.5, color=BLACK, spaceAfter=1))
 
     elems.append(Spacer(1, 2 * mm))
     return elems
@@ -940,8 +941,7 @@ def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict,
 
     # Comment block (can be suppressed when caller emits it separately)
     if include_comment and (match_str or match_pct):
-        _ul_match  = _underline_match_score(match_str) if match_str else ""
-        bold_match = f"<b>{_ul_match} ({match_pct})</b>" if match_str else f"<b>{match_pct}</b>"
+        bold_match = f"<b>{match_str} ({match_pct})</b>" if match_str else f"<b>{match_pct}</b>"
         comment = (
             f"<b>COMMENT:</b> HLA-A, B, C, DRB1, DQB1 &amp; DPB1 locus typing patterns of the "
             f"above individuals indicate {bold_match} matches at High resolution."
@@ -1218,8 +1218,7 @@ def _build_rpl_couple(case: dict, S: dict) -> list:
         match_pct = rpl_ref.get("match_pct", "")
         _comment_text = ""
         if match_str or match_pct:
-            _ul_match = _underline_match_score(match_str) if match_str else ""
-            bold_match = f"<b>{_ul_match} ({match_pct})</b>" if match_str else f"<b>{match_pct}</b>"
+            bold_match = f"<b>{match_str} ({match_pct})</b>" if match_str else f"<b>{match_pct}</b>"
             _comment_text = (
                 f"<b>COMMENT:</b> HLA-A, B, C, DRB1, DQB1 &amp; DPB1 locus typing patterns of the "
                 f"above individuals indicate {bold_match} matches at High resolution."
