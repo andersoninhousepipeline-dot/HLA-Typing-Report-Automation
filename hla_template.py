@@ -768,10 +768,9 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
     has_remarks = bool(_remarks_display)
     has_match   = bool(_match_display)
 
-    # When remarks exist: compress the gap between demography and locus tables
-    # so that remarks + match score stay on the same page as the tables.
-    # When no remarks: preserve the full 4 mm gap.
-    inner_gap = 2 * mm if has_remarks else 4 * mm
+    # No remarks and no match → widen the gap to fill vertical space naturally.
+    # Either present → compact gap so remarks/match stay close to the tables.
+    inner_gap = 2 * mm if (has_remarks or has_match) else 8 * mm
 
     core = [
         _ngs_info_table(person, S, is_donor=is_donor, patient_name=patient_name),
