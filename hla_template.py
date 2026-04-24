@@ -1032,15 +1032,15 @@ def _methodology_block(case: dict, S: dict) -> list:
 
     elems = [Spacer(1, 2 * mm)]
 
-    # Keep IMGT heading + Coverage heading + all coverage lines together so they
-    # never break across pages.
-    imgt_coverage = [
+    # Keep IMGT heading + Coverage heading paired so they never orphan,
+    # but let the individual coverage lines flow naturally into remaining page space.
+    elems.append(KeepTogether([
         Paragraph(f"<b>IMGT/HLA Release</b> {imgt}", S["body"]),
         Paragraph("<b>Coverage</b>", S["body"]),
-    ]
-    for line in COVERAGE_LINES:
-        imgt_coverage.append(Paragraph(line, S["coverage"]))
-    elems.append(KeepTogether(imgt_coverage))
+        Paragraph(COVERAGE_LINES[0], S["coverage"]),
+    ]))
+    for line in COVERAGE_LINES[1:]:
+        elems.append(Paragraph(line, S["coverage"]))
 
     elems.append(Spacer(1, 1 * mm))
     elems.append(Paragraph(f"<b>Methodology:</b>  {method}", S["body"]))
