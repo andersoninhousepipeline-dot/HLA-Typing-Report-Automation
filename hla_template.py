@@ -536,24 +536,21 @@ def _title_case(text: str) -> str:
     return result
 
 
-# ─── NABL seal extracted from the NABL header banner (cached) ────────────────
+# ─── NABL seal (NABL_SEAL_B64) processed via PIL for correct rendering ────────
 _nabl_seal_bytes_cache: bytes | None = None
 
 def _get_nabl_seal_bytes() -> bytes:
-    """Crop the NABL seal out of HEADER_NABL_B64 and return PNG bytes.
-    The seal lives at x=580–740, full height of the 1426×170 header image.
-    Result is cached so the crop only runs once per process.
+    """Return NABL_SEAL_B64 as RGBA PNG bytes (cached).
+    Raw PNG from hla_assets renders black on canvas; PIL RGBA conversion fixes it.
     """
     from PIL import Image as PILImage
     global _nabl_seal_bytes_cache
     if _nabl_seal_bytes_cache is not None:
         return _nabl_seal_bytes_cache
-    raw = hla_assets.get_image_bytes(hla_assets.HEADER_NABL_B64)
+    raw = hla_assets.get_image_bytes(hla_assets.NABL_SEAL_B64)
     img = PILImage.open(io.BytesIO(raw)).convert("RGBA")
-    # x=580–740 isolates the seal column; y=38–135 skips the orange+blue bars at top
-    seal = img.crop((580, 38, 740, 135))
     buf = io.BytesIO()
-    seal.save(buf, format="PNG")
+    img.save(buf, format="PNG")
     _nabl_seal_bytes_cache = buf.getvalue()
     return _nabl_seal_bytes_cache
 
@@ -615,16 +612,15 @@ class _HFCanvas:
         if nabl:
             _PAGE_NUM_AREA = 4 * mm
             _qr_bottom = MARGIN_B + _PAGE_NUM_AREA + self.footer_h + 4 * mm
-            # Crop is 160×97 px; fit height to QR zone with a small margin
-            _seal_h = QR_ZONE - 4 * mm
-            _seal_w = _seal_h * (160 / 97)
-            _seal_x = MARGIN_L + CONTENT_W - _seal_w   # flush right of content
-            _seal_y = _qr_bottom + (QR_ZONE - _seal_h) / 2
+            # Square bounding box — seal is circular, no stretching
+            _seal_size = 22 * mm
+            _seal_x = MARGIN_L + CONTENT_W - _seal_size   # flush right of content
+            _seal_y = _qr_bottom + (QR_ZONE - _seal_size) / 2
             raw_nabl = _get_nabl_seal_bytes()
             canvas.drawImage(
                 ImageReader(io.BytesIO(raw_nabl)),
                 _seal_x, _seal_y,
-                width=_seal_w, height=_seal_h,
+                width=_seal_size, height=_seal_size,
                 preserveAspectRatio=True, mask="auto"
             )
 
