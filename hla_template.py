@@ -550,8 +550,8 @@ def _get_nabl_seal_bytes() -> bytes:
         return _nabl_seal_bytes_cache
     raw = hla_assets.get_image_bytes(hla_assets.HEADER_NABL_B64)
     img  = PILImage.open(io.BytesIO(raw)).convert("RGBA")
-    # Crop a square region centred on the seal (97×97 px)
-    seal = img.crop((612, 38, 709, 135))
+    # Crop a square region starting from the original left edge (97×97 px)
+    seal = img.crop((580, 38, 677, 135))
     buf  = io.BytesIO()
     seal.save(buf, format="PNG")
     _nabl_seal_bytes_cache = buf.getvalue()
