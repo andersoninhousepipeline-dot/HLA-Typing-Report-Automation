@@ -1384,8 +1384,9 @@ def generate_pdf(case: dict, output_path: str) -> str:
     # content area position is identical whether or not logos are shown.
     from PIL import Image as PILImage
 
-    b64  = hla_assets.HEADER_NABL_B64 if nabl else hla_assets.HEADER_NONNABL_B64
-    raw  = hla_assets.get_image_bytes(b64)
+    # Always measure from HEADER_NONNABL_B64 — that is the image actually drawn
+    # on every page (NABL seal moved to footer QR zone, not embedded in header).
+    raw  = hla_assets.get_image_bytes(hla_assets.HEADER_NONNABL_B64)
     pil  = PILImage.open(io.BytesIO(raw))
     ow, oh   = pil.size
     banner_h = (oh / ow) * CONTENT_W
