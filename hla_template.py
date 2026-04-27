@@ -1,4 +1,4 @@
-"""
+﻿"""
 hla_template.py  —  HLA Typing Report PDF Generator
 Faithful replica of Anderson Diagnostic Services manual PDFs.
 Supports three report types that are auto-selected by hla_data_parser:
@@ -39,6 +39,7 @@ MARGIN_R = 15 * mm
 MARGIN_T = 2  * mm
 MARGIN_B = 3  * mm
 CONTENT_W = PAGE_W - MARGIN_L - MARGIN_R   # ≈ 510 pts
+QR_ZONE   = 30 * mm   # blank strip reserved above footer on every page for external QR overlay
 
 # ─── Colour palette — extracted precisely via PyMuPDF from all Manual-Report PDFs ─
 # NGS
@@ -643,7 +644,7 @@ def _ngs_section_bar(text: str, S: dict) -> Table:
 # Widths proportioned from PGTA reference: [108, 12, 161, 108, 12, 89] on 490pt
 # Scaled to CONTENT_W ≈ 510pt: [112, 13, 168, 112, 13, 92]
 
-def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name: str = "") -> Table:
+def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name: str = "", compact: bool = False) -> Table:
     pf = "Donor" if is_donor else "Patient"
     cw = CONTENT_W
 
@@ -691,11 +692,12 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
 
     rows = [lr + rr for lr, rr in zip(left_rows, right_rows)]
     t = Table(rows, colWidths=col_w)
+    _vpad = 4 if compact else 7
     t.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, -1), C_INFO_BG),
         ("VALIGN",        (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING",    (0, 0), (-1, -1), 7),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING",    (0, 0), (-1, -1), _vpad),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), _vpad),
         ("LEFTPADDING",   (0, 0), (-1, -1), 4),
         ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
         # Colon columns: no left padding so colon sits flush next to label
@@ -768,43 +770,62 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
     has_remarks = bool(_remarks_display)
     has_match   = bool(_match_display)
 
-    # 3-way inner gap (info table → HLA table):
-    #   remarks present → 2mm compact (remarks need the space below)
-    #   match only      → 4mm moderate (match is one line, a bit of breathing room)
-    #   neither         → 8mm spacious (fills vertical space on the page)
-    if has_remarks:
-        inner_gap = 2 * mm
-    elif has_match:
-        inner_gap = 4 * mm
-    else:
-        inner_gap = 8 * mm
+    # Long remarks = more than ~3 lines (~255 chars at 10pt Calibri in CONTENT_W).
+    # When long, tighten all spacing and shrink demography padding so remarks
+    # can fit on the same page rather than spilling to the next.
+    long_remarks = has_remarks and len(_remarks_display) > 220
 
-    core = [
-        _ngs_info_table(person, S, is_donor=is_donor, patient_name=patient_name),
+    if long_remarks:
+        inner_gap        = 1 * mm
+        post_hla_spacer  = 2 * mm
+        inter_block_gap  = 2 * mm
+        compact_info     = True
+    elif has_remarks:
+        inner_gap        = 2 * mm
+        post_hla_spacer  = 3 * mm
+        inter_block_gap  = 4 * mm
+        compact_info     = False
+    elif has_match:
+        inner_gap        = 4 * mm
+        post_hla_spacer  = 4 * mm
+        inter_block_gap  = 6 * mm
+        compact_info     = False
+    else:
+        inner_gap        = 8 * mm
+        post_hla_spacer  = 4 * mm
+        inter_block_gap  = 6 * mm
+        compact_info     = False
+
+    # Both tables kept together as individual units — each moves to the next page
+    # intact if it doesn't fit, but they are independent so one doesn't force the other.
+    elems = [
+        KeepTogether([_ngs_info_table(person, S, is_donor=is_donor, patient_name=patient_name,
+                                      compact=compact_info)]),
         Spacer(1, inner_gap),
-        _hla_table(person, S),
-        Spacer(1, 4 * mm),   # space between HLA table bottom and any remarks/match below
+        KeepTogether([_hla_table(person, S)]),
+        Spacer(1, post_hla_spacer),
     ]
 
-    # Demography + HLA table kept together; remarks and match flow naturally
-    # after the core block so long remarks don't push the next person to a new page.
-    elems = [KeepTogether(core)]
-
+    # Remarks + match kept together so they never split across pages and
+    # move as a unit into the QR-free zone above the footer.
+    tail = []
     if has_remarks:
-        elems.append(Paragraph(f"<b>Remarks:</b> {_remarks_display}",
-                               ParagraphStyle("remarks_j", parent=S["body_small"],
-                                              alignment=TA_LEFT, spaceAfter=4)))
+        tail.append(Paragraph(f"<b>Remarks:</b> {_remarks_display}",
+                              ParagraphStyle("remarks_j", parent=S["body_small"],
+                                             alignment=TA_LEFT, spaceAfter=4)))
     if has_match:
-        elems.append(Spacer(1, 1 * mm))
-        elems.append(Paragraph(
+        tail.append(Spacer(1, 1 * mm))
+        tail.append(Paragraph(
             f"<b>Match: {_match_display}</b>",
             ParagraphStyle("ms", fontName=_f("Calibri-Bold","Helvetica-Bold"),
                            fontSize=11, textColor=BLACK, alignment=TA_LEFT,
                            leading=13, spaceBefore=2, spaceAfter=2)
         ))
-        elems.append(HRFlowable(width="100%", thickness=0.5, color=BLACK, spaceAfter=1))
+        tail.append(HRFlowable(width="100%", thickness=0.5, color=BLACK, spaceAfter=1))
+    if tail:
+        elems.append(KeepTogether(tail))
 
-    elems.append(Spacer(1, 6 * mm))   # inter-block gap before next person's demography
+    elems.append(Spacer(1, inter_block_gap))
     return elems
 
 
@@ -1036,27 +1057,22 @@ def _methodology_block(case: dict, S: dict) -> list:
     method = case.get("methodology", "") or (METHODOLOGY_MINISEQ if nabl else METHODOLOGY_SURFSEQ)
     status = case.get("typing_status", "Complete")
 
-    elems = [Spacer(1, 2 * mm)]
-
-    # Keep IMGT heading + Coverage heading paired so they never orphan,
-    # but let the individual coverage lines flow naturally into remaining page space.
-    elems.append(KeepTogether([
+    # Collect entire block then wrap in KeepTogether so it never splits across pages.
+    block = [
+        Spacer(1, 2 * mm),
         Paragraph(f"<b>IMGT/HLA Release</b> {imgt}", S["body"]),
         Paragraph("<b>Coverage</b>", S["body"]),
-        Paragraph(COVERAGE_LINES[0], S["coverage"]),
-    ]))
-    for line in COVERAGE_LINES[1:]:
-        elems.append(Paragraph(line, S["coverage"]))
+    ]
+    for line in COVERAGE_LINES:
+        block.append(Paragraph(line, S["coverage"]))
+    block.append(Spacer(1, 1 * mm))
+    block.append(Paragraph(f"<b>Methodology:</b>  {method}", S["body"]))
+    block.append(Spacer(1, 1 * mm))
+    block.append(HRFlowable(width="100%", thickness=0.5, color=BLACK))
+    block.append(Spacer(1, 1 * mm))
+    block.append(Paragraph(f"<b>Typing Status:</b>  {status}", S["body"]))
 
-    elems.append(Spacer(1, 1 * mm))
-    elems.append(Paragraph(f"<b>Methodology:</b>  {method}", S["body"]))
-    elems.append(Spacer(1, 1 * mm))
-    # Horizontal line after Methodology (as per reference templates)
-    elems.append(HRFlowable(width="100%", thickness=0.5, color=BLACK))
-    elems.append(Spacer(1, 1 * mm))
-    elems.append(Paragraph(f"<b>Typing Status:</b>  {status}", S["body"]))
-    # Line after methodology matches reference templates
-    return elems
+    return [KeepTogether(block)]
 
 
 # ─── Signature block ──────────────────────────────────────────────────────────
@@ -1075,7 +1091,7 @@ def _signature_block(signatories: list, S: dict) -> list:
     cols = []
     for sig in signatories:
         sign_data = hla_assets.get_image_bytes(sig["sign_b64"])
-        sign_img  = Image(io.BytesIO(sign_data), width=30 * mm, height=14 * mm)
+        sign_img  = Image(io.BytesIO(sign_data), width=35 * mm, height=16 * mm)
         cell_rows = [
             [sign_img],
             [Paragraph(sig.get("name",  ""), S["sign_name"])],
@@ -1087,7 +1103,7 @@ def _signature_block(signatories: list, S: dict) -> list:
             _seal_io  = io.BytesIO(seal_data)
             _seal_tmp = Image(_seal_io)
             _sw, _sh  = _seal_tmp.imageWidth, _seal_tmp.imageHeight
-            _max      = 40 * mm   # ~43 % larger than previous 28 mm
+            _max      = 62 * mm
             # Preserve aspect ratio — scale so the longer dimension equals _max
             if _sw >= _sh:
                 seal_img = Image(io.BytesIO(seal_data), width=_max, height=_max * _sh / _sw)
@@ -1203,16 +1219,23 @@ def _build_rpl_couple(case: dict, S: dict) -> list:
 
     elems = []
 
-    # Helper: emit a person's remarks if non-empty.
-    def _emit_remarks(person: dict, label: str):
+    # Helper: return a person's remarks as a markup string for embedding in a table cell.
+    def _remarks_markup(person: dict, label: str = "Remarks") -> str:
         raw = person.get("remarks", "")
         if not raw or not str(raw).strip():
-            return
+            return ""
         disp = _clean_display(raw)
-        if disp and disp != "\u2014":
-            if len(disp) > 600:
-                disp = disp[:580] + "..."
-            elems.append(Paragraph(f"<b>{label}:</b> {disp}",
+        if not disp or disp == "\u2014":
+            return ""
+        if len(disp) > 600:
+            disp = disp[:580] + "..."
+        return f"<b>{label}:</b> {disp}"
+
+    # Helper: emit a person's remarks as a standalone Paragraph (single-person case).
+    def _emit_remarks(person: dict, label: str):
+        markup = _remarks_markup(person, label)
+        if markup:
+            elems.append(Paragraph(markup,
                                    ParagraphStyle("remarks_j", parent=S["body_small"],
                                                   fontSize=12, leading=14,
                                                   alignment=TA_LEFT, spaceAfter=6)))
@@ -1230,13 +1253,18 @@ def _build_rpl_couple(case: dict, S: dict) -> list:
                 f"above individuals indicate {bold_match} matches at High resolution."
             )
 
-        # Keep couple table (with embedded comment row) together.
+        # Append patient/donor remarks into the same table cell as the comment.
+        remark_parts = [r for r in [
+            _remarks_markup(patient, "Remarks (Patient)"),
+            _remarks_markup(donor,   "Remarks (Donor)"),
+        ] if r]
+        if remark_parts:
+            suffix = "<br/>".join(remark_parts)
+            _comment_text = (_comment_text + f"<br/>{suffix}") if _comment_text else suffix
+
+        # Keep couple table (with embedded comment+remarks row) together.
         elems.append(KeepTogether([_rpl_couple_table(patient, donor, S, comment_text=_comment_text),
                                    Spacer(1, 3 * mm)]))
-
-        # Patient/donor remarks immediately below the table.
-        _emit_remarks(patient, "Remarks (Patient)")
-        _emit_remarks(donor,   "Remarks (Donor)")
 
         # Reference + HLA-C tables (no separate comment needed).
         elems += _rpl_reference_section(rpl_ref, patient, donor, S, include_comment=False)
@@ -1362,9 +1390,10 @@ def generate_pdf(case: dict, output_path: str) -> str:
     footer_h = (fh / fw) * CONTENT_W
 
     top_margin    = MARGIN_T + banner_h + 4 * mm
-    # Fix 2: extra 4 mm below footer bar for the page number text
+    # extra 4 mm below footer bar for the page number text
     _PAGE_NUM_AREA = 4 * mm
-    bottom_margin = MARGIN_B + _PAGE_NUM_AREA + footer_h + 4 * mm
+    # QR_ZONE: blank strip above footer reserved for external QR-code overlay on every page
+    bottom_margin = MARGIN_B + _PAGE_NUM_AREA + footer_h + 4 * mm + QR_ZONE
 
     doc = SimpleDocTemplate(
         output_path,

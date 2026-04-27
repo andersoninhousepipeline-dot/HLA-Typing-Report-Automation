@@ -107,7 +107,7 @@ TEMPLATE_TO_RTYPE = {t["name"]:        t["report_type"] for t in REPORT_TEMPLATE
 RTYPE_TO_TEMPLATE = {t["report_type"]: t["name"]        for t in REPORT_TEMPLATES}
 
 DEFAULT_SIGNATORIES = [
-    {"name": "Ms. S Aruna Devi",      "title": "Team Lead, Reviewed By"},
+    {"name": "Ms. S Aruna Devi",      "title": "Team Lead – Transplant Immunogenetics<br/>(Reviewed By)"},
     {"name": "Nikhala Shree S, Ph.D", "title": "Molecular Biologist"},
     {"name": "Dr. B. Rayvathy",        "title": "Consultant Microbiologist"},
 ]
@@ -2517,10 +2517,24 @@ case — edits are flushed automatically).</p>
     # SHARED HELPERS
     # ══════════════════════════════════════════════════════════════════════════
     def _get_signatories(self):
+        # Build a lookup of canonical titles from DEFAULT_SIGNATORIES
+        _canonical = {s["name"]: s["title"] for s in DEFAULT_SIGNATORIES}
         raw = self.qsettings.value("signatories", "")
         if raw:
-            try: return json.loads(raw)
-            except Exception: pass
+            try:
+                loaded = json.loads(raw)
+                # Migrate any stale titles to the current canonical value
+                changed = False
+                for sig in loaded:
+                    canonical = _canonical.get(sig.get("name", ""))
+                    if canonical and sig.get("title") != canonical:
+                        sig["title"] = canonical
+                        changed = True
+                if changed:
+                    self.qsettings.setValue("signatories", json.dumps(loaded))
+                return loaded
+            except Exception:
+                pass
         return copy.deepcopy(DEFAULT_SIGNATORIES)
 
     def _build_case(self, rtype, nabl, with_logo, sig_stamp, patient, donors):

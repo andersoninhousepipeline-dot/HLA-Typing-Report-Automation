@@ -2666,23 +2666,23 @@ def get_image_bytes(b64_var):
 
 # Signatory defaults per report type
 SIGNATORIES_SINGLE = [
-    {"name": "Ms. S Aruna Devi",    "title": "Team Lead, Reviewed By",    "sign_b64": SIGN_1_B64,         "is_png": False},
+    {"name": "Ms. S Aruna Devi",    "title": "Team Lead – Transplant Immunogenetics<br/>(Reviewed By)",    "sign_b64": SIGN_1_B64,         "is_png": False},
     {"name": "Nikhala Shree S, Ph.D","title": "Molecular Biologist",       "sign_b64": SIGN_2_B64,         "is_png": True},
     {"name": "Dr. B. Rayvathy",      "title": "Consultant Microbiologist", "sign_b64": SIGN_3_B64,         "is_png": False},
 ]
 
 SIGNATORIES_DONOR = [
-    {"name": "Ms. S Aruna Devi",    "title": "Team Lead, Reviewed By", "sign_b64": SIGN_1_B64,         "is_png": False},
+    {"name": "Ms. S Aruna Devi",    "title": "Team Lead – Transplant Immunogenetics<br/>(Reviewed By)", "sign_b64": SIGN_1_B64,         "is_png": False},
     {"name": "Nikhala Shree S, Ph.D","title": "Molecular Biologist",    "sign_b64": SIGN_2_B64,         "is_png": True},
 ]
 
 SIGNATORIES_NONNABL_DONOR = [
-    {"name": "Ms. S Aruna Devi",    "title": "Team Lead, Reviewed By", "sign_b64": SIGN_NONNABL_1_B64, "is_png": False},
+    {"name": "Ms. S Aruna Devi",    "title": "Team Lead – Transplant Immunogenetics<br/>(Reviewed By)", "sign_b64": SIGN_NONNABL_1_B64, "is_png": False},
     {"name": "Nikhala Shree S, Ph.D","title": "Molecular Biologist",    "sign_b64": SIGN_NONNABL_2_B64, "is_png": False},
 ]
 
 SIGNATORIES_RPL = [
-    {"name": "Ms. S Aruna Devi",    "title": "Team Lead, Reviewed By", "sign_b64": SIGN_1_B64,  "is_png": False},
+    {"name": "Ms. S Aruna Devi",    "title": "Team Lead – Transplant Immunogenetics<br/>(Reviewed By)", "sign_b64": SIGN_1_B64,  "is_png": False},
     {"name": "Nikhala Shree S, Ph.D","title": "Molecular Biologist",    "sign_b64": SIGN_2_B64,  "is_png": True},
 ]
 
@@ -2708,7 +2708,7 @@ SEAL_REVATHY_B64 = "/9j/4AAQSkZJRgABAQEAYABgAAD/4QBaRXhpZgAATU0AKgAAAAgABQMBAAUA
 
 # ─── Updated signatories using named signs ────────────────────────────────────
 SIGNATORIES_NAMED = [
-    {"name": "Ms. S Aruna Devi",       "title": "Team Lead, Reviewed By",    "sign_b64": SIGN_ARUNA_DEVI_B64,    "is_png": False},
+    {"name": "Ms. S Aruna Devi",       "title": "Team Lead – Transplant Immunogenetics<br/>(Reviewed By)",    "sign_b64": SIGN_ARUNA_DEVI_B64,    "is_png": False},
     {"name": "Nikhala Shree S, Ph.D",  "title": "Molecular Biologist",       "sign_b64": SIGN_NIKHALA_SHREE_B64, "is_png": False},
     {"name": "Dr. B. Rayvathy",        "title": "Consultant Microbiologist", "sign_b64": SIGN_RAYVATHY_B64,      "is_png": True},
 ]
