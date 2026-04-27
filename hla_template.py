@@ -621,6 +621,22 @@ class _HFCanvas:
             )
         # Without logo: footer image and page numbers are omitted; space is still reserved.
 
+        # ── NABL seal — right end of QR zone, every page ────────────────────
+        if nabl:
+            _PAGE_NUM_AREA = 4 * mm
+            # QR zone sits directly above the footer bar + 4 mm gap
+            _qr_bottom = MARGIN_B + _PAGE_NUM_AREA + self.footer_h + 4 * mm
+            _seal_size  = 25 * mm   # roughly square circular seal
+            _seal_x = MARGIN_L + CONTENT_W - _seal_size          # flush right of content
+            _seal_y = _qr_bottom + (QR_ZONE - _seal_size) / 2    # vertically centred in QR zone
+            raw_nabl = hla_assets.get_image_bytes(hla_assets.NABL_SEAL_B64)
+            canvas.drawImage(
+                ImageReader(io.BytesIO(raw_nabl)),
+                _seal_x, _seal_y,
+                width=_seal_size, height=_seal_size,
+                preserveAspectRatio=True, mask="auto"
+            )
+
         canvas.restoreState()
 
 
