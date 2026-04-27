@@ -536,21 +536,24 @@ def _title_case(text: str) -> str:
     return result
 
 
-# ─── NABL seal (NABL_SEAL_B64) processed via PIL for correct rendering ────────
+# ─── NABL seal cropped from the NABL header banner (cached) ──────────────────
 _nabl_seal_bytes_cache: bytes | None = None
 
 def _get_nabl_seal_bytes() -> bytes:
-    """Return NABL_SEAL_B64 as RGBA PNG bytes (cached).
-    Raw PNG from hla_assets renders black on canvas; PIL RGBA conversion fixes it.
+    """Crop the NABL seal out of HEADER_NABL_B64 and return square PNG bytes.
+    The seal lives roughly at x=612–709, full crop height y=38–135 of the
+    1426×170 header image. Result cached so crop only runs once per process.
     """
     from PIL import Image as PILImage
     global _nabl_seal_bytes_cache
     if _nabl_seal_bytes_cache is not None:
         return _nabl_seal_bytes_cache
-    raw = hla_assets.get_image_bytes(hla_assets.NABL_SEAL_B64)
-    img = PILImage.open(io.BytesIO(raw)).convert("RGBA")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    raw = hla_assets.get_image_bytes(hla_assets.HEADER_NABL_B64)
+    img  = PILImage.open(io.BytesIO(raw)).convert("RGBA")
+    # Crop a square region centred on the seal (97×97 px)
+    seal = img.crop((612, 38, 709, 135))
+    buf  = io.BytesIO()
+    seal.save(buf, format="PNG")
     _nabl_seal_bytes_cache = buf.getvalue()
     return _nabl_seal_bytes_cache
 
