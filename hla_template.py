@@ -622,18 +622,21 @@ class _HFCanvas:
         # Without logo: footer image and page numbers are omitted; space is still reserved.
 
         # ── NABL seal — right end of QR zone, every page ────────────────────
+        # Uses the PIL-processed crop from the NABL header (RGBA) which renders
+        # correctly; NABL_SEAL_B64 raw PNG renders as black on canvas.
         if nabl:
             _PAGE_NUM_AREA = 4 * mm
-            # QR zone sits directly above the footer bar + 4 mm gap
             _qr_bottom = MARGIN_B + _PAGE_NUM_AREA + self.footer_h + 4 * mm
-            _seal_size  = 25 * mm   # roughly square circular seal
-            _seal_x = MARGIN_L + CONTENT_W - _seal_size          # flush right of content
-            _seal_y = _qr_bottom + (QR_ZONE - _seal_size) / 2    # vertically centred in QR zone
-            raw_nabl = hla_assets.get_image_bytes(hla_assets.NABL_SEAL_B64)
+            # Crop is 160×97 px; fit height to QR zone with a small margin
+            _seal_h = QR_ZONE - 4 * mm
+            _seal_w = _seal_h * (160 / 97)
+            _seal_x = MARGIN_L + CONTENT_W - _seal_w   # flush right of content
+            _seal_y = _qr_bottom + (QR_ZONE - _seal_h) / 2
+            raw_nabl = _get_nabl_seal_bytes()
             canvas.drawImage(
                 ImageReader(io.BytesIO(raw_nabl)),
                 _seal_x, _seal_y,
-                width=_seal_size, height=_seal_size,
+                width=_seal_w, height=_seal_h,
                 preserveAspectRatio=True, mask="auto"
             )
 
