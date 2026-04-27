@@ -575,29 +575,17 @@ class _HFCanvas:
         with_logo = self.case.get("with_logo", True)
 
         # ── Header ──────────────────────────────────────────────────────────
+        # Always use the non-NABL header; the NABL seal is placed at the bottom
+        # QR zone instead so it doesn't appear in the header banner.
         if with_logo:
-            b64 = hla_assets.HEADER_NABL_B64 if nabl else hla_assets.HEADER_NONNABL_B64
-            raw = hla_assets.get_image_bytes(b64)
+            raw = hla_assets.get_image_bytes(hla_assets.HEADER_NONNABL_B64)
             canvas.drawImage(
                 ImageReader(io.BytesIO(raw)),
                 MARGIN_L, PAGE_H - MARGIN_T - self.banner_h,
                 width=CONTENT_W, height=self.banner_h,
                 preserveAspectRatio=True, mask="auto"
             )
-        elif nabl:
-            # Without logo + NABL enabled: draw seal cropped from the NABL header, centred.
-            raw_seal = _get_nabl_seal_bytes()  # 160×97 px crop from header (bars removed)
-            seal_h   = self.banner_h * 0.72    # slightly smaller than full banner height
-            seal_w   = seal_h * (160 / 97)     # aspect ratio of the cropped region
-            seal_y   = PAGE_H - MARGIN_T - self.banner_h + (self.banner_h - seal_h) / 2
-            canvas.drawImage(
-                ImageReader(io.BytesIO(raw_seal)),
-                MARGIN_L + (CONTENT_W - seal_w) / 2,
-                seal_y,
-                width=seal_w, height=seal_h,
-                preserveAspectRatio=True, mask="auto"
-            )
-        # Without logo + NABL disabled: header space is reserved but nothing is drawn.
+        # Without logo: header space reserved but nothing is drawn.
 
         # ── Footer ──────────────────────────────────────────────────────────
         if with_logo:
