@@ -698,7 +698,7 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
 
     rows = [lr + rr for lr, rr in zip(left_rows, right_rows)]
     t = Table(rows, colWidths=col_w)
-    _vpad = 4 if compact else 7
+    _vpad = 4 if compact else 5
     t.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, -1), C_INFO_BG),
         ("VALIGN",        (0, 0), (-1, -1), "TOP"),
@@ -789,7 +789,7 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
     elif has_remarks:
         inner_gap        = 2 * mm
         post_hla_spacer  = 3 * mm
-        inter_block_gap  = 4 * mm
+        inter_block_gap  = 1 * mm
         compact_info     = False
     elif has_match:
         inner_gap        = 4 * mm
@@ -797,7 +797,7 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
         inter_block_gap  = 6 * mm
         compact_info     = False
     else:
-        inner_gap        = 8 * mm
+        inner_gap        = 3 * mm
         post_hla_spacer  = 4 * mm
         inter_block_gap  = 6 * mm
         compact_info     = False
@@ -846,8 +846,11 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict, comment_text: str = "
     d_name = donor.get("name",   "\u2014")
     cw = CONTENT_W
 
-    # Col widths: [label 24.6%] [p_a1 18.3%] [p_a2 18.4%] [d_a1 19.4%] [d_a2 19.3%]
-    col_w = [cw * 0.246, cw * 0.183, cw * 0.184, cw * 0.194, cw * 0.193]
+    # Col widths: label 24.6%, remaining 75.4% split equally across 4 data columns
+    # so patient pair and donor pair have identical horizontal width.
+    _label_w = cw * 0.246
+    _data_w  = (cw - _label_w) / 4
+    col_w = [_label_w, _data_w, _data_w, _data_w, _data_w]
 
     def RL(t): return Paragraph(f"<b>{t}</b>", S["rpl_lbl"])
     def RV(t): return Paragraph(_title_case(_clean_display(t)), S["rpl_val"])
@@ -1065,7 +1068,6 @@ def _methodology_block(case: dict, S: dict) -> list:
 
     # Collect entire block then wrap in KeepTogether so it never splits across pages.
     block = [
-        Spacer(1, 1 * mm),
         Paragraph(f"<b>IMGT/HLA Release</b> {imgt}", S["body"]),
         Paragraph("<b>Coverage</b>", S["body"]),
     ]

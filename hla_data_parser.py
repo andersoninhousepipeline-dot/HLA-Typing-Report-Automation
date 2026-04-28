@@ -360,15 +360,23 @@ def _parse_match(val) -> str:
 
 def _build_gender_age(row) -> str:
     """Return a combined 'Gender / Age' string.
-    Tries the combined column first; falls back to separate 'Gender' and 'Age' columns.
-    Result format: 'Female / 40 Y 0 M 0 D' — _normalize_age in the template strips
-    it to 'Female / 40 Years' at render time."""
+    Tries the combined 'Gender / Age' column first; falls back to separate
+    'Gender' and 'Age' columns (new Excel format).
+    Age normalization (years-only, drop months/days) is applied by
+    _normalize_age in the template at render time.
+    Handles numeric ages from pandas (e.g. 21.0 → '21') and text ages
+    like '21 y 2 months 30 days' which _normalize_age will reduce to '21 Years'."""
     combined = _clean_str(row.get("Gender / Age", ""))
     if combined:
         return _sentence_case(combined)
-    gender = _sentence_case(row.get("Gender", ""))
-    age    = _clean_str(row.get("Age", ""))
-    parts  = [p for p in (gender, age) if p]
+    gender  = _sentence_case(row.get("Gender", ""))
+    raw_age = row.get("Age", "")
+    # pandas returns numeric Excel cells as float (e.g. 21.0) — convert to bare int string
+    if isinstance(raw_age, (int, float)) and not pd.isna(raw_age):
+        age = str(int(raw_age))
+    else:
+        age = _clean_str(raw_age)
+    parts = [p for p in (gender, age) if p]
     return " / ".join(parts)
 
 
