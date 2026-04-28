@@ -61,6 +61,13 @@ def _clean_str(val) -> str:
     return str(val).strip()
 
 
+def _norm_col(s) -> str:
+    """Normalize a column header: strip whitespace, lowercase, collapse runs of
+    whitespace (including newlines) to a single space.  Applied to every column
+    in the patient-donor detail sheet so lookups are case- and space-insensitive."""
+    return re.sub(r'\s+', ' ', str(s).strip().lower())
+
+
 # Recognised name prefixes → canonical casing
 _PREFIX_MAP = {
     "mr":     "Mr",
@@ -317,8 +324,8 @@ def _parse_surfseq_results(df_csv: pd.DataFrame) -> dict:
 # ─── Detect report type ──────────────────────────────────────────────────────
 
 def _detect_report_type(patient_row: pd.Series, donor_rows: list) -> str:
-    diag = _clean_str(patient_row.get("Diagnosis", "")).upper()
-    patient_rel = _clean_str(patient_row.get("Relationship", "")).lower()
+    diag = _clean_str(patient_row.get("diagnosis", "")).upper()
+    patient_rel = _clean_str(patient_row.get("relationship", "")).lower()
 
     # Check diagnosis first
     if "RPL" in diag or "RECURRENT" in diag or "MISCARRIAGE" in diag or "RIF" in diag:
@@ -326,7 +333,7 @@ def _detect_report_type(patient_row: pd.Series, donor_rows: list) -> str:
 
     # Check if patient+donor are a couple (wife/husband relationship)
     if donor_rows:
-        donor_rels = [_clean_str(d.get("Relationship", "")).lower() for d in donor_rows]
+        donor_rels = [_clean_str(d.get("relationship", "")).lower() for d in donor_rows]
         is_couple = (
             patient_rel in ("wife", "husband")
             or any(r in ("wife", "husband") for r in donor_rels)
@@ -366,11 +373,11 @@ def _build_gender_age(row) -> str:
     _normalize_age in the template at render time.
     Handles numeric ages from pandas (e.g. 21.0 → '21') and text ages
     like '21 y 2 months 30 days' which _normalize_age will reduce to '21 Years'."""
-    combined = _clean_str(row.get("Gender / Age", ""))
+    combined = _clean_str(row.get("gender / age", ""))
     if combined:
         return _sentence_case(combined)
-    gender  = _sentence_case(row.get("Gender", ""))
-    raw_age = row.get("Age", "")
+    gender  = _sentence_case(row.get("gender", ""))
+    raw_age = row.get("age", "")
     # pandas returns numeric Excel cells as float (e.g. 21.0) — convert to bare int string
     if isinstance(raw_age, (int, float)) and not pd.isna(raw_age):
         age = str(int(raw_age))
@@ -386,9 +393,9 @@ def _build_person(row: pd.Series, hla_lookup: dict, join_by: str) -> dict:
     """Build a patient or donor dict from a patient-donor detail row."""
     # Determine join key
     if join_by == "pin":
-        key = _clean_str(row.get("PIN", ""))
+        key = _clean_str(row.get("pin", ""))
     else:  # sample_number
-        key = str(row.get("Sample Number ", "")).strip().split(".")[0]
+        key = str(row.get("sample number", "")).strip().split(".")[0]
 
     hla_data = hla_lookup.get(key, {})
     hla = hla_data.get("hla", {locus: [None, None] for locus in ["A", "B", "C", "DRB1", "DQB1", "DPB1"]})
@@ -419,29 +426,29 @@ def _build_person(row: pd.Series, hla_lookup: dict, join_by: str) -> dict:
 
     # Only use the Excel Remarks/comments column; skip raw instrument Comments
     # (instrument Comments are very long DPB1 allele lists — not suitable for reports)
-    excel_remarks = _clean_str(row.get("Remarks/comments", ""))
+    excel_remarks = _clean_str(row.get("remarks/comments", ""))
     combined_remarks = excel_remarks  # Instrument remarks excluded intentionally
 
     return {
         # Text fields → sentence case (first char upper, rest lower)
-        "name":           _sentence_case(row.get(" name", "")),
+        "name":           _sentence_case(row.get("name", "")),
         "gender_age":     _build_gender_age(row),
-        "diagnosis":      _sentence_case(row.get("Diagnosis", "")),
-        "referred_by":    _sentence_case(row.get("Referred By", "")),
-        "hospital_clinic":_sentence_case(row.get("Hospital/Clinic", "")),
-        "specimen":       _sentence_case(row.get("Specimen ", "")),
-        "relationship":   _sentence_case(row.get("Relationship", "")),
+        "diagnosis":      _sentence_case(row.get("diagnosis", "")),
+        "referred_by":    _sentence_case(row.get("referred by", "")),
+        "hospital_clinic":_sentence_case(row.get("hospital/clinic", "")),
+        "specimen":       _sentence_case(row.get("specimen", "")),
+        "relationship":   _sentence_case(row.get("relationship", "")),
         "remarks":        _sentence_case(combined_remarks),
         # ID / code fields → left as-is (no case conversion)
-        "hospital_mr_no": _clean_str(row.get("Hospital MR No ", "")),
-        "pin":            _clean_str(row.get("PIN", "")),
-        "sample_number":  str(row.get("Sample Number ", "")).strip().split(".")[0],
+        "hospital_mr_no": _clean_str(row.get("hospital mr no", "")),
+        "pin":            _clean_str(row.get("pin", "")),
+        "sample_number":  str(row.get("sample number", "")).strip().split(".")[0],
         # Date fields (already formatted DD-MM-YYYY)
-        "collection_date":_fmt_date(row.get("Collection Date ")),
-        "receipt_date":   _fmt_date(row.get("Sample receipt date")),
-        "report_date":    _fmt_date(row.get("Report date ")),
+        "collection_date":_fmt_date(row.get("collection date")),
+        "receipt_date":   _fmt_date(row.get("sample receipt date")),
+        "report_date":    _fmt_date(row.get("report date")),
         # Computed / structured fields
-        "match":          _parse_match(row.get("Match", "")),
+        "match":          _parse_match(row.get("match", "")),
         "hla":                   hla,
         "hla_c_type":            hla_c_type,
         "_join_key":             key,
@@ -521,7 +528,9 @@ def parse_excel(filepath: str, nabl: bool = True) -> list:
 
     # ── Read patient-donor detail ─────────────────────────────────────────────
     df_pd = pd.read_excel(filepath, sheet_name="patient-donor detail", header=0)
-    df_pd.columns = [str(c) for c in df_pd.columns]  # normalise
+    # Normalise all column headers: strip, lowercase, collapse whitespace so lookups
+    # work regardless of whether the Excel uses "Gender / Age", "GENDER / AGE", etc.
+    df_pd.columns = [_norm_col(c) for c in df_pd.columns]
 
     # ── Read and parse HLA results ────────────────────────────────────────────
     if is_miniseq:
@@ -555,11 +564,11 @@ def parse_excel(filepath: str, nabl: bool = True) -> list:
 
         # Methodology + IMGT from first row of case
         row0 = current_patient["_row"]
-        methodology   = _clean_str(row0.get("Methodology", ""))
-        imgt_release  = _clean_str(row0.get("IMGT/HLA Release", ""))
-        coverage      = _clean_str(row0.get("Coverage", ""))
-        typing_status = _clean_str(row0.get("Typing Status\ncomplete/incomplete", ""))
-        reviewer      = _clean_str(row0.get("This report has been reviewed and approved by", ""))
+        methodology   = _clean_str(row0.get("methodology", ""))
+        imgt_release  = _clean_str(row0.get("imgt/hla release", ""))
+        coverage      = _clean_str(row0.get("coverage", ""))
+        typing_status = _clean_str(row0.get("typing status complete/incomplete", ""))
+        reviewer      = _clean_str(row0.get("this report has been reviewed and approved by", ""))
 
         cases.append({
             "report_type":    report_type,
@@ -580,8 +589,8 @@ def parse_excel(filepath: str, nabl: bool = True) -> list:
         current_donors = []
 
     for _, row in df_pd.iterrows():
-        role = _clean_str(row.get("Patient/donor", "")).lower()
-        name = _clean_str(row.get(" name", ""))
+        role = _clean_str(row.get("patient/donor", "")).lower()
+        name = _clean_str(row.get("name", ""))
         if not name:
             continue
 
