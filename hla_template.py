@@ -745,6 +745,8 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
         ("LEFTPADDING",   (4, 0), (4, -1), 0),
         ("RIGHTPADDING",  (1, 0), (1, -1), 2),
         ("RIGHTPADDING",  (4, 0), (4, -1), 2),
+        # Extra left padding on right-side label column for clear visual center gap
+        ("LEFTPADDING",   (3, 0), (3, -1), 14),
     ]))
     return t
 
@@ -808,6 +810,9 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
     _match_display = _clean_display(match_str) if match_str else ""
     if _match_display == "—":
         _match_display = ""
+    # Strip percentage from match score in transplant donor reports
+    if is_donor and _match_display:
+        _match_display = re.sub(r'\s*\(\d+%\)', '', _match_display).strip()
 
     has_remarks = bool(_remarks_display)
     has_match   = bool(_match_display)
@@ -818,9 +823,9 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
     long_remarks = has_remarks and len(_remarks_display) > 220
 
     if long_remarks:
-        inner_gap        = 1 * mm
-        post_hla_spacer  = 2 * mm
-        inter_block_gap  = 2 * mm
+        inner_gap        = 0.5 * mm
+        post_hla_spacer  = 1 * mm
+        inter_block_gap  = 1 * mm
         compact_info     = True
     elif has_remarks:
         inner_gap        = 2 * mm
@@ -848,12 +853,12 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
         Spacer(1, post_hla_spacer),
     ]
 
-    # Remarks + match kept together so they never split across pages and
-    # move as a unit into the QR-free zone above the footer.
+    # Remarks + match kept together so they never split across pages.
     tail = []
     if has_remarks:
         tail.append(Paragraph(f"<b>Remarks:</b> {_remarks_display}",
                               ParagraphStyle("remarks_j", parent=S["body_small"],
+                                             fontSize=9, leading=11,
                                              alignment=TA_LEFT, spaceAfter=4)))
     if has_match:
         tail.append(Spacer(1, 1 * mm))
