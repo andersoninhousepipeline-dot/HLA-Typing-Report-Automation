@@ -286,7 +286,7 @@ def _styles() -> dict:
         # Cambria-Bold 12.2pt in reference PDF; SegoeUI-Bold is closest available
         "sign_approval": ParagraphStyle(
             "sign_approval", fontName=F_SEGOE_BOLD, fontSize=12.2,
-            textColor=C_APPROVAL, leading=15, spaceBefore=4, spaceAfter=6
+            textColor=C_APPROVAL, leading=15, spaceBefore=2, spaceAfter=2
         ),
         "sign_name": ParagraphStyle(
             "sign_name", fontName=F_CALI_BOLD, fontSize=10,
@@ -698,7 +698,7 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
 
     rows = [lr + rr for lr, rr in zip(left_rows, right_rows)]
     t = Table(rows, colWidths=col_w)
-    _vpad = 4 if compact else 5
+    _vpad = 4
     t.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, -1), C_INFO_BG),
         ("VALIGN",        (0, 0), (-1, -1), "TOP"),
@@ -792,14 +792,14 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
         inter_block_gap  = 1 * mm
         compact_info     = False
     elif has_match:
-        inner_gap        = 4 * mm
-        post_hla_spacer  = 4 * mm
-        inter_block_gap  = 6 * mm
+        inner_gap        = 2 * mm
+        post_hla_spacer  = 2 * mm
+        inter_block_gap  = 2 * mm
         compact_info     = False
     else:
-        inner_gap        = 3 * mm
-        post_hla_spacer  = 4 * mm
-        inter_block_gap  = 6 * mm
+        inner_gap        = 2 * mm
+        post_hla_spacer  = 2 * mm
+        inter_block_gap  = 2 * mm
         compact_info     = False
 
     # Both tables kept together as individual units — each moves to the next page
@@ -1420,7 +1420,7 @@ def generate_pdf(case: dict, output_path: str) -> str:
     else:
         body = _build_ngs_single(case, S)
 
-    story = [title_para, Spacer(1, 3 * mm)] + body
+    story = [title_para, Spacer(1, 1 * mm)] + body
 
     # Fix 4: use the numbered-canvas approach for accurate page counting.
     # total_pages starts at 1 (dummy); _NumberedCanvas updates it in save() before
