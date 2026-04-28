@@ -835,8 +835,8 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
     else:
         # No remarks/match: maintain reference spacing (generous, as per image)
         inner_gap        = 2 * mm
-        post_hla_spacer  = 3 * mm
-        inter_block_gap  = 2 * mm
+        post_hla_spacer  = 2 * mm
+        inter_block_gap  = 1.5 * mm
         compact_info     = False
 
     # Both tables kept together as individual units — each moves to the next page
@@ -871,8 +871,6 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
     if tail:
         elems.append(KeepTogether(tail))
 
-    if has_remarks or has_match:
-        elems = [KeepTogether(elems)]
 
     elems.append(Spacer(1, inter_block_gap))
     return elems
