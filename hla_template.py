@@ -810,14 +810,16 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
         _remarks_display = _remarks_display[:580] + "..."
 
     _match_display = _clean_display(match_str) if match_str else ""
-    if _match_display == "—":
-        _match_display = ""
-    # Strip percentage from match score in transplant donor reports
     if is_donor and _match_display:
         _match_display = re.sub(r'\s*\(\d+%\)', '', _match_display).strip()
 
-    has_remarks = bool(_remarks_display)
-    has_match   = bool(_match_display)
+    def _is_real(v):
+        if not v or v == "\u2014": return False
+        if str(v).strip().upper() in ["NA", "N/A", "NONE", "NULL", "-"]: return False
+        return True
+
+    has_remarks = _is_real(_remarks_display)
+    has_match   = _is_real(_match_display)
 
     # Spacing strategy — force_compact overrides per-block detection so the
     # entire transplant report shrinks uniformly when ANY block has content.
