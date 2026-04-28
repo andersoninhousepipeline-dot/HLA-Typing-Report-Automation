@@ -1162,10 +1162,10 @@ def _build_ngs_single(case: dict, S: dict) -> list:
 
     elems.extend(_ngs_person_block(patient, is_donor=False, match_str="", S=S))
 
-    # Keep methodology + signatures together so they never split across pages.
-    method_items = _methodology_block(case, S)
-    sig_items    = _signature_block(signatories, S)
-    elems.append(KeepTogether(method_items + sig_items))
+    elems.extend(_methodology_block(case, S))
+    sig_items = _signature_block(signatories, S)
+    if sig_items:
+        elems.append(KeepTogether(sig_items))
 
     return elems
 
@@ -1177,7 +1177,7 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
     Strategy:
     - Patient block: wrapped in KeepTogether to prevent splitting
     - Each donor block: wrapped in KeepTogether to prevent splitting
-    - Methodology + Signatures: kept together so they never split across pages.
+    - Methodology flows naturally; signatures kept together as one unit.
     """
     patient     = case["patient"]
     donors      = case.get("donors", [])
@@ -1193,10 +1193,10 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
         elems.extend(_ngs_person_block(d, is_donor=True, match_str=d.get("match", ""), S=S,
                                        patient_name=_p_name))
 
-    # Keep methodology + signatures together so they never split across pages.
-    method_items = _methodology_block(case, S)
-    sig_items    = _signature_block(signatories, S)
-    elems.append(KeepTogether(method_items + sig_items))
+    elems.extend(_methodology_block(case, S))
+    sig_items = _signature_block(signatories, S)
+    if sig_items:
+        elems.append(KeepTogether(sig_items))
 
     return elems
 
