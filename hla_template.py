@@ -817,29 +817,26 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
     has_remarks = bool(_remarks_display)
     has_match   = bool(_match_display)
 
-    # Long remarks = more than ~3 lines (~255 chars at 10pt Calibri in CONTENT_W).
-    # When long, tighten all spacing and shrink demography padding so remarks
-    # can fit on the same page rather than spilling to the next.
+    # Spacing strategy:
+    #   no remarks  → generous gaps matching reference layout
+    #   short remarks (≤220 chars) → moderate reduction so tail fits on same page
+    #   long remarks (>220 chars)  → tight gaps + compact demography
     long_remarks = has_remarks and len(_remarks_display) > 220
 
     if long_remarks:
         inner_gap        = 0.5 * mm
         post_hla_spacer  = 1 * mm
-        inter_block_gap  = 1 * mm
+        inter_block_gap  = 0.5 * mm
         compact_info     = True
     elif has_remarks:
-        inner_gap        = 2 * mm
-        post_hla_spacer  = 3 * mm
+        inner_gap        = 1.5 * mm
+        post_hla_spacer  = 1.5 * mm
         inter_block_gap  = 1 * mm
         compact_info     = False
-    elif has_match:
-        inner_gap        = 2 * mm
-        post_hla_spacer  = 2 * mm
-        inter_block_gap  = 2 * mm
-        compact_info     = False
     else:
+        # No remarks: maintain reference spacing (generous, as per image)
         inner_gap        = 2 * mm
-        post_hla_spacer  = 2 * mm
+        post_hla_spacer  = 3 * mm
         inter_block_gap  = 2 * mm
         compact_info     = False
 
@@ -861,7 +858,7 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
                                              fontSize=9, leading=11,
                                              alignment=TA_LEFT, spaceAfter=4)))
     if has_match:
-        tail.append(Spacer(1, 1 * mm))
+        tail.append(Spacer(1, 0.5 * mm if long_remarks else 1 * mm))
         tail.append(Paragraph(
             f"<b>Match: {_match_display}</b>",
             ParagraphStyle("ms", fontName=_f("Calibri-Bold","Helvetica-Bold"),
