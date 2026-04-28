@@ -745,6 +745,8 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
         ("LEFTPADDING",   (4, 0), (4, -1), 0),
         ("RIGHTPADDING",  (1, 0), (1, -1), 2),
         ("RIGHTPADDING",  (4, 0), (4, -1), 2),
+        # Extra left padding on right-side label column for clear visual center gap
+        ("LEFTPADDING",   (3, 0), (3, -1), 14),
     ]))
     return t
 
@@ -842,10 +844,10 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
     # Both tables kept together as individual units — each moves to the next page
     # intact if it doesn't fit, but they are independent so one doesn't force the other.
     elems = [
-        KeepTogether([_ngs_info_table(person, S, is_donor=is_donor, patient_name=patient_name,
-                                      compact=compact_info)]),
+        _ngs_info_table(person, S, is_donor=is_donor, patient_name=patient_name,
+                        compact=compact_info),
         Spacer(1, inner_gap),
-        KeepTogether([_hla_table(person, S, compact=compact_info)]),
+        _hla_table(person, S, compact=compact_info),
         Spacer(1, post_hla_spacer),
     ]
 
