@@ -1236,19 +1236,25 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
 
     # Check if ANY block has visible remarks or match — use same clean logic as render
     def _has_visible(val: str) -> bool:
-        if not val or not val.strip():
+        if val is None:
             return False
-        # Normalize: remove whitespace and check against empty/dash/NA sentinels
-        v_test = val.strip().upper()
-        if v_test in ["", "NA", "N/A", "-", "\u2014"]:
+        s = str(val).strip()
+        if not s or s.upper() in ["NA", "N/A", "-", "\u2014", ".", "NONE", "NULL"]:
             return False
+        # Final check against clean display result
         v = _clean_display(val)
-        return bool(v) and v != "\u2014" and v.upper() not in ["NA", "N/A"]
+        if not v or v == "\u2014" or v.strip() == "" or v.upper() in ["NA", "N/A"]:
+            return False
+        return True
 
-    _any_has_extra = any(
-        _has_visible(d.get("remarks", "")) or _has_visible(d.get("match", ""))
-        for d in donors
-    ) or _has_visible(patient.get("remarks", ""))
+    _any_has_extra = False
+    for d in donors:
+        if _has_visible(d.get("remarks", "")) or _has_visible(d.get("match", "")):
+            _any_has_extra = True
+            break
+    if not _any_has_extra:
+        if _has_visible(patient.get("remarks", "")):
+            _any_has_extra = True
 
     elems.extend(_ngs_person_block(patient, is_donor=False, match_str="", S=S,
                                    force_compact=_any_has_extra))
