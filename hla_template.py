@@ -1065,7 +1065,7 @@ def _methodology_block(case: dict, S: dict) -> list:
 
     # Collect entire block then wrap in KeepTogether so it never splits across pages.
     block = [
-        Spacer(1, 2 * mm),
+        Spacer(1, 1 * mm),
         Paragraph(f"<b>IMGT/HLA Release</b> {imgt}", S["body"]),
         Paragraph("<b>Coverage</b>", S["body"]),
     ]
@@ -1109,7 +1109,7 @@ def _signature_block(signatories: list, S: dict) -> list:
             _seal_io  = io.BytesIO(seal_data)
             _seal_tmp = Image(_seal_io)
             _sw, _sh  = _seal_tmp.imageWidth, _seal_tmp.imageHeight
-            _max      = 62 * mm
+            _max      = 50 * mm
             # Preserve aspect ratio — scale so the longer dimension equals _max
             if _sw >= _sh:
                 seal_img = Image(io.BytesIO(seal_data), width=_max, height=_max * _sh / _sw)
@@ -1121,8 +1121,8 @@ def _signature_block(signatories: list, S: dict) -> list:
         inner.setStyle(TableStyle([
             ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
             ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING",    (0, 0), (-1, -1), 2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ("TOPPADDING",    (0, 0), (-1, -1), 1),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
             ("BACKGROUND",    (0, 0), (-1, -1), WHITE),
         ]))
         cols.append(inner)
@@ -1130,12 +1130,12 @@ def _signature_block(signatories: list, S: dict) -> list:
     outer = Table([cols], colWidths=[col_each] * n)
     outer.setStyle(TableStyle([
         ("VALIGN",        (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING",    (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING",    (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]))
 
     return [
-        Spacer(1, 2 * mm),
+        Spacer(1, 1 * mm),
         Paragraph("<b>This report has been reviewed and approved by:</b>",
                   S["sign_approval"]),
         outer,
