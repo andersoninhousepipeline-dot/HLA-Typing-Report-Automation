@@ -1234,11 +1234,17 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
 
     elems = []
 
-    # Check if ANY donor has remarks or match — if so, ALL blocks use compact spacing
+    # Check if ANY block has visible remarks or match — use same clean logic as render
+    def _has_visible(val: str) -> bool:
+        if not val or not val.strip():
+            return False
+        v = _clean_display(val)
+        return bool(v) and v != "\u2014"
+
     _any_has_extra = any(
-        bool(d.get("remarks", "").strip()) or bool(d.get("match", "").strip())
+        _has_visible(d.get("remarks", "")) or _has_visible(d.get("match", ""))
         for d in donors
-    ) or bool(patient.get("remarks", "").strip())
+    ) or _has_visible(patient.get("remarks", ""))
 
     elems.extend(_ngs_person_block(patient, is_donor=False, match_str="", S=S,
                                    force_compact=_any_has_extra))
