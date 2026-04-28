@@ -836,8 +836,8 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
     else:
         # No remarks/match anywhere: generous spacing matching reference layout
         inner_gap        = 2 * mm
-        post_hla_spacer  = 3 * mm
-        inter_block_gap  = 2 * mm
+        post_hla_spacer  = 4 * mm
+        inter_block_gap  = 3 * mm
         compact_info     = False
 
     # Both tables kept together as individual units — each moves to the next page
@@ -1238,8 +1238,12 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
     def _has_visible(val: str) -> bool:
         if not val or not val.strip():
             return False
+        # Normalize: remove whitespace and check against empty/dash/NA sentinels
+        v_test = val.strip().upper()
+        if v_test in ["", "NA", "N/A", "-", "\u2014"]:
+            return False
         v = _clean_display(val)
-        return bool(v) and v != "\u2014"
+        return bool(v) and v != "\u2014" and v.upper() not in ["NA", "N/A"]
 
     _any_has_extra = any(
         _has_visible(d.get("remarks", "")) or _has_visible(d.get("match", ""))
