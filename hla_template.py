@@ -825,12 +825,12 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
 
     if long_remarks:
         inner_gap        = 0.5 * mm
-        post_hla_spacer  = 1 * mm
+        post_hla_spacer  = 0.5 * mm
         inter_block_gap  = 0.5 * mm
         compact_info     = True
     elif has_remarks:
         inner_gap        = 1.5 * mm
-        post_hla_spacer  = 1.5 * mm
+        post_hla_spacer  = 1 * mm
         inter_block_gap  = 1 * mm
         compact_info     = False
     else:
@@ -856,18 +856,22 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
         tail.append(Paragraph(f"<b>Remarks:</b> {_remarks_display}",
                               ParagraphStyle("remarks_j", parent=S["body_small"],
                                              fontSize=9, leading=11,
-                                             alignment=TA_LEFT, spaceAfter=4)))
+                                             alignment=TA_LEFT, spaceAfter=2)))
     if has_match:
-        tail.append(Spacer(1, 0.5 * mm if long_remarks else 1 * mm))
+        if has_remarks:
+            tail.append(Spacer(1, 0.5 * mm))
         tail.append(Paragraph(
             f"<b>Match: {_match_display}</b>",
             ParagraphStyle("ms", fontName=_f("Calibri-Bold","Helvetica-Bold"),
                            fontSize=11, textColor=BLACK, alignment=TA_LEFT,
-                           leading=13, spaceBefore=2, spaceAfter=2)
+                           leading=13, spaceBefore=0, spaceAfter=1)
         ))
-        tail.append(HRFlowable(width="100%", thickness=0.5, color=BLACK, spaceAfter=1))
+        tail.append(HRFlowable(width="100%", thickness=0.5, color=BLACK, spaceBefore=1, spaceAfter=1))
     if tail:
         elems.append(KeepTogether(tail))
+
+    if has_remarks or has_match:
+        elems = [KeepTogether(elems)]
 
     elems.append(Spacer(1, inter_block_gap))
     return elems
