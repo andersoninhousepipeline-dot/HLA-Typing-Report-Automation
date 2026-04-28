@@ -536,6 +536,10 @@ def parse_excel(filepath: str, nabl: bool = True) -> list:
     if is_miniseq:
         df_res = pd.read_excel(filepath, sheet_name="result data", header=None)
         hla_lookup = _parse_miniseq_results(df_res)
+        # Auto-detect join key: if SampleName values are all numeric they are
+        # sample numbers, not PINs — override the default join_by.
+        if hla_lookup and all(k.isdigit() for k in hla_lookup.keys()):
+            join_by = "sample_number"
     else:
         df_csv = pd.read_excel(filepath, sheet_name="complete csv data", header=None)
         hla_lookup = _parse_surfseq_results(df_csv)
