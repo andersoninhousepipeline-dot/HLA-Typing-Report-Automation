@@ -1,4 +1,4 @@
-﻿"""
+"""
 hla_template.py  —  HLA Typing Report PDF Generator
 Faithful replica of Anderson Diagnostic Services manual PDFs.
 Supports three report types that are auto-selected by hla_data_parser:
@@ -732,7 +732,7 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
 
     rows = [lr + rr for lr, rr in zip(left_rows, right_rows)]
     t = Table(rows, colWidths=col_w)
-    _vpad = 4
+    _vpad = 2 if compact else 4
     t.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, -1), C_INFO_BG),
         ("VALIGN",        (0, 0), (-1, -1), "TOP"),
@@ -745,8 +745,6 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
         ("LEFTPADDING",   (4, 0), (4, -1), 0),
         ("RIGHTPADDING",  (1, 0), (1, -1), 2),
         ("RIGHTPADDING",  (4, 0), (4, -1), 2),
-        # Extra left padding on right-side label column for clear visual center gap
-        ("LEFTPADDING",   (3, 0), (3, -1), 14),
     ]))
     return t
 
@@ -755,7 +753,7 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
 # Header row → C_HLA_HDR (#F9BE8F).  Data rows → C_HLA_ROW (#F1F2F1).
 # Row labels: "1" and "2" (Calibri-Bold 11).
 
-def _hla_table(person: dict, S: dict) -> Table:
+def _hla_table(person: dict, S: dict, compact: bool = False) -> Table:
     LOCI       = ["A", "B", "C", "DRB1", "DQB1", "DPB1"]
     EXTRA_LOCI = ["DRB3", "DRB4", "DRB5"]
     hla = person.get("hla", {})
@@ -782,6 +780,7 @@ def _hla_table(person: dict, S: dict) -> Table:
     n = len(loci)
     col_w = [CONTENT_W * 0.10] + [CONTENT_W * 0.90 / n] * n
     t = Table([header, r1, r2], colWidths=col_w)
+    _vpad = 2 if compact else 4
     t.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, 0), C_HLA_HDR),
         ("TEXTCOLOR",     (0, 0), (-1, 0), BLACK),
@@ -790,8 +789,8 @@ def _hla_table(person: dict, S: dict) -> Table:
         ("GRID",          (0, 0), (-1, -1), 0.5, WHITE),
         ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
         ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING",    (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING",    (0, 0), (-1, -1), _vpad),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), _vpad),
     ]))
     return t
 
@@ -818,23 +817,23 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
     has_match   = bool(_match_display)
 
     # Spacing strategy:
-    #   no remarks  → generous gaps matching reference layout
-    #   short remarks (≤220 chars) → moderate reduction so tail fits on same page
-    #   long remarks (>220 chars)  → tight gaps + compact demography
-    long_remarks = has_remarks and len(_remarks_display) > 220
+    #   long remarks or both → tightest gaps + compact demography
+    #   either remarks or match → moderate reduction
+    #   neither → generous gaps matching reference layout
+    long_content = (has_remarks and len(_remarks_display) > 220) or (has_remarks and has_match)
 
-    if long_remarks:
+    if long_content:
         inner_gap        = 0.5 * mm
         post_hla_spacer  = 0.5 * mm
         inter_block_gap  = 0.5 * mm
         compact_info     = True
-    elif has_remarks:
-        inner_gap        = 1.5 * mm
-        post_hla_spacer  = 1 * mm
-        inter_block_gap  = 1 * mm
-        compact_info     = False
+    elif has_remarks or has_match:
+        inner_gap        = 1.2 * mm
+        post_hla_spacer  = 1.2 * mm
+        inter_block_gap  = 1.2 * mm
+        compact_info     = True
     else:
-        # No remarks: maintain reference spacing (generous, as per image)
+        # No remarks/match: maintain reference spacing (generous, as per image)
         inner_gap        = 2 * mm
         post_hla_spacer  = 3 * mm
         inter_block_gap  = 2 * mm
@@ -846,9 +845,11 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, pat
         KeepTogether([_ngs_info_table(person, S, is_donor=is_donor, patient_name=patient_name,
                                       compact=compact_info)]),
         Spacer(1, inner_gap),
-        KeepTogether([_hla_table(person, S)]),
+        KeepTogether([_hla_table(person, S, compact=compact_info)]),
         Spacer(1, post_hla_spacer),
     ]
+
+
 
     # Remarks + match kept together so they never split across pages.
     tail = []
