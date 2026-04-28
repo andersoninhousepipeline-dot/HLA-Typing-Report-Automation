@@ -1066,21 +1066,27 @@ def _methodology_block(case: dict, S: dict) -> list:
     method = case.get("methodology", "") or (METHODOLOGY_MINISEQ if nabl else METHODOLOGY_SURFSEQ)
     status = case.get("typing_status", "Complete")
 
-    # Collect entire block then wrap in KeepTogether so it never splits across pages.
-    block = [
+    # Split into two smaller KeepTogether groups so neither block forces a large
+    # blank gap when the previous section ends near a page boundary.
+    # Group 1: IMGT + Coverage header + all 4 coverage lines (~85 pt)
+    coverage_block = [
         Paragraph(f"<b>IMGT/HLA Release</b> {imgt}", S["body"]),
         Paragraph("<b>Coverage</b>", S["body"]),
     ]
     for line in COVERAGE_LINES:
-        block.append(Paragraph(line, S["coverage"]))
-    block.append(Spacer(1, 1 * mm))
-    block.append(Paragraph(f"<b>Methodology:</b>  {method}", S["body"]))
-    block.append(Spacer(1, 1 * mm))
-    block.append(HRFlowable(width="100%", thickness=0.5, color=BLACK))
-    block.append(Spacer(1, 1 * mm))
-    block.append(Paragraph(f"<b>Typing Status:</b>  {status}", S["body"]))
+        coverage_block.append(Paragraph(line, S["coverage"]))
 
-    return [KeepTogether(block)]
+    # Group 2: Methodology + HR + Typing Status (~40 pt)
+    method_block = [
+        Spacer(1, 1 * mm),
+        Paragraph(f"<b>Methodology:</b>  {method}", S["body"]),
+        Spacer(1, 1 * mm),
+        HRFlowable(width="100%", thickness=0.5, color=BLACK),
+        Spacer(1, 1 * mm),
+        Paragraph(f"<b>Typing Status:</b>  {status}", S["body"]),
+    ]
+
+    return [KeepTogether(coverage_block), KeepTogether(method_block)]
 
 
 # ─── Signature block ──────────────────────────────────────────────────────────
