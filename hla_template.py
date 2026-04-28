@@ -329,6 +329,40 @@ def _clean_display(val) -> str:
     return s
 
 
+def _normalize_hla_alleles(text: str) -> str:
+    """Normalize HLA allele nomenclature in remarks/comments.
+    Handles: hladpb1 → HLA-DPB1, Hla-dpb1 → HLA-DPB1, hla-dpb1 → HLA-DPB1, etc.
+    Covers: A, B, C, DRA, DRB1-9, DQA1, DQB1, DPA1, DPB1"""
+    if not text:
+        return text
+    
+    # Common HLA gene names (case-insensitive patterns)
+    hla_genes = r"(?:DRA|DRB\d|DQA1|DQB1|DPA1|DPB1|A|B|C)(?:\*[0-9:]+)?"
+    
+    # Replace patterns like "hla-dpb1", "hladpb1", "Hla-dpb1" with proper format
+    # First, match: [optional spaces] HLA [optional hyphen] [gene name with optional allele]
+    def capitalize_hla(match):
+        full_match = match.group(0)
+        # Extract the HLA gene part (e.g., "dpb1" or "dpb1*04:01:01")
+        # Pattern: hla[- ]?gene_name[*allele]?
+        m = re.search(r"hla\s*-?\s*(" + hla_genes + r")", full_match, re.IGNORECASE)
+        if m:
+            gene_and_allele = m.group(1).upper()
+            # Ensure hyphen between HLA and gene name
+            return f"HLA-{gene_and_allele}"
+        return full_match
+    
+    # Match: "hla" (with optional space/hyphen) followed by gene name and optional allele
+    result = re.sub(
+        r"\bhla\s*-?\s*(" + hla_genes + r")",
+        lambda m: f"HLA-{m.group(1).upper()}",
+        text,
+        flags=re.IGNORECASE
+    )
+    
+    return result
+
+
 def _format_relationship(rel: str, other_name: str) -> str:
     """Return 'Rel of Other Name'. Skips when rel is empty/NA or already contains 'of'."""
     r = (rel or "").strip()
@@ -764,6 +798,8 @@ def _hla_table(person: dict, S: dict) -> Table:
 def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict, patient_name: str = "") -> list:
     _raw_remarks = person.get("remarks", "")
     _remarks_display = _clean_display(_raw_remarks) if _raw_remarks else ""
+    # Normalize HLA allele nomenclature in remarks (capitalize and fix formatting)
+    _remarks_display = _normalize_hla_alleles(_remarks_display) if _remarks_display else ""
     if _remarks_display == "—":
         _remarks_display = ""
     if len(_remarks_display) > 600:
@@ -1237,6 +1273,8 @@ def _build_rpl_couple(case: dict, S: dict) -> list:
         if not raw or not str(raw).strip():
             return ""
         disp = _clean_display(raw)
+        # Normalize HLA allele nomenclature in remarks (capitalize and fix formatting)
+        disp = _normalize_hla_alleles(disp)
         if not disp or disp == "\u2014":
             return ""
         if len(disp) > 600:
