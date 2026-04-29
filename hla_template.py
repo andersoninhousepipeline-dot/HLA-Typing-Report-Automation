@@ -799,7 +799,9 @@ def _hla_table(person: dict, S: dict, compact: bool = False) -> Table:
 
 # ─── NGS: one person block (info + HLA + optional match + remarks) ────────────
 def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
-                      patient_name: str = "", force_compact: bool = False) -> list:
+                      patient_name: str = "", force_compact: bool = False,
+                      spacing_scale: float = 1.0, extra_inner_gap: float = 0.0,
+                      no_compact: bool = False) -> list:
     _raw_remarks = person.get("remarks", "")
     _remarks_display = _clean_display(_raw_remarks) if _raw_remarks else ""
     # Normalize HLA allele nomenclature in remarks (capitalize and fix formatting)
@@ -821,11 +823,23 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
     has_remarks = _is_real(_remarks_display)
     has_match   = _is_real(_match_display)
 
-    # Spacing strategy — force_compact overrides per-block detection so the
-    # entire transplant report shrinks uniformly when ANY block has content.
     long_content = (has_remarks and len(_remarks_display) > 220) or (has_remarks and has_match)
 
-    if long_content or (force_compact and (has_remarks or has_match)):
+    if no_compact:
+        # Transplant donor: never shrink table font/padding.
+        # When this block has remarks or match, tighten only the within-block gaps
+        # so remarks fit on the same page; keep inter_block_gap generous so the
+        # next donor block does not get pulled up onto this page.
+        compact_info = False
+        if has_remarks or has_match:
+            inner_gap       = 1 * mm
+            post_hla_spacer = 0.5 * mm
+            inter_block_gap = 3 * mm
+        else:
+            inner_gap        = 2 * mm
+            post_hla_spacer  = 4 * mm
+            inter_block_gap  = 3 * mm
+    elif long_content or (force_compact and (has_remarks or has_match)):
         inner_gap        = 0.5 * mm
         post_hla_spacer  = 0.5 * mm
         inter_block_gap  = 0.5 * mm
@@ -836,11 +850,16 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
         inter_block_gap  = 1 * mm
         compact_info     = True
     else:
-        # No remarks/match anywhere: generous spacing matching reference layout
         inner_gap        = 2 * mm
         post_hla_spacer  = 4 * mm
         inter_block_gap  = 3 * mm
         compact_info     = False
+
+    if spacing_scale != 1.0:
+        inner_gap       *= spacing_scale
+        post_hla_spacer *= spacing_scale
+        inter_block_gap *= spacing_scale
+    inner_gap += extra_inner_gap * mm
 
     # Both tables kept together as individual units — each moves to the next page
     # intact if it doesn't fit, but they are independent so one doesn't force the other.
@@ -1235,36 +1254,14 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
         "transplant_donor", case.get("nabl", True))
 
     elems = []
-
-    # Check if ANY block has visible remarks or match — use same clean logic as render
-    def _has_visible(val: str) -> bool:
-        if val is None:
-            return False
-        s = str(val).strip()
-        if not s or s.upper() in ["NA", "N/A", "-", "\u2014", ".", "NONE", "NULL"]:
-            return False
-        # Final check against clean display result
-        v = _clean_display(val)
-        if not v or v == "\u2014" or v.strip() == "" or v.upper() in ["NA", "N/A"]:
-            return False
-        return True
-
-    _any_has_extra = False
-    for d in donors:
-        if _has_visible(d.get("remarks", "")) or _has_visible(d.get("match", "")):
-            _any_has_extra = True
-            break
-    if not _any_has_extra:
-        if _has_visible(patient.get("remarks", "")):
-            _any_has_extra = True
-
     elems.extend(_ngs_person_block(patient, is_donor=False, match_str="", S=S,
-                                   force_compact=_any_has_extra))
+                                   spacing_scale=2.0, extra_inner_gap=4.0, no_compact=True))
 
     _p_name = patient.get("name", "")
     for d in donors:
         elems.extend(_ngs_person_block(d, is_donor=True, match_str=d.get("match", ""), S=S,
-                                       patient_name=_p_name, force_compact=_any_has_extra))
+                                       patient_name=_p_name,
+                                       spacing_scale=2.0, extra_inner_gap=4.0, no_compact=True))
 
     elems.extend(_methodology_block(case, S))
     sig_items = _signature_block(signatories, S)
