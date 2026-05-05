@@ -574,21 +574,14 @@ def _title_case(text: str) -> str:
 _nabl_seal_bytes_cache: bytes | None = None
 
 def _get_nabl_seal_bytes() -> bytes:
-    """Crop the NABL seal out of HEADER_NABL_B64 and return square PNG bytes.
-    The seal lives roughly at x=612–709, full crop height y=38–135 of the
-    1426×170 header image. Result cached so crop only runs once per process.
+    """Return stamp_mc6558.jpg bytes for use in the demography table.
+    No pixel manipulation — image used exactly as provided.
+    Result is cached so the bytes are only fetched once per process.
     """
-    from PIL import Image as PILImage
     global _nabl_seal_bytes_cache
     if _nabl_seal_bytes_cache is not None:
         return _nabl_seal_bytes_cache
-    raw = hla_assets.get_image_bytes(hla_assets.HEADER_NABL_B64)
-    img  = PILImage.open(io.BytesIO(raw)).convert("RGBA")
-    # Crop a square region starting from the original left edge (97×97 px)
-    seal = img.crop((580, 38, 677, 135))
-    buf  = io.BytesIO()
-    seal.save(buf, format="PNG")
-    _nabl_seal_bytes_cache = buf.getvalue()
+    _nabl_seal_bytes_cache = hla_assets.get_image_bytes(hla_assets.NABL_SEAL_DEMOG_B64)
     return _nabl_seal_bytes_cache
 
 
@@ -643,24 +636,6 @@ class _HFCanvas:
             )
         # Without logo: footer image and page numbers are omitted; space is still reserved.
 
-        # ── NABL seal — right end of QR zone, every page ────────────────────
-        # Uses the PIL-processed crop from the NABL header (RGBA) which renders
-        # correctly; NABL_SEAL_B64 raw PNG renders as black on canvas.
-        if nabl:
-            _PAGE_NUM_AREA = 4 * mm
-            _qr_bottom = MARGIN_B + _PAGE_NUM_AREA + self.footer_h + 4 * mm
-            # Square bounding box — seal is circular, no stretching
-            _seal_size = 22 * mm
-            _seal_x = MARGIN_L + CONTENT_W - _seal_size   # flush right of content
-            _seal_y = _qr_bottom + (QR_ZONE - _seal_size) / 2
-            raw_nabl = _get_nabl_seal_bytes()
-            canvas.drawImage(
-                ImageReader(io.BytesIO(raw_nabl)),
-                _seal_x, _seal_y,
-                width=_seal_size, height=_seal_size,
-                preserveAspectRatio=True, mask="auto"
-            )
-
         canvas.restoreState()
 
 
@@ -684,12 +659,25 @@ def _ngs_section_bar(text: str, S: dict) -> Table:
 # Widths proportioned from PGTA reference: [108, 12, 161, 108, 12, 89] on 490pt
 # Scaled to CONTENT_W ≈ 510pt: [112, 13, 168, 112, 13, 92]
 
-def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name: str = "", compact: bool = False) -> Table:
+def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name: str = "", compact: bool = False, nabl: bool = False) -> Table:
     pf = "Donor" if is_donor else "Patient"
     cw = CONTENT_W
 
-    # 6-col widths matching PGTA proportions
-    col_w = [cw * 0.220, cw * 0.025, cw * 0.329, cw * 0.220, cw * 0.025, cw * 0.181]
+    # NABL seal shown only in the patient (non-donor) table
+    show_nabl = nabl and not is_donor
+    _LOGO_W = 21 * mm          # rendered image width
+    _LOGO_COL_W = _LOGO_W + 3 * mm   # 3 mm natural gap; keeps right column generous
+
+    if show_nabl:
+        # 7-col layout: [left-label, left-colon, left-val, NABL-logo, right-label, right-colon, right-val]
+        # Proportions tuned so "Sample Receipt Date" (97 pt) and longest PIN (77 pt)
+        # both fit on one line with comfortable margin.  All six sum to 1.000.
+        rem = cw - _LOGO_COL_W
+        col_w = [rem * 0.182, rem * 0.025, rem * 0.298, _LOGO_COL_W,
+                 rem * 0.260, rem * 0.025, rem * 0.210]
+    else:
+        # Original 6-col widths matching PGTA proportions
+        col_w = [cw * 0.220, cw * 0.025, cw * 0.329, cw * 0.220, cw * 0.025, cw * 0.181]
 
     def L(text): return Paragraph(f"<b>{text}</b>", S["lbl"])
     def C():     return Paragraph("<b>:</b>", S["lbl"])
@@ -698,8 +686,20 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
     def R(text): return Paragraph(_clean_display(text), S["val"])
     def E():     return Paragraph("", S["lbl"])
 
+    def V_name(text):
+        """Render name on one line; auto-shrink font (min 8pt) if it would wrap."""
+        display = _title_case(_clean_display(text))
+        avail = col_w[2] - 4  # subtract left-padding
+        fn, fs = S["val"].fontName, S["val"].fontSize
+        if pdfmetrics.stringWidth(display, fn, fs) > avail:
+            fit = max(8.0, fs * avail / pdfmetrics.stringWidth(display, fn, fs))
+            style = ParagraphStyle("val_name_fit", parent=S["val"],
+                                   fontSize=fit, leading=fit + 2)
+            return Paragraph(display, style)
+        return Paragraph(display, S["val"])
+
     left_rows = [
-        [L(f"{pf} Name"), C(), V(person.get("name", ""))],
+        [L(f"{pf} Name"), C(), V_name(person.get("name", ""))],
         [L("Gender / Age"), C(), V(_normalize_age(person.get("gender_age", "")))],
         [L("Hospital MR No"), C(), R(person.get("hospital_mr_no", "") or "NA")],
     ]
@@ -730,24 +730,67 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
     while len(left_rows)  < max_r: left_rows.append([E(), E(), E()])
     while len(right_rows) < max_r: right_rows.append([E(), E(), E()])
 
-    rows = [lr + rr for lr, rr in zip(left_rows, right_rows)]
-    t = Table(rows, colWidths=col_w)
     _vpad = 2 if compact else 4
-    t.setStyle(TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, -1), C_INFO_BG),
-        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING",    (0, 0), (-1, -1), _vpad),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), _vpad),
-        ("LEFTPADDING",   (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
-        # Colon columns: no left padding so colon sits flush next to label
-        ("LEFTPADDING",   (1, 0), (1, -1), 0),
-        ("LEFTPADDING",   (4, 0), (4, -1), 0),
-        ("RIGHTPADDING",  (1, 0), (1, -1), 2),
-        ("RIGHTPADDING",  (4, 0), (4, -1), 2),
-        # Extra left padding on right-side label column for clear visual center gap
-        ("LEFTPADDING",   (3, 0), (3, -1), 14),
-    ]))
+
+    if show_nabl:
+        raw_nabl = _get_nabl_seal_bytes()
+        # stamp_mc6558.jpg is 205×256 px — maintain aspect ratio from _LOGO_W
+        _LOGO_H = _LOGO_W * (256 / 205)
+        logo_img = Image(io.BytesIO(raw_nabl), width=_LOGO_W, height=_LOGO_H)
+        # Align logo near the Gender/Age row; add extra offset only when name wraps
+        name_val = person.get("name", "")
+        logo_top_pad = 6 * mm if len(name_val) > 20 else 1 * mm
+        logo_cell = [Spacer(1, logo_top_pad), logo_img]
+
+        rows = []
+        for i, (lr, rr) in enumerate(zip(left_rows, right_rows)):
+            mid = logo_cell if i == 0 else [E()]
+            rows.append(lr + [mid] + rr)
+
+        t = Table(rows, colWidths=col_w)
+        t.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), C_INFO_BG),
+            ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING",    (0, 0), (-1, -1), _vpad),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), _vpad),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+            # Left colon column (col 1)
+            ("LEFTPADDING",   (1, 0), (1, -1), 0),
+            ("RIGHTPADDING",  (1, 0), (1, -1), 2),
+            # Logo column (col 3) — spans all rows, flush-left; 3 mm col gap gives
+            # natural separation before the right-label column
+            ("SPAN",          (3, 0), (3, max_r - 1)),
+            ("ALIGN",         (3, 0), (3, 0), "LEFT"),
+            ("VALIGN",        (3, 0), (3, 0), "TOP"),
+            ("LEFTPADDING",   (3, 0), (3, -1), 0),
+            ("RIGHTPADDING",  (3, 0), (3, -1), 0),
+            ("TOPPADDING",    (3, 0), (3, -1), 0),
+            ("BOTTOMPADDING", (3, 0), (3, -1), 0),
+            # Right colon column (col 5)
+            ("LEFTPADDING",   (5, 0), (5, -1), 0),
+            ("RIGHTPADDING",  (5, 0), (5, -1), 2),
+            # Right label column (col 4) — minimal padding; logo col already has 8mm right gap
+            ("LEFTPADDING",   (4, 0), (4, -1), 4),
+        ]))
+    else:
+        rows = [lr + rr for lr, rr in zip(left_rows, right_rows)]
+        t = Table(rows, colWidths=col_w)
+        t.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), C_INFO_BG),
+            ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING",    (0, 0), (-1, -1), _vpad),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), _vpad),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+            # Colon columns: no left padding so colon sits flush next to label
+            ("LEFTPADDING",   (1, 0), (1, -1), 0),
+            ("LEFTPADDING",   (4, 0), (4, -1), 0),
+            ("RIGHTPADDING",  (1, 0), (1, -1), 2),
+            ("RIGHTPADDING",  (4, 0), (4, -1), 2),
+            # Extra left padding on right-side label column for clear visual center gap
+            ("LEFTPADDING",   (3, 0), (3, -1), 14),
+        ]))
     return t
 
 
@@ -801,7 +844,7 @@ def _hla_table(person: dict, S: dict, compact: bool = False) -> Table:
 def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
                       patient_name: str = "", force_compact: bool = False,
                       spacing_scale: float = 1.0, extra_inner_gap: float = 0.0,
-                      no_compact: bool = False) -> list:
+                      no_compact: bool = False, nabl: bool = False) -> list:
     _raw_remarks = person.get("remarks", "")
     _remarks_display = _clean_display(_raw_remarks) if _raw_remarks else ""
     # Normalize HLA allele nomenclature in remarks (capitalize and fix formatting)
@@ -865,7 +908,7 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
     # intact if it doesn't fit, but they are independent so one doesn't force the other.
     elems = [
         KeepTogether([_ngs_info_table(person, S, is_donor=is_donor, patient_name=patient_name,
-                                      compact=compact_info)]),
+                                      compact=compact_info, nabl=nabl)]),
         Spacer(1, inner_gap),
         KeepTogether([_hla_table(person, S, compact=compact_info)]),
         Spacer(1, post_hla_spacer),
@@ -1229,7 +1272,8 @@ def _build_ngs_single(case: dict, S: dict) -> list:
 
     elems = []
 
-    elems.extend(_ngs_person_block(patient, is_donor=False, match_str="", S=S))
+    elems.extend(_ngs_person_block(patient, is_donor=False, match_str="", S=S,
+                                   nabl=case.get("nabl", True)))
 
     elems.extend(_methodology_block(case, S))
     sig_items = _signature_block(signatories, S)
@@ -1255,13 +1299,15 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
 
     elems = []
     elems.extend(_ngs_person_block(patient, is_donor=False, match_str="", S=S,
-                                   spacing_scale=2.0, extra_inner_gap=4.0, no_compact=True))
+                                   spacing_scale=2.0, extra_inner_gap=4.0, no_compact=True,
+                                   nabl=case.get("nabl", True)))
 
     _p_name = patient.get("name", "")
     for d in donors:
         elems.extend(_ngs_person_block(d, is_donor=True, match_str=d.get("match", ""), S=S,
                                        patient_name=_p_name,
-                                       spacing_scale=2.0, extra_inner_gap=4.0, no_compact=True))
+                                       spacing_scale=2.0, extra_inner_gap=4.0, no_compact=True,
+                                       nabl=case.get("nabl", True)))
 
     elems.extend(_methodology_block(case, S))
     sig_items = _signature_block(signatories, S)
@@ -1348,7 +1394,8 @@ def _build_rpl_couple(case: dict, S: dict) -> list:
         elems += _rpl_reference_section(rpl_ref, patient, donor, S, include_comment=False)
     else:
         # Single-person RPL: NGS-style patient block
-        patient_block = _ngs_person_block(patient, is_donor=False, match_str="", S=S)
+        patient_block = _ngs_person_block(patient, is_donor=False, match_str="", S=S,
+                                          nabl=case.get("nabl", True))
         elems.append(KeepTogether(patient_block))
         _emit_remarks(patient, "Remarks (Patient)")
 
