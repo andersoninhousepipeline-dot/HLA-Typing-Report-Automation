@@ -574,14 +574,23 @@ def _title_case(text: str) -> str:
 _nabl_seal_bytes_cache: bytes | None = None
 
 def _get_nabl_seal_bytes() -> bytes:
-    """Return stamp_mc6558.jpg bytes for use in the demography table.
-    No pixel manipulation — image used exactly as provided.
-    Result is cached so the bytes are only fetched once per process.
+    """Return NABL seal bytes with white background replaced by the table cell grey (#F1F1F7).
+    Result is cached so pixel processing only runs once per process.
     """
     global _nabl_seal_bytes_cache
     if _nabl_seal_bytes_cache is not None:
         return _nabl_seal_bytes_cache
-    _nabl_seal_bytes_cache = hla_assets.get_image_bytes(hla_assets.NABL_SEAL_DEMOG_B64)
+    import numpy as np
+    from PIL import Image as PILImage
+    raw = hla_assets.get_image_bytes(hla_assets.NABL_SEAL_DEMOG_B64)
+    img = PILImage.open(io.BytesIO(raw)).convert("RGB")
+    data = np.array(img, dtype=np.uint8)
+    # Replace near-white pixels (all channels > 240) with #F1F1F7 — the table cell background
+    mask = (data[:, :, 0] > 240) & (data[:, :, 1] > 240) & (data[:, :, 2] > 240)
+    data[mask] = [241, 241, 247]
+    buf = io.BytesIO()
+    PILImage.fromarray(data, "RGB").save(buf, format="JPEG", quality=95)
+    _nabl_seal_bytes_cache = buf.getvalue()
     return _nabl_seal_bytes_cache
 
 
@@ -617,24 +626,22 @@ class _HFCanvas:
         # ── Footer ──────────────────────────────────────────────────────────
         if with_logo:
             raw_f = hla_assets.get_image_bytes(hla_assets.FOOTER_BAR_B64)
-            # Footer bar sits above the page-number area (Fix 2: page number below footer)
-            _PAGE_NUM_AREA = 4 * mm   # vertical space reserved below footer bar for page number
-            fy = MARGIN_B + _PAGE_NUM_AREA
+            # Footer bar anchored to page bottom
+            fy = MARGIN_B
             canvas.drawImage(
                 ImageReader(io.BytesIO(raw_f)),
                 MARGIN_L, fy,
                 width=CONTENT_W, height=self.footer_h,
                 preserveAspectRatio=True, mask="auto"
             )
-            # Page number "Page X of N" — right-aligned, below the footer bar (Fix 2 & 3)
-            canvas.setFont(_f("Calibri", "Helvetica"), 9)
-            canvas.setFillColor(BLACK)
-            canvas.drawRightString(
-                PAGE_W - MARGIN_R,
-                MARGIN_B,
-                f"Page {doc.page} of {self.total_pages}"
-            )
-        # Without logo: footer image and page numbers are omitted; space is still reserved.
+        # Page number always drawn — above the footer zone (whether logo is shown or not)
+        canvas.setFont(_f("Calibri", "Helvetica"), 9)
+        canvas.setFillColor(BLACK)
+        canvas.drawRightString(
+            PAGE_W - MARGIN_R,
+            MARGIN_B + self.footer_h + 1 * mm,
+            f"Page {doc.page} of {self.total_pages}"
+        )
 
         canvas.restoreState()
 
@@ -670,11 +677,12 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
 
     if show_nabl:
         # 7-col layout: [left-label, left-colon, left-val, NABL-logo, right-label, right-colon, right-val]
-        # Proportions tuned so "Sample Receipt Date" (97 pt) and longest PIN (77 pt)
-        # both fit on one line with comfortable margin.  All six sum to 1.000.
+        # Logo sits between the two data sections (col 3).
+        # left-val (0.330) gives hospital names 2-line wrap; right-val (0.201) gives
+        # long PINs ~85pt avail (>77pt needed); right-lbl (0.237) fits "Sample Receipt Date".
         rem = cw - _LOGO_COL_W
-        col_w = [rem * 0.182, rem * 0.025, rem * 0.298, _LOGO_COL_W,
-                 rem * 0.260, rem * 0.025, rem * 0.210]
+        col_w = [rem * 0.182, rem * 0.025, rem * 0.330, _LOGO_COL_W,
+                 rem * 0.237, rem * 0.025, rem * 0.201]
     else:
         # Original 6-col widths matching PGTA proportions
         col_w = [cw * 0.220, cw * 0.025, cw * 0.329, cw * 0.220, cw * 0.025, cw * 0.181]
@@ -689,7 +697,7 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
     def V_name(text):
         """Render name on one line; auto-shrink font (min 8pt) if it would wrap."""
         display = _title_case(_clean_display(text))
-        avail = col_w[2] - 4  # subtract left-padding
+        avail = col_w[2] - 4  # col 2 = left-val in both NABL and plain layouts
         fn, fs = S["val"].fontName, S["val"].fontSize
         if pdfmetrics.stringWidth(display, fn, fs) > avail:
             fit = max(8.0, fs * avail / pdfmetrics.stringWidth(display, fn, fs))
@@ -734,17 +742,23 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
 
     if show_nabl:
         raw_nabl = _get_nabl_seal_bytes()
-        # stamp_mc6558.jpg is 205×256 px — maintain aspect ratio from _LOGO_W
-        _LOGO_H = _LOGO_W * (256 / 205)
+        # new_NABL.jpg is 1080×1265 px — maintain aspect ratio from _LOGO_W
+        _LOGO_H = _LOGO_W * (1265 / 1080)
         logo_img = Image(io.BytesIO(raw_nabl), width=_LOGO_W, height=_LOGO_H)
-        # Align logo near the Gender/Age row; add extra offset only when name wraps
-        name_val = person.get("name", "")
-        logo_top_pad = 6 * mm if len(name_val) > 20 else 1 * mm
-        logo_cell = [Spacer(1, logo_top_pad), logo_img]
+        logo_cell = [logo_img]
+
+        # Span rows 1 to max_r-2 (the middle rows) so VALIGN=MIDDLE reliably
+        # centres the logo between the top and bottom rows of the table.
+        # When Referred By is populated shift the span one row up (start at row 0)
+        # so the logo sits slightly higher visually.
+        referred_by_val = _clean_display(person.get("referred_by", ""))
+        has_referred = referred_by_val not in ("—", "", "-")
+        logo_row_start = 0 if has_referred else 1
+        logo_row_end   = max_r - 2
 
         rows = []
         for i, (lr, rr) in enumerate(zip(left_rows, right_rows)):
-            mid = logo_cell if i == 0 else [E()]
+            mid = logo_cell if i == logo_row_start else [E()]
             rows.append(lr + [mid] + rr)
 
         t = Table(rows, colWidths=col_w)
@@ -758,11 +772,10 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
             # Left colon column (col 1)
             ("LEFTPADDING",   (1, 0), (1, -1), 0),
             ("RIGHTPADDING",  (1, 0), (1, -1), 2),
-            # Logo column (col 3) — spans all rows, flush-left; 3 mm col gap gives
-            # natural separation before the right-label column
-            ("SPAN",          (3, 0), (3, max_r - 1)),
-            ("ALIGN",         (3, 0), (3, 0), "LEFT"),
-            ("VALIGN",        (3, 0), (3, 0), "TOP"),
+            # Logo column (col 3) — spans the middle rows; VALIGN=MIDDLE centres the image
+            ("SPAN",          (3, logo_row_start), (3, logo_row_end)),
+            ("ALIGN",         (3, logo_row_start), (3, logo_row_start), "CENTER"),
+            ("VALIGN",        (3, logo_row_start), (3, logo_row_start), "MIDDLE"),
             ("LEFTPADDING",   (3, 0), (3, -1), 0),
             ("RIGHTPADDING",  (3, 0), (3, -1), 0),
             ("TOPPADDING",    (3, 0), (3, -1), 0),
@@ -770,7 +783,7 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
             # Right colon column (col 5)
             ("LEFTPADDING",   (5, 0), (5, -1), 0),
             ("RIGHTPADDING",  (5, 0), (5, -1), 2),
-            # Right label column (col 4) — minimal padding; logo col already has 8mm right gap
+            # Right label column (col 4)
             ("LEFTPADDING",   (4, 0), (4, -1), 4),
         ]))
     else:
@@ -1516,10 +1529,9 @@ def generate_pdf(case: dict, output_path: str) -> str:
     footer_h = (fh / fw) * CONTENT_W
 
     top_margin    = MARGIN_T + banner_h + 4 * mm
-    # extra 4 mm below footer bar for the page number text
     _PAGE_NUM_AREA = 4 * mm
-    # QR_ZONE: blank strip above footer reserved for external QR-code overlay on every page
-    bottom_margin = MARGIN_B + _PAGE_NUM_AREA + footer_h + 4 * mm + QR_ZONE
+    # QR_ZONE: blank strip above footer+page-number reserved for external QR-code overlay
+    bottom_margin = MARGIN_B + footer_h + _PAGE_NUM_AREA + 2 * mm + QR_ZONE
 
     doc = SimpleDocTemplate(
         output_path,

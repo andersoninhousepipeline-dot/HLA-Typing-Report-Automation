@@ -280,14 +280,26 @@ def _parse_surfseq_results(df_csv: pd.DataFrame) -> dict:
         if not locus:
             continue
 
-        allele_tokens = [t for t in clean_tokens[1:] if t and t not in ("-", "nan")]
+        raw_allele_tokens = [t for t in clean_tokens[1:] if t and t not in ("-", "nan")]
+        if not raw_allele_tokens:
+            continue
+
+        # Expand tokens where two alleles are space-separated in one cell
+        # e.g. "A*02:11:01:01      A*11:01:01:01" → two separate tokens
+        allele_tokens = []
+        for tok in raw_allele_tokens:
+            sub = [s for s in tok.split() if s and "*" in s]
+            if len(sub) > 1:
+                allele_tokens.extend(sub)
+            else:
+                allele_tokens.append(tok)
         if not allele_tokens:
             continue
 
-        # Extract sample number: try HLA-{digits} first, then any 4-6 digit run in barcode
-        m = re.search(r"HLA-(\d+)(?:[_\-])", barcode)
+        # Extract sample number: try HLA-{digits}[optional letters]_ first, then fallback
+        m = re.search(r"HLA-(\d+)[A-Z]*[_\-]", barcode)
         if not m:
-            m = re.search(r"[_\-](\d{4,6})[_\-]", barcode)
+            m = re.search(r"[_\-](\d{4,9})[_\-]", barcode)
         if not m:
             continue
         sample_num = m.group(1)
@@ -598,7 +610,7 @@ def parse_excel(filepath: str, nabl: bool = True) -> list:
         if not name:
             continue
 
-        if role == "patient":
+        if role.startswith("pati"):   # accepts "patient", typo "patinet", etc.
             _flush()
             current_patient = {"_row": row}
         elif role == "donor" and current_patient is not None:
