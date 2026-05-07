@@ -58,6 +58,14 @@ WHITE = colors.white
 BLACK = colors.black
 ORANGE = colors.HexColor("#E8772E")
 
+# CDC Cross match
+C_CDC_SECTION  = colors.HexColor("#C0392B")   # red for Result/Interpretation/Comments headings
+C_CDC_NEG      = colors.HexColor("#27AE60")   # green for Negative result
+C_CDC_POS      = colors.HexColor("#E74C3C")   # red for Positive result
+C_CDC_DOUBTFUL = colors.HexColor("#E67E22")   # orange for Doubtful
+C_CDC_REL_BG   = colors.HexColor("#FFF3CD")   # cream for relationship box background
+C_CDC_DTT_HDR  = colors.HexColor("#2C3E50")   # dark header for DTT table
+
 # ─── Static text constants ────────────────────────────────────────────────────
 COVERAGE_LINES = [
     ": Class I (HLA-A, -B & -C) - Whole gene",
@@ -1484,6 +1492,339 @@ def _make_numbered_canvas_class(hf_instance):
     return _NumberedCanvas
 
 
+# ─── CDC Cross match report builder ──────────────────────────────────────────
+
+CDC_COMMENTS = [
+    "Positive crossmatch is contraindicated in solid organ transplantation.",
+    "The test should be performed within one week before transplantation.",
+    "The test is AHG augmented, which increases the sensitivity of the test.",
+    "Test performed with incubation of 37°C.",
+    "The test is done with DTT and without DTT treatment of the recipient’s serum. "
+    "This step differentiates the presence of IgM antibody from IgG antibody.",
+]
+
+
+def _cdc_result_color(val: str):
+    """Return the display color for a CDC result string."""
+    v = val.strip().lower()
+    if "negative" in v:        return C_CDC_NEG
+    if "strong positive" in v: return C_CDC_POS
+    if "weak positive" in v:   return C_CDC_DOUBTFUL
+    if "positive" in v:        return C_CDC_POS
+    if "doubtful" in v:        return C_CDC_DOUBTFUL
+    return BLACK
+
+
+def _build_cdc_report(case: dict, S: dict) -> list:
+    """Return story flowables for CDC Cross match report (2 pages)."""
+
+    patient = case.get("patient", {})
+    donors  = case.get("donors", [])
+    donor   = donors[0] if donors else {}
+    cdc     = case.get("cdc_results", {})
+
+    F_BOLD = _f("SegoeUI-Bold", "Helvetica-Bold")
+    F_REG  = _f("SegoeUI",      "Helvetica")
+
+    def _P(text, font=F_BOLD, size=10, color=BLACK, align=TA_LEFT, leading=None):
+        return Paragraph(text, ParagraphStyle("_cdc", fontName=font, fontSize=size,
+            textColor=color, alignment=align, leading=leading or size + 2))
+
+    def _clean(val):
+        s = str(val).strip() if val else ""
+        return s if s and s.lower() not in ("nan", "none", "") else "NA"
+
+    def _color_hex(c):
+        """Return 6-char hex string for a reportlab color."""
+        try:
+            return "%02x%02x%02x" % (
+                int(round(c.red * 255)),
+                int(round(c.green * 255)),
+                int(round(c.blue * 255)),
+            )
+        except Exception:
+            return "000000"
+
+    elems = []
+
+    # ── Info table ────────────────────────────────────────────────────────────
+    info_lbl_style = ParagraphStyle("_cdc_lbl", fontName=F_BOLD, fontSize=10,
+                                    textColor=BLACK, leading=12)
+
+    def IL(t): return Paragraph(f"<b>{t}</b>", info_lbl_style)
+    def IV(t): return Paragraph(_clean(t), info_lbl_style)
+    def IC():  return Paragraph("<b>:</b>", info_lbl_style)
+
+    p_name    = _clean(patient.get("name", ""))
+    p_gender  = _clean(patient.get("gender_age", ""))
+    p_pin     = _clean(patient.get("pin", ""))
+    p_sampno  = _clean(patient.get("sample_number", ""))
+    p_diag    = _clean(patient.get("diagnosis", ""))
+    p_hosp    = _clean(patient.get("hospital_clinic", ""))
+
+    d_name    = _clean(donor.get("name", ""))
+    d_gender  = _clean(donor.get("gender_age", ""))
+    d_pin     = _clean(donor.get("pin", "NA"))
+    d_sampno  = _clean(donor.get("sample_number", "NA"))
+    d_receipt = _clean(donor.get("receipt_date", ""))
+    d_report  = _clean(donor.get("report_date", ""))
+
+    cw = CONTENT_W
+    lw = cw * 0.13
+    sw = cw * 0.03
+    vw = cw * 0.34
+    info_col_w = [lw, sw, vw, lw, sw, vw]
+
+    info_rows = [
+        [IL("Patient name"),    IC(), IV(p_name),   IL("Donor name"),          IC(), IV(d_name)],
+        [IL("Gender/ Age"),     IC(), IV(p_gender),  IL("Gender/ Age"),         IC(), IV(d_gender)],
+        [IL("PIN"),             IC(), IV(p_pin),     IL("PIN"),                 IC(), IV(d_pin)],
+        [IL("Sample Number"),   IC(), IV(p_sampno),  IL("Sample Number"),       IC(), IV(d_sampno)],
+        [IL("Diagnosis"),       IC(), IV(p_diag),    IL("Sample receipt date"), IC(), IV(d_receipt)],
+        [IL("Hospital/Clinic"), IC(), IV(p_hosp),    IL("Report date"),         IC(), IV(d_report)],
+    ]
+    info_t = Table(info_rows, colWidths=info_col_w)
+    info_t.setStyle(TableStyle([
+        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+        ("LEFTPADDING",   (1, 0), (1, -1), 0),
+        ("RIGHTPADDING",  (1, 0), (1, -1), 2),
+        ("LEFTPADDING",   (4, 0), (4, -1), 0),
+        ("RIGHTPADDING",  (4, 0), (4, -1), 2),
+        ("LINEBELOW",     (0, -1), (-1, -1), 0.5, colors.grey),
+    ]))
+    elems.append(info_t)
+    elems.append(Spacer(1, 6 * mm))
+
+    # ── Photo / sample-type table ─────────────────────────────────────────────
+    photo_w = 35 * mm
+    col_w_photo = [(cw - 2 * photo_w) / 2, photo_w, photo_w]
+
+    def _photo_cell(photo_bytes):
+        if photo_bytes:
+            try:
+                return Image(io.BytesIO(photo_bytes), width=photo_w - 4 * mm,
+                             height=28 * mm)
+            except Exception:
+                pass
+        placeholder = Table(
+            [[Paragraph("No Photo", ParagraphStyle("_ph_np", fontName=F_REG,
+                fontSize=8, textColor=colors.grey, alignment=TA_CENTER))]],
+            colWidths=[photo_w - 4 * mm]
+        )
+        placeholder.setStyle(TableStyle([
+            ("BOX",          (0, 0), (-1, -1), 0.5, colors.grey),
+            ("MINROWHEIGHT", (0, 0), (-1, -1), 28 * mm),
+            ("VALIGN",       (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        return placeholder
+
+    pat_photo = _photo_cell(patient.get("photo_bytes"))
+    don_photo = _photo_cell(donor.get("photo_bytes"))
+
+    p_sample_type = _clean(patient.get("sample_type", "Serum"))
+    d_sample_type = _clean(donor.get("sample_type", "Sodium Heparin Whole Blood"))
+    p_collect     = _clean(patient.get("collection_date", ""))
+    d_collect     = _clean(donor.get("collection_date", ""))
+
+    photo_rows = [
+        [_P("Photo", F_BOLD, 10, BLACK, TA_LEFT),
+         _P("PATIENT DETAILS", F_BOLD, 10, BLACK, TA_CENTER),
+         _P("DONOR DETAILS",   F_BOLD, 10, BLACK, TA_CENTER)],
+        ["", pat_photo, don_photo],
+        [_P("Sample type",        F_BOLD, 10, BLACK),
+         _P(p_sample_type,        F_BOLD, 10, BLACK, TA_CENTER),
+         _P(d_sample_type,        F_BOLD, 10, BLACK, TA_CENTER)],
+        [_P("Date of Collection", F_BOLD, 10, BLACK),
+         _P(p_collect,            F_BOLD, 10, BLACK, TA_CENTER),
+         _P(d_collect,            F_BOLD, 10, BLACK, TA_CENTER)],
+    ]
+    photo_t = Table(photo_rows, colWidths=col_w_photo)
+    photo_t.setStyle(TableStyle([
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 4),
+        ("BOX",           (1, 0), (2, -1), 0.5, colors.grey),
+        ("INNERGRID",     (1, 0), (2, -1), 0.5, colors.grey),
+        ("BACKGROUND",    (1, 0), (2, 0),  C_INFO_BG),
+    ]))
+    elems.append(photo_t)
+    elems.append(Spacer(1, 5 * mm))
+
+    # ── Relationship box ──────────────────────────────────────────────────────
+    rel_text = _clean(donor.get("relationship", ""))
+    rel_para = Paragraph(
+        f"<b>Relationship Of The Donor With Recipient:</b> {rel_text}",
+        ParagraphStyle("_rel", fontName=F_BOLD, fontSize=10, textColor=BLACK,
+                        alignment=TA_CENTER, leading=14)
+    )
+    rel_t = Table([[rel_para]], colWidths=[CONTENT_W])
+    rel_t.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), C_CDC_REL_BG),
+        ("BOX",           (0, 0), (-1, -1), 0.5, colors.HexColor("#F0AD4E")),
+        ("TOPPADDING",    (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
+    ]))
+    elems.append(rel_t)
+    elems.append(Spacer(1, 6 * mm))
+
+    # ── Result section ────────────────────────────────────────────────────────
+    elems.append(Paragraph("<b>Result</b>", ParagraphStyle("_cdc_sec",
+        fontName=F_BOLD, fontSize=13, textColor=C_CDC_SECTION, leading=16,
+        spaceAfter=2)))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=1.2, color=C_CDC_SECTION,
+                             spaceAfter=4))
+
+    t_result = cdc.get("t_cell", "Negative")
+    b_result = cdc.get("b_cell", "Negative")
+
+    t_color_hex = _color_hex(_cdc_result_color(t_result))
+    b_color_hex = _color_hex(_cdc_result_color(b_result))
+
+    elems.append(Paragraph(
+        f"<b>T cell crossmatch: </b><font color='#{t_color_hex}'><b>{t_result}</b></font>"
+        f"<b> (&lt;10% Dead)</b>",
+        ParagraphStyle("_rline", fontName=F_BOLD, fontSize=10, leading=16)
+    ))
+    elems.append(Paragraph(
+        f"<b>B cell crossmatch: </b><font color='#{b_color_hex}'><b>{b_result}</b></font>"
+        f"<b> (&lt;10% Dead)</b>",
+        ParagraphStyle("_rline2", fontName=F_BOLD, fontSize=10, leading=16)
+    ))
+    elems.append(Spacer(1, 5 * mm))
+
+    # ── DTT table ─────────────────────────────────────────────────────────────
+    dtt_hdr_style = ParagraphStyle("_dtt_h", fontName=F_BOLD, fontSize=10,
+                                    textColor=WHITE, alignment=TA_CENTER, leading=12)
+    dtt_val_style = ParagraphStyle("_dtt_v", fontName=F_REG,  fontSize=10,
+                                    textColor=BLACK, alignment=TA_CENTER, leading=12)
+    dtt_lbl_style = ParagraphStyle("_dtt_l", fontName=F_BOLD, fontSize=10,
+                                    textColor=BLACK, alignment=TA_CENTER, leading=12)
+
+    dtt_col_w = [CONTENT_W * 0.25, CONTENT_W * 0.375, CONTENT_W * 0.375]
+    dtt_rows = [
+        [Paragraph("<b>Cells</b>",                dtt_hdr_style),
+         Paragraph("<b>With DTT Treatment</b>",    dtt_hdr_style),
+         Paragraph("<b>Without DTT Treatment</b>", dtt_hdr_style)],
+        [Paragraph("T Cells", dtt_lbl_style),
+         Paragraph(cdc.get("t_with_dtt",    "<10% Dead cells"), dtt_val_style),
+         Paragraph(cdc.get("t_without_dtt", "<10% Dead cells"), dtt_val_style)],
+        [Paragraph("B Cells", dtt_lbl_style),
+         Paragraph(cdc.get("b_with_dtt",    "<10% Dead cells"), dtt_val_style),
+         Paragraph(cdc.get("b_without_dtt", "<10% Dead cells"), dtt_val_style)],
+    ]
+    dtt_t = Table(dtt_rows, colWidths=dtt_col_w)
+    dtt_t.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0),  C_CDC_DTT_HDR),
+        ("BACKGROUND",    (0, 1), (-1, -1), C_HLA_ROW),
+        ("INNERGRID",     (0, 0), (-1, -1), 0.5, colors.grey),
+        ("BOX",           (0, 0), (-1, -1), 0.5, colors.grey),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    elems.append(dtt_t)
+
+    # ── Page break → page 2 ───────────────────────────────────────────────────
+    elems.append(PageBreak())
+
+    # ── Interpretation ────────────────────────────────────────────────────────
+    elems.append(Paragraph("<b>Interpretation</b>", ParagraphStyle("_cdc_sec2",
+        fontName=F_BOLD, fontSize=13, textColor=C_CDC_SECTION, leading=16,
+        spaceAfter=2)))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=1.2, color=C_CDC_SECTION,
+                             spaceAfter=6))
+
+    interp_hdr_s = ParagraphStyle("_ih", fontName=F_BOLD, fontSize=10,
+                                   textColor=BLACK, alignment=TA_CENTER, leading=12)
+    interp_val_s = ParagraphStyle("_iv", fontName=F_REG, fontSize=10,
+                                   textColor=BLACK, alignment=TA_CENTER, leading=14)
+    interp_col_w = [CONTENT_W * 0.45, CONTENT_W * 0.45]
+    interp_rows = [
+        [Paragraph("<b>Percentage of dead cells</b>", interp_hdr_s),
+         Paragraph("<b>Results</b>", interp_hdr_s)],
+        [Paragraph("0- 10 %",  interp_val_s), Paragraph("Negative",       interp_val_s)],
+        [Paragraph("10%-20%",  interp_val_s), Paragraph("Doubtful",        interp_val_s)],
+        [Paragraph("20%-50%",  interp_val_s), Paragraph("Weak Positive",   interp_val_s)],
+        [Paragraph("50-80%",   interp_val_s), Paragraph("Positive",        interp_val_s)],
+        [Paragraph(">80%",     interp_val_s), Paragraph("Strong Positive", interp_val_s)],
+    ]
+    interp_t = Table(interp_rows, colWidths=interp_col_w, hAlign="CENTER")
+    interp_t.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0),  C_INFO_BG),
+        ("INNERGRID",     (0, 0), (-1, -1), 0.5, colors.grey),
+        ("BOX",           (0, 0), (-1, -1), 0.5, colors.grey),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    elems.append(interp_t)
+    elems.append(Spacer(1, 8 * mm))
+
+    # ── Comments ──────────────────────────────────────────────────────────────
+    elems.append(Paragraph("<b>Comments</b>", ParagraphStyle("_cdc_sec3",
+        fontName=F_BOLD, fontSize=13, textColor=C_CDC_SECTION, leading=16,
+        spaceAfter=2)))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=1.2, color=C_CDC_SECTION,
+                             spaceAfter=4))
+
+    bullet_style = ParagraphStyle("_bull", fontName=F_REG, fontSize=10,
+                                   leading=14, leftIndent=12, bulletIndent=0,
+                                   spaceBefore=2)
+    for comment in CDC_COMMENTS:
+        elems.append(Paragraph(f"• {comment}", bullet_style))
+    elems.append(Spacer(1, 8 * mm))
+
+    # ── Signatures ────────────────────────────────────────────────────────────
+    sigs = case.get("signatories", [])
+    if sigs:
+        elems.append(Paragraph(
+            "<b>This report has been reviewed and approved by:</b>",
+            ParagraphStyle("_app", fontName=F_BOLD, fontSize=11,
+                           textColor=C_APPROVAL, leading=14, spaceAfter=6)
+        ))
+        sig_cells_img   = []
+        sig_cells_name  = []
+        sig_cells_title = []
+        for sig in sigs:
+            raw = hla_assets.get_image_bytes(sig.get("sign_b64", b""))
+            if raw:
+                try:
+                    s_img = Image(io.BytesIO(raw), width=28 * mm, height=14 * mm)
+                except Exception:
+                    s_img = Spacer(28 * mm, 14 * mm)
+            else:
+                s_img = Spacer(28 * mm, 14 * mm)
+            sig_cells_img.append(s_img)
+            sig_cells_name.append(Paragraph(f"<b>{sig.get('name','')}</b>",
+                ParagraphStyle("_sn", fontName=F_BOLD, fontSize=10,
+                               alignment=TA_CENTER, leading=12)))
+            sig_cells_title.append(Paragraph(
+                sig.get("title", "").replace("<br/>", "\n"),
+                ParagraphStyle("_st", fontName=F_REG, fontSize=9,
+                               alignment=TA_CENTER, leading=11)))
+
+        sig_col_w = CONTENT_W / max(len(sigs), 1)
+        sig_rows  = [sig_cells_img, sig_cells_name, sig_cells_title]
+        sig_t = Table(sig_rows, colWidths=[sig_col_w] * len(sigs))
+        sig_t.setStyle(TableStyle([
+            ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        elems.append(sig_t)
+
+    return elems
+
+
 # ─── Top-level entry point ────────────────────────────────────────────────────
 
 def generate_pdf(case: dict, output_path: str) -> str:
@@ -1505,6 +1846,7 @@ def generate_pdf(case: dict, output_path: str) -> str:
         "single_hla":       "HLA Typing High Resolution",
         "transplant_donor": "HLA Typing High Resolution",
         "rpl_couple":       "HLA Typing \u2013 NGS High Resolution Typing",
+        "cdc_crossmatch":   "Complement Dependent Cytotoxicity (CDC) Cross match",
     }
     title = TITLES.get(report_type, "HLA Typing Report")
 
@@ -1548,6 +1890,8 @@ def generate_pdf(case: dict, output_path: str) -> str:
         body = _build_ngs_transplant(case, S)
     elif report_type == "rpl_couple":
         body = _build_rpl_couple(case, S)
+    elif report_type == "cdc_crossmatch":
+        body = _build_cdc_report(case, S)
     else:
         body = _build_ngs_single(case, S)
 
@@ -1574,7 +1918,7 @@ def make_filename(case: dict) -> str:
         if str(d.get("name", "")).strip()
     )
     rtype = {"single_hla": "HLA_NGS", "transplant_donor": "HLA_NGS",
-             "rpl_couple": "RPL"}.get(case.get("report_type", ""), "HLA")
+             "rpl_couple": "RPL", "cdc_crossmatch": "CDC"}.get(case.get("report_type", ""), "HLA")
     logo  = "WITH_LOGO" if case.get("with_logo", True) else "WITHOUT_LOGO"
     parts = [p] + ([donors] if donors else []) + [rtype, logo]
     return "_".join(parts) + ".pdf"
