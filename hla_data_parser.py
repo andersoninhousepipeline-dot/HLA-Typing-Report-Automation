@@ -518,11 +518,166 @@ def compute_rpl_reference(patient: dict, donor: dict) -> dict:
     }
 
 
+# ─── CDC Cross match parser ───────────────────────────────────────────────────
+
+def _parse_cdc_result(val: str) -> str:
+    """'Negative (<10% Dead)' → 'Negative'"""
+    s = _clean_str(val)
+    if not s or s.lower() in ("nan", ""):
+        return "Negative"
+    m = re.match(r"([A-Za-z\s]+)", s.strip())
+    return m.group(1).strip() if m else s
+
+
+def _parse_dtt_val(val: str) -> str:
+    """'Negative (<10% Dead)' → '<10% Dead cells'"""
+    s = _clean_str(val)
+    m = re.search(r"\(([^)]+)\)", s)
+    if m:
+        inner = m.group(1).strip()
+        return inner if inner.endswith("cells") else inner + " cells"
+    return "<10% Dead cells"
+
+
+def parse_cdc_excel(filepath: str, nabl: bool = True) -> list:
+    """
+    Parse a CDC Cross match Excel file (Sheet2 format) into case dicts.
+
+    Expected layout (Sheet2):
+      Row 5 (0-indexed): column headers
+        col 2=Patient name, col 3=Patient/donor, col 4=relationship,
+        col 5=Age, col 6=Gender, col 7=PIN, col 8=Sample Number,
+        col 9=Diagnosis, col 10=Sample type, col 11=Hospital/Clinic,
+        col 12=Date of Collection, col 13=Sample receipt date,
+        col 14=Report date, col 17=T cell crossmatch, col 18=B cell crossmatch
+      Rows 6+: one patient row followed by one donor row per case.
+    """
+    df = pd.read_excel(filepath, sheet_name="Sheet2", header=None)
+
+    # Find header row — first row where col 2 == "Patient name" (case-insensitive)
+    header_row = None
+    for i, row in df.iterrows():
+        cell = str(row.iloc[2]).strip().lower()
+        if "patient name" in cell:
+            header_row = i
+            break
+    if header_row is None:
+        return []
+
+    def _rv(row, col):
+        if row is None or col >= len(row):
+            return ""
+        return _clean_str(row.iloc[col])
+
+    def _rd(row, col):
+        if row is None or col >= len(row):
+            return ""
+        return _fmt_date(row.iloc[col])
+
+    def _ga(row):
+        gender = _sentence_case(_rv(row, 6))
+        raw_age = row.iloc[5] if 5 < len(row) else ""
+        if isinstance(raw_age, (int, float)) and not pd.isna(raw_age):
+            age = str(int(raw_age))
+        else:
+            age = _clean_str(raw_age)
+        return " / ".join(p for p in (gender, age) if p)
+
+    cases = []
+    current_patient = None
+    current_donor   = None
+
+    def _flush():
+        nonlocal current_patient, current_donor
+        if current_patient is None:
+            return
+        t_raw = _rv(current_patient, 17)
+        b_raw = _rv(current_patient, 18)
+
+        patient = {
+            "name":            _sentence_case(_rv(current_patient, 2)),
+            "gender_age":      _ga(current_patient),
+            "pin":             _rv(current_patient, 7),
+            "sample_number":   _rv(current_patient, 8),
+            "diagnosis":       _sentence_case(_rv(current_patient, 9)) or "NA",
+            "hospital_clinic": _sentence_case(_rv(current_patient, 11)),
+            "sample_type":     _rv(current_patient, 10) or "Serum",
+            "collection_date": _rd(current_patient, 12),
+            "receipt_date":    _rd(current_patient, 13),
+            "report_date":     _rd(current_patient, 14),
+            "photo_bytes":     None,
+            "hla": {}, "hla_c_type": "",
+            "_join_key": _rv(current_patient, 8),
+            "_has_insufficient_hla": False,
+        }
+
+        donor = {}
+        if current_donor is not None:
+            donor = {
+                "name":            _sentence_case(_rv(current_donor, 2)),
+                "gender_age":      _ga(current_donor),
+                "pin":             _rv(current_donor, 7) or "NA",
+                "sample_number":   _rv(current_donor, 8) or "NA",
+                "relationship":    _sentence_case(_rv(current_donor, 4)),
+                "sample_type":     _rv(current_donor, 10) or "Sodium Heparin Whole Blood",
+                "collection_date": _rd(current_donor, 12),
+                "receipt_date":    _rd(current_donor, 13),
+                "report_date":     _rd(current_donor, 14),
+                "photo_bytes":     None,
+                "hla": {}, "hla_c_type": "",
+                "_join_key": "", "_has_insufficient_hla": False,
+            }
+
+        dtt_t = _parse_dtt_val(t_raw)
+        dtt_b = _parse_dtt_val(b_raw)
+
+        cases.append({
+            "report_type":     "cdc_crossmatch",
+            "nabl":            nabl,
+            "with_logo":       True,
+            "signature_stamp": False,
+            "methodology":     "", "imgt_release": "",
+            "coverage":        "", "typing_status": "Complete",
+            "reviewer":        "",
+            "patient":         patient,
+            "donors":          [donor] if donor else [],
+            "rpl_reference":   {},
+            "cdc_results": {
+                "t_cell":        _parse_cdc_result(t_raw),
+                "b_cell":        _parse_cdc_result(b_raw),
+                "t_with_dtt":    dtt_t,
+                "t_without_dtt": dtt_t,
+                "b_with_dtt":    dtt_b,
+                "b_without_dtt": dtt_b,
+            },
+        })
+        current_patient = None
+        current_donor   = None
+
+    for i in range(header_row + 1, len(df)):
+        row  = df.iloc[i]
+        name = _clean_str(row.iloc[2])
+        role = _clean_str(row.iloc[3]).lower().strip()
+        if not name:
+            continue
+        if role.startswith("pati"):
+            _flush()
+            current_patient = row
+            current_donor   = None
+        elif "donor" in role and current_patient is not None:
+            current_donor = row
+
+    _flush()
+    return cases
+
+
 # ─── Main parser ─────────────────────────────────────────────────────────────
 
 def parse_excel(filepath: str, nabl: bool = True) -> list:
     """
-    Parse a MINISEQ or SURFSEQ Excel file into a list of case dicts.
+    Parse a MINISEQ, SURFSEQ, or CDC Cross match Excel file into case dicts.
+
+    Auto-detects CDC files by absence of the 'patient-donor detail' sheet.
 
     Parameters
     ----------
@@ -533,6 +688,10 @@ def parse_excel(filepath: str, nabl: bool = True) -> list:
     -------
     List of case dicts, each containing patient, donors[], report_type, etc.
     """
+    # ── Auto-detect CDC format ────────────────────────────────────────────────
+    xl_sheets = pd.ExcelFile(filepath).sheet_names
+    if "patient-donor detail" not in xl_sheets:
+        return parse_cdc_excel(filepath, nabl)
     # ── Determine lab type from filename ──────────────────────────────────────
     fname_upper = filepath.upper()
     is_miniseq = "MINISEQ" in fname_upper
