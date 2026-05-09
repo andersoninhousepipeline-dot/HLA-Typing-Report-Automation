@@ -2096,6 +2096,10 @@ def _build_dsa_report(case: dict, S: dict) -> list:
                                  spaceBefore=3, alignment=TA_JUSTIFY)
     for comment in DSA_COMMENTS:
         elems.append(Paragraph(f"• {comment}", _bull_just))
+    # User-supplied additional comment — appended as a new bullet, same style
+    _dsa_user_comment = _clean_display(patient.get("comments", ""))
+    if _dsa_user_comment and _dsa_user_comment != "—":
+        elems.append(Paragraph(f"• {_dsa_user_comment}", _bull_just))
     elems.append(Spacer(1, 8 * mm))
 
     # ── Recommendations ───────────────────────────────────────────────────────

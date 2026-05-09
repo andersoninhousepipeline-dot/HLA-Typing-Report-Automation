@@ -591,6 +591,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("receipt_date",    "Sample Receipt Date",  ""),
             ("report_date",     "Report Date",          ""),
             ("remarks",         "Remarks",              ""),
+            ("comments",        "Additional Comments",  ""),
         ]
         for _k, _l, _d in _CDC_PAT_FIELDS:
             _w = QLineEdit(_d); _w.setMaximumHeight(24)
@@ -705,6 +706,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("receipt_date",    "Sample Receipt Date",  ""),
             ("report_date",     "Report Date",          ""),
             ("remarks",         "Remarks",              ""),
+            ("comments",        "Additional Comments",  ""),
         ]
         for _k, _l, _d in _DSA_PAT_FIELDS:
             _w = QLineEdit(_d); _w.setMaximumHeight(24)
@@ -2299,6 +2301,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("receipt_date",     "Sample Receipt Date", ""),
             ("report_date",      "Report Date",         ""),
             ("remarks",          "Remarks",             ""),
+            ("comments",         "Additional Comments", ""),
         ]
         for key, lbl, dflt in CDC_PAT:
             w = QLineEdit(str(p.get(key, dflt) or dflt))
@@ -2445,6 +2448,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("receipt_date",     "Sample Receipt Date", ""),
             ("report_date",      "Report Date",         ""),
             ("remarks",          "Remarks",             ""),
+            ("comments",         "Additional Comments", ""),
         ]
         for key, lbl, dflt in DSA_PAT:
             w = QLineEdit(str(p.get(key, dflt) or dflt))
