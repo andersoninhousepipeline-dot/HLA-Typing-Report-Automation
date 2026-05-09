@@ -671,13 +671,143 @@ def parse_cdc_excel(filepath: str, nabl: bool = True) -> list:
     return cases
 
 
+# ─── DSA Cross match parser ───────────────────────────────────────────────────
+
+def parse_dsa_excel(filepath: str, nabl: bool = True) -> list:
+    """
+    Parse a DSA (Donor Specific Antibody) Excel file (Sheet2 format).
+
+    Layout mirrors the CDC format; result columns differ:
+      col 17 = Test name, col 18 = Result, col 19 = MFI, col 20 = Positive cutoff
+    Patient row → Class I data; Donor row → Class II data.
+    """
+    df = pd.read_excel(filepath, sheet_name="Sheet2", header=None)
+
+    header_row = None
+    for i, row in df.iterrows():
+        cell = str(row.iloc[2]).strip().lower()
+        if "patient name" in cell:
+            header_row = i
+            break
+    if header_row is None:
+        return []
+
+    def _rv(row, col):
+        if row is None or col >= len(row): return ""
+        return _clean_str(row.iloc[col])
+
+    def _rd(row, col):
+        if row is None or col >= len(row): return ""
+        return _fmt_date(row.iloc[col])
+
+    def _ga(row):
+        gender = _sentence_case(_rv(row, 6))
+        raw_age = row.iloc[5] if 5 < len(row) else ""
+        if isinstance(raw_age, (int, float)) and not pd.isna(raw_age):
+            age = str(int(raw_age))
+        else:
+            age = _clean_str(raw_age)
+        return " / ".join(p for p in (gender, age) if p)
+
+    cases = []
+    current_patient = None
+    current_donor   = None
+
+    def _flush():
+        nonlocal current_patient, current_donor
+        if current_patient is None:
+            return
+
+        # Class I from patient row, Class II from donor row
+        c1_result  = _rv(current_patient, 18).strip() or "Negative"
+        c1_mfi     = _rv(current_patient, 19)
+        c1_cutoff  = _rv(current_patient, 20) or ">1000"
+        c2_result  = _rv(current_donor,   18).strip() or "Negative" if current_donor is not None else "Negative"
+        c2_mfi     = _rv(current_donor,   19) if current_donor is not None else ""
+        c2_cutoff  = _rv(current_donor,   20) or ">1000" if current_donor is not None else ">1000"
+
+        patient = {
+            "name":            _sentence_case(_rv(current_patient, 2)),
+            "gender_age":      _ga(current_patient),
+            "pin":             _rv(current_patient, 7),
+            "sample_number":   _rv(current_patient, 8),
+            "diagnosis":       _sentence_case(_rv(current_patient, 9)) or "NA",
+            "hospital_clinic": _sentence_case(_rv(current_patient, 11)),
+            "sample_type":     _rv(current_patient, 10) or "Serum",
+            "collection_date": _rd(current_patient, 12),
+            "receipt_date":    _rd(current_patient, 13),
+            "report_date":     _rd(current_patient, 14),
+            "photo_bytes":     None,
+            "hla": {}, "hla_c_type": "",
+            "_join_key": _rv(current_patient, 8),
+            "_has_insufficient_hla": False,
+        }
+
+        donor = {}
+        if current_donor is not None:
+            donor = {
+                "name":            _sentence_case(_rv(current_donor, 2)),
+                "gender_age":      _ga(current_donor),
+                "pin":             _rv(current_donor, 7) or "NA",
+                "sample_number":   _rv(current_donor, 8) or "NA",
+                "relationship":    _sentence_case(_rv(current_donor, 4)),
+                "sample_type":     _rv(current_donor, 10) or "ACD Tube",
+                "collection_date": _rd(current_donor, 12),
+                "receipt_date":    _rd(current_donor, 13),
+                "report_date":     _rd(current_donor, 14),
+                "photo_bytes":     None,
+                "hla": {}, "hla_c_type": "",
+                "_join_key": "", "_has_insufficient_hla": False,
+            }
+
+        cases.append({
+            "report_type":     "dsa_crossmatch",
+            "nabl":            nabl,
+            "with_logo":       True,
+            "signature_stamp": False,
+            "methodology":     "", "imgt_release": "",
+            "coverage":        "", "typing_status": "Complete",
+            "reviewer":        "",
+            "patient":         patient,
+            "donors":          [donor] if donor else [],
+            "rpl_reference":   {},
+            "dsa_results": {
+                "class1_result":  c1_result,
+                "class1_mfi":     c1_mfi,
+                "class1_cutoff":  c1_cutoff,
+                "class2_result":  c2_result,
+                "class2_mfi":     c2_mfi,
+                "class2_cutoff":  c2_cutoff,
+            },
+        })
+        current_patient = None
+        current_donor   = None
+
+    for i in range(header_row + 1, len(df)):
+        row  = df.iloc[i]
+        name = _clean_str(row.iloc[2])
+        role = _clean_str(row.iloc[3]).lower().strip()
+        if not name:
+            continue
+        if role.startswith("pati"):
+            _flush()
+            current_patient = row
+            current_donor   = None
+        elif "donor" in role and current_patient is not None:
+            current_donor = row
+
+    _flush()
+    return cases
+
+
 # ─── Main parser ─────────────────────────────────────────────────────────────
 
 def parse_excel(filepath: str, nabl: bool = True) -> list:
     """
-    Parse a MINISEQ, SURFSEQ, or CDC Cross match Excel file into case dicts.
+    Parse a MINISEQ, SURFSEQ, CDC, or DSA Excel file into case dicts.
 
-    Auto-detects CDC files by absence of the 'patient-donor detail' sheet.
+    Auto-detects specialised formats by absence of 'patient-donor detail' sheet,
+    then reads the title cell (row 3, col 2) to distinguish CDC from DSA.
 
     Parameters
     ----------
@@ -688,9 +818,17 @@ def parse_excel(filepath: str, nabl: bool = True) -> list:
     -------
     List of case dicts, each containing patient, donors[], report_type, etc.
     """
-    # ── Auto-detect CDC format ────────────────────────────────────────────────
+    # ── Auto-detect specialised formats ──────────────────────────────────────
     xl_sheets = pd.ExcelFile(filepath).sheet_names
     if "patient-donor detail" not in xl_sheets:
+        # Read title cell to distinguish DSA from CDC
+        try:
+            df_peek = pd.read_excel(filepath, sheet_name="Sheet2", header=None)
+            title_cell = str(df_peek.iloc[3, 2]).lower()
+        except Exception:
+            title_cell = ""
+        if "donor specific" in title_cell or "dsa" in title_cell:
+            return parse_dsa_excel(filepath, nabl)
         return parse_cdc_excel(filepath, nabl)
     # ── Determine lab type from filename ──────────────────────────────────────
     fname_upper = filepath.upper()
