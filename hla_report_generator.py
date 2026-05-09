@@ -461,6 +461,7 @@ class HLAReportGeneratorApp(QMainWindow):
 
         # Patient Information
         pat_group = QGroupBox("Patient Information")
+        self._std_pat_group = pat_group   # ref for show/hide when switching templates
         pat_form  = QFormLayout(); pat_group.setLayout(pat_form)
         pat_form.setSpacing(1); pat_form.setContentsMargins(4, 2, 4, 2)
         scroll_layout.addWidget(pat_group)
@@ -562,98 +563,122 @@ class HLAReportGeneratorApp(QMainWindow):
         scroll_layout.addWidget(self._manual_rpl_group)
         self._manual_rpl_group.setVisible(False)
 
-        # ── CDC Cross match fields (shown only when CDC template selected) ─────
-        self._manual_cdc_group = QGroupBox("CDC Cross Match Details")
-        cdc_form = QFormLayout(); self._manual_cdc_group.setLayout(cdc_form)
-        cdc_form.setSpacing(2); cdc_form.setContentsMargins(4, 2, 4, 2)
-        self._manual_cdc_fields = {}
-        self._manual_photo_bytes = {}  # {"patient": bytes_or_None, "donor": bytes_or_None}
+        # ── CDC Patient Information (shown only when CDC template selected) ──────
+        self._manual_photo_bytes = {}   # {"patient": bytes, "donor": bytes}
+        self._cdc_pat_f  = {}           # QLineEdit widgets for CDC patient fields
+        self._cdc_don_f  = {}           # QLineEdit widgets for CDC donor fields
+        self._manual_cdc_fields = {}    # QComboBox widgets for CDC result dropdowns
 
-        # Patient sample type
-        _cdc_w = QLineEdit("Serum")
-        _cdc_w.setFixedHeight(24)
-        self._manual_cdc_fields["patient_sample_type"] = _cdc_w
-        cdc_form.addRow("Patient Sample Type:", _cdc_w)
-        _cdc_w.textChanged.connect(self._on_manual_field_debounced)
+        _cdc_pat_group = QGroupBox("Patient Information")
+        self._cdc_pat_group = _cdc_pat_group
+        _cpf = QFormLayout(); _cdc_pat_group.setLayout(_cpf)
+        _cpf.setSpacing(1); _cpf.setContentsMargins(4, 2, 4, 2)
 
-        # Patient collection date
-        _cdc_pcd = QLineEdit()
-        _cdc_pcd.setFixedHeight(24)
-        _cdc_pcd.setPlaceholderText("DD-MM-YYYY")
-        self._manual_cdc_fields["patient_collection_date"] = _cdc_pcd
-        cdc_form.addRow("Patient Collection Date:", _cdc_pcd)
-        _cdc_pcd.textChanged.connect(self._on_manual_field_debounced)
+        _CDC_PAT_FIELDS = [
+            ("patient_name",    "Patient Name *",       ""),
+            ("gender_age",      "Gender / Age",         ""),
+            ("pin",             "PIN *",                ""),
+            ("sample_number",   "Sample Number",        ""),
+            ("diagnosis",       "Diagnosis",            "NA"),
+            ("hospital_clinic", "Hospital / Clinic",    ""),
+            ("sample_type",     "Sample Type",          "Serum"),
+            ("collection_date", "Collection Date",      ""),
+            ("receipt_date",    "Sample Receipt Date",  ""),
+            ("report_date",     "Report Date",          ""),
+        ]
+        for _k, _l, _d in _CDC_PAT_FIELDS:
+            _w = QLineEdit(_d); _w.setMaximumHeight(24)
+            if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
+            self._cdc_pat_f[_k] = _w
+            _cpf.addRow(_l + ":", _w)
+            _w.textChanged.connect(self._on_manual_field_debounced)
 
         # Patient photo
-        _cdc_pat_photo_row = QHBoxLayout()
+        _cpp_row = QHBoxLayout()
         self._manual_cdc_patient_photo_lbl = QLabel("No photo selected")
-        self._manual_cdc_patient_photo_lbl.setStyleSheet("color: gray; font-style: italic;")
-        _cdc_pat_photo_btn = QPushButton("Upload Patient Photo")
-        _cdc_pat_photo_btn.setMaximumHeight(26)
-        _cdc_pat_photo_btn.clicked.connect(lambda: self._upload_cdc_photo("patient"))
-        _cdc_pat_photo_row.addWidget(self._manual_cdc_patient_photo_lbl, 1)
-        _cdc_pat_photo_row.addWidget(_cdc_pat_photo_btn)
-        cdc_form.addRow("Patient Photo:", _cdc_pat_photo_row)
+        self._manual_cdc_patient_photo_lbl.setStyleSheet("color:gray;font-style:italic;")
+        _cpp_btn = QPushButton("Upload Patient Photo"); _cpp_btn.setMaximumHeight(26)
+        _cpp_btn.clicked.connect(lambda: self._upload_cdc_photo("patient"))
+        _cpp_row.addWidget(self._manual_cdc_patient_photo_lbl, 1); _cpp_row.addWidget(_cpp_btn)
+        _cpf.addRow("Patient Photo:", _cpp_row)
 
-        cdc_form.addRow(QLabel("--- Donor Details ---"), QLabel(""))
+        # NABL / Seal — separate checkboxes for CDC (can't share Qt widget with std form)
+        self._cdc_nabl_chk = QCheckBox("NABL Accreditation")
+        self._cdc_nabl_chk.setChecked(self.qsettings.value("nabl_stamp", True, type=bool))
+        self._cdc_nabl_chk.stateChanged.connect(self._on_manual_field_debounced)
+        self._cdc_seal_chk = QCheckBox("Signature Seal")
+        self._cdc_seal_chk.setChecked(self.qsettings.value("signature_stamp", False, type=bool))
+        self._cdc_seal_chk.stateChanged.connect(self._refresh_manual_preview)
+        _cpf.addRow(self._cdc_nabl_chk)
+        _cpf.addRow(self._cdc_seal_chk)
 
-        CDC_DONOR_FIELDS = [
-            ("donor_name",            "Donor Name",                  ""),
-            ("donor_gender_age",      "Donor Gender/Age",            ""),
-            ("donor_pin",             "Donor PIN",                   "NA"),
-            ("donor_sample_number",   "Donor Sample No.",            "NA"),
-            ("donor_sample_type",     "Donor Sample Type",           "Sodium Heparin Whole Blood"),
-            ("donor_collection_date", "Donor Collection Date",       ""),
-            ("donor_receipt_date",    "Donor Sample Receipt Date",   ""),
-            ("donor_report_date",     "Donor Report Date",           ""),
-            ("relationship",          "Relationship to Recipient",   ""),
+        scroll_layout.addWidget(_cdc_pat_group)
+        _cdc_pat_group.setVisible(False)
+
+        # ── CDC Donor Information ─────────────────────────────────────────────
+        _cdc_don_group = QGroupBox("Donor Information")
+        self._cdc_don_group = _cdc_don_group
+        _cdf = QFormLayout(); _cdc_don_group.setLayout(_cdf)
+        _cdf.setSpacing(1); _cdf.setContentsMargins(4, 2, 4, 2)
+
+        _CDC_DON_FIELDS = [
+            ("name",             "Donor Name",                  ""),
+            ("gender_age",       "Gender / Age",                ""),
+            ("pin",              "Donor PIN",                   "NA"),
+            ("sample_number",    "Sample Number",               "NA"),
+            ("relationship",     "Relationship to Recipient",   ""),
+            ("sample_type",      "Sample Type",                 "Sodium Heparin Whole Blood"),
+            ("collection_date",  "Collection Date",             ""),
+            ("receipt_date",     "Sample Receipt Date",         ""),
+            ("report_date",      "Report Date",                 ""),
         ]
-        for _cdc_key, _cdc_lbl, _cdc_default in CDC_DONOR_FIELDS:
-            _cdc_fw = QLineEdit(_cdc_default)
-            _cdc_fw.setFixedHeight(24)
-            if "date" in _cdc_key.lower():
-                _cdc_fw.setPlaceholderText("DD-MM-YYYY")
-            self._manual_cdc_fields[_cdc_key] = _cdc_fw
-            cdc_form.addRow(_cdc_lbl + ":", _cdc_fw)
-            _cdc_fw.textChanged.connect(self._on_manual_field_debounced)
+        for _k, _l, _d in _CDC_DON_FIELDS:
+            _w = QLineEdit(_d); _w.setMaximumHeight(24)
+            if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
+            self._cdc_don_f[_k] = _w
+            _cdf.addRow(_l + ":", _w)
+            _w.textChanged.connect(self._on_manual_field_debounced)
 
         # Donor photo
-        _cdc_don_photo_row = QHBoxLayout()
+        _cdp_row = QHBoxLayout()
         self._manual_cdc_donor_photo_lbl = QLabel("No photo selected")
-        self._manual_cdc_donor_photo_lbl.setStyleSheet("color: gray; font-style: italic;")
-        _cdc_don_photo_btn = QPushButton("Upload Donor Photo")
-        _cdc_don_photo_btn.setMaximumHeight(26)
-        _cdc_don_photo_btn.clicked.connect(lambda: self._upload_cdc_photo("donor"))
-        _cdc_don_photo_row.addWidget(self._manual_cdc_donor_photo_lbl, 1)
-        _cdc_don_photo_row.addWidget(_cdc_don_photo_btn)
-        cdc_form.addRow("Donor Photo:", _cdc_don_photo_row)
+        self._manual_cdc_donor_photo_lbl.setStyleSheet("color:gray;font-style:italic;")
+        _cdp_btn = QPushButton("Upload Donor Photo"); _cdp_btn.setMaximumHeight(26)
+        _cdp_btn.clicked.connect(lambda: self._upload_cdc_photo("donor"))
+        _cdp_row.addWidget(self._manual_cdc_donor_photo_lbl, 1); _cdp_row.addWidget(_cdp_btn)
+        _cdf.addRow("Donor Photo:", _cdp_row)
 
-        cdc_form.addRow(QLabel("--- CDC Results ---"), QLabel(""))
+        scroll_layout.addWidget(_cdc_don_group)
+        _cdc_don_group.setVisible(False)
+
+        # ── CDC Results ───────────────────────────────────────────────────────
+        _cdc_res_group = QGroupBox("CDC Results")
+        self._cdc_res_group = _cdc_res_group
+        _crf = QFormLayout(); _cdc_res_group.setLayout(_crf)
+        _crf.setSpacing(1); _crf.setContentsMargins(4, 2, 4, 2)
 
         _CDC_RESULT_OPTIONS = ["Negative", "Doubtful", "Weak Positive", "Positive", "Strong Positive"]
         _CDC_DTT_OPTIONS    = ["<10% Dead cells", "10-20% Dead cells", "20-50% Dead cells",
                                "50-80% Dead cells", ">80% Dead cells"]
-
-        for _cdc_key, _cdc_lbl, _cdc_opts in [
-            ("t_cell",       "T Cell Crossmatch",       _CDC_RESULT_OPTIONS),
-            ("b_cell",       "B Cell Crossmatch",       _CDC_RESULT_OPTIONS),
-            ("t_with_dtt",   "T Cells (With DTT)",      _CDC_DTT_OPTIONS),
-            ("t_without_dtt","T Cells (Without DTT)",   _CDC_DTT_OPTIONS),
-            ("b_with_dtt",   "B Cells (With DTT)",      _CDC_DTT_OPTIONS),
-            ("b_without_dtt","B Cells (Without DTT)",   _CDC_DTT_OPTIONS),
+        for _k, _l, _opts in [
+            ("t_cell",       "T Cell Crossmatch",   _CDC_RESULT_OPTIONS),
+            ("b_cell",       "B Cell Crossmatch",   _CDC_RESULT_OPTIONS),
+            ("t_with_dtt",   "T Cells (With DTT)",  _CDC_DTT_OPTIONS),
+            ("t_without_dtt","T Cells (Without DTT)",_CDC_DTT_OPTIONS),
+            ("b_with_dtt",   "B Cells (With DTT)",  _CDC_DTT_OPTIONS),
+            ("b_without_dtt","B Cells (Without DTT)",_CDC_DTT_OPTIONS),
         ]:
-            _cdc_cmb = ClickOnlyComboBox()
-            _cdc_cmb.addItems(_cdc_opts)
-            _cdc_cmb.setFixedHeight(24)
-            self._manual_cdc_fields[_cdc_key] = _cdc_cmb
-            cdc_form.addRow(_cdc_lbl + ":", _cdc_cmb)
-            _cdc_cmb.currentIndexChanged.connect(self._on_manual_field_debounced)
+            _cmb = ClickOnlyComboBox(); _cmb.addItems(_opts); _cmb.setFixedHeight(24)
+            self._manual_cdc_fields[_k] = _cmb
+            _crf.addRow(_l + ":", _cmb)
+            _cmb.currentIndexChanged.connect(self._on_manual_field_debounced)
 
-        scroll_layout.addWidget(self._manual_cdc_group)
-        self._manual_cdc_group.setVisible(False)
+        scroll_layout.addWidget(_cdc_res_group)
+        _cdc_res_group.setVisible(False)
 
         # ── Patient HLA Results ────────────────────────────────────────────────
         hla_group = QGroupBox("HLA Results — Patient")
+        self._std_hla_group = hla_group   # ref for show/hide
         hla_form  = QFormLayout(); hla_group.setLayout(hla_form)
         hla_form.setSpacing(1); hla_form.setContentsMargins(4, 2, 4, 2)
         scroll_layout.addWidget(hla_group)
@@ -684,6 +709,7 @@ class HLAReportGeneratorApp(QMainWindow):
         self._donors_list_layout.setSpacing(2)
         donors_outer_layout.addLayout(self._donors_list_layout)
 
+        self._std_donors_outer = donors_outer   # ref for show/hide
         scroll_layout.addWidget(donors_outer)
 
         # ── Signature Override — select from configured signatories ───────────
@@ -898,53 +924,67 @@ class HLAReportGeneratorApp(QMainWindow):
             case["rpl_reference"] = ref
 
         # Attach CDC-specific fields when applicable
-        if rtype == "cdc_crossmatch" and hasattr(self, "_manual_cdc_fields"):
-            cf = self._manual_cdc_fields
+        if rtype == "cdc_crossmatch":
+            pf = getattr(self, "_cdc_pat_f",  {})
+            df = getattr(self, "_cdc_don_f",  {})
+            cf = getattr(self, "_manual_cdc_fields", {})
             photos = getattr(self, "_manual_photo_bytes", {})
-            patient["sample_type"]       = (cf["patient_sample_type"].text().strip()
-                                            if isinstance(cf.get("patient_sample_type"), QLineEdit)
-                                            else "Serum") or "Serum"
-            patient["collection_date"]   = (cf["patient_collection_date"].text().strip()
-                                            if isinstance(cf.get("patient_collection_date"), QLineEdit)
-                                            else "")
-            patient["photo_bytes"]       = photos.get("patient")
+
+            def _tv(d, k, default=""): return d[k].text().strip() if k in d else default
+
+            patient = {
+                "name":            _tv(pf, "patient_name"),
+                "gender_age":      _tv(pf, "gender_age"),
+                "pin":             _tv(pf, "pin"),
+                "sample_number":   _tv(pf, "sample_number"),
+                "diagnosis":       _tv(pf, "diagnosis") or "NA",
+                "hospital_clinic": _tv(pf, "hospital_clinic"),
+                "sample_type":     _tv(pf, "sample_type") or "Serum",
+                "collection_date": _tv(pf, "collection_date"),
+                "receipt_date":    _tv(pf, "receipt_date"),
+                "report_date":     _tv(pf, "report_date"),
+                "photo_bytes":     photos.get("patient"),
+                "hla": {}, "hla_c_type": "",
+                "_join_key": _tv(pf, "pin"),
+                "_has_insufficient_hla": False,
+            }
             cdc_donor = {
-                "name":            cf["donor_name"].text().strip()          if isinstance(cf.get("donor_name"),          QLineEdit) else "",
-                "gender_age":      cf["donor_gender_age"].text().strip()    if isinstance(cf.get("donor_gender_age"),    QLineEdit) else "",
-                "pin":             cf["donor_pin"].text().strip()           if isinstance(cf.get("donor_pin"),           QLineEdit) else "NA",
-                "sample_number":   cf["donor_sample_number"].text().strip() if isinstance(cf.get("donor_sample_number"), QLineEdit) else "NA",
-                "sample_type":     cf["donor_sample_type"].text().strip()   if isinstance(cf.get("donor_sample_type"),  QLineEdit) else "Sodium Heparin Whole Blood",
-                "collection_date": cf["donor_collection_date"].text().strip() if isinstance(cf.get("donor_collection_date"), QLineEdit) else "",
-                "receipt_date":    cf["donor_receipt_date"].text().strip()  if isinstance(cf.get("donor_receipt_date"), QLineEdit) else "",
-                "report_date":     cf["donor_report_date"].text().strip()   if isinstance(cf.get("donor_report_date"),  QLineEdit) else "",
-                "relationship":    cf["relationship"].text().strip()        if isinstance(cf.get("relationship"),        QLineEdit) else "",
+                "name":            _tv(df, "name"),
+                "gender_age":      _tv(df, "gender_age"),
+                "pin":             _tv(df, "pin") or "NA",
+                "sample_number":   _tv(df, "sample_number") or "NA",
+                "relationship":    _tv(df, "relationship"),
+                "sample_type":     _tv(df, "sample_type") or "Sodium Heparin Whole Blood",
+                "collection_date": _tv(df, "collection_date"),
+                "receipt_date":    _tv(df, "receipt_date"),
+                "report_date":     _tv(df, "report_date"),
                 "photo_bytes":     photos.get("donor"),
+                "hla": {}, "hla_c_type": "",
+                "_join_key": "", "_has_insufficient_hla": False,
             }
-            # Apply fallback defaults
-            if not cdc_donor["pin"]:           cdc_donor["pin"]         = "NA"
-            if not cdc_donor["sample_number"]: cdc_donor["sample_number"] = "NA"
-            if not cdc_donor["sample_type"]:   cdc_donor["sample_type"] = "Sodium Heparin Whole Blood"
-            case["donors"] = [cdc_donor]
-            case["cdc_results"] = {
-                "t_cell":        cf["t_cell"].currentText()        if isinstance(cf.get("t_cell"),        QComboBox) else "",
-                "b_cell":        cf["b_cell"].currentText()        if isinstance(cf.get("b_cell"),        QComboBox) else "",
-                "t_with_dtt":    cf["t_with_dtt"].currentText()    if isinstance(cf.get("t_with_dtt"),    QComboBox) else "",
-                "t_without_dtt": cf["t_without_dtt"].currentText() if isinstance(cf.get("t_without_dtt"),QComboBox) else "",
-                "b_with_dtt":    cf["b_with_dtt"].currentText()    if isinstance(cf.get("b_with_dtt"),    QComboBox) else "",
-                "b_without_dtt": cf["b_without_dtt"].currentText() if isinstance(cf.get("b_without_dtt"),QComboBox) else "",
-            }
+            nabl      = self._cdc_nabl_chk.isChecked() if hasattr(self, "_cdc_nabl_chk") else nabl
+            sig_stamp = self._cdc_seal_chk.isChecked() if hasattr(self, "_cdc_seal_chk") else sig_stamp
+            case = self._build_case(rtype, nabl, with_logo, sig_stamp, patient, [cdc_donor])
+            case["cdc_results"] = {k: w.currentText() for k, w in cf.items()}
 
         self._apply_sig_name_overrides(case, self._manual_sig_name_overrides)
         return case
 
     def generate_manual(self):
-        name = self.f["patient_name"].text().strip()
-        pin  = self.f["pin"].text().strip()
         rtype = TEMPLATE_TO_RTYPE.get(
             self._manual_rtype_combo.currentText() if hasattr(self, "_manual_rtype_combo") else "",
             "single_hla")
-        if not name or (not pin and rtype != "cdc_crossmatch"):
-            QMessageBox.warning(self, "Missing Fields", "Patient Name and PIN are required.")
+        if rtype == "cdc_crossmatch":
+            name = self._cdc_pat_f.get("patient_name", QLineEdit()).text().strip() if hasattr(self, "_cdc_pat_f") else ""
+            pin  = self._cdc_pat_f.get("pin",           QLineEdit()).text().strip() if hasattr(self, "_cdc_pat_f") else ""
+        else:
+            name = self.f["patient_name"].text().strip()
+            pin  = self.f["pin"].text().strip()
+        if not name:
+            QMessageBox.warning(self, "Missing Fields", "Patient Name is required.")
+            return
+        if not pin and rtype != "cdc_crossmatch":
+            QMessageBox.warning(self, "Missing Fields", "PIN is required.")
             return
         out_dir = self.manual_output_label.text()
         if out_dir == "No directory selected":
@@ -1037,11 +1077,20 @@ class HLAReportGeneratorApp(QMainWindow):
         self._on_manual_field_debounced()
 
     def _update_manual_rpl_visibility(self):
-        if hasattr(self, "_manual_rpl_group") and hasattr(self, "_manual_rtype_combo"):
-            rtype = TEMPLATE_TO_RTYPE.get(self._manual_rtype_combo.currentText(), "single_hla")
-            self._manual_rpl_group.setVisible(rtype == "rpl_couple")
-            if hasattr(self, "_manual_cdc_group"):
-                self._manual_cdc_group.setVisible(rtype == "cdc_crossmatch")
+        if not (hasattr(self, "_manual_rpl_group") and hasattr(self, "_manual_rtype_combo")):
+            return
+        rtype = TEMPLATE_TO_RTYPE.get(self._manual_rtype_combo.currentText(), "single_hla")
+        is_cdc = rtype == "cdc_crossmatch"
+        # Standard form groups — hidden for CDC
+        for _grp in ("_std_pat_group", "_std_hla_group", "_std_donors_outer"):
+            if hasattr(self, _grp):
+                getattr(self, _grp).setVisible(not is_cdc)
+        # RPL reference — only for rpl_couple, only within standard form
+        self._manual_rpl_group.setVisible(rtype == "rpl_couple")
+        # CDC form groups — only for CDC
+        for _grp in ("_cdc_pat_group", "_cdc_don_group", "_cdc_res_group"):
+            if hasattr(self, _grp):
+                getattr(self, _grp).setVisible(is_cdc)
 
     def _upload_cdc_photo(self, who: str):
         """Open file dialog for CDC patient/donor photo upload."""
@@ -1093,6 +1142,7 @@ class HLAReportGeneratorApp(QMainWindow):
         self._update_manual_rpl_visibility()
 
     def _clear_manual_form(self):
+        # Standard form fields
         for w in self.f.values(): w.clear()
         for locus in HLA_LOCI:
             self.hla_pat[locus][0].clear(); self.hla_pat[locus][1].clear()
@@ -1102,18 +1152,17 @@ class HLAReportGeneratorApp(QMainWindow):
         for entry in list(self._manual_donors):
             entry["container"].deleteLater()
         self._manual_donors.clear()
-        if hasattr(self, "_manual_cdc_fields"):
-            for key, w in self._manual_cdc_fields.items():
-                if isinstance(w, QLineEdit):
-                    w.clear()
-                elif isinstance(w, QComboBox):
-                    w.setCurrentIndex(0)
-            if hasattr(self, "_manual_photo_bytes"):
-                self._manual_photo_bytes.clear()
-            if hasattr(self, "_manual_cdc_patient_photo_lbl"):
-                self._manual_cdc_patient_photo_lbl.setText("No photo selected")
-            if hasattr(self, "_manual_cdc_donor_photo_lbl"):
-                self._manual_cdc_donor_photo_lbl.setText("No photo selected")
+        # CDC form fields
+        for d in (getattr(self, "_cdc_pat_f", {}), getattr(self, "_cdc_don_f", {})):
+            for w in d.values():
+                if isinstance(w, QLineEdit): w.clear()
+        for w in getattr(self, "_manual_cdc_fields", {}).values():
+            if isinstance(w, QComboBox): w.setCurrentIndex(0)
+        getattr(self, "_manual_photo_bytes", {}).clear()
+        if hasattr(self, "_manual_cdc_patient_photo_lbl"):
+            self._manual_cdc_patient_photo_lbl.setText("No photo selected")
+        if hasattr(self, "_manual_cdc_donor_photo_lbl"):
+            self._manual_cdc_donor_photo_lbl.setText("No photo selected")
         self.manual_status_label.setText("Form cleared.")
 
     # ── Multi-donor helpers ────────────────────────────────────────────────────
@@ -1849,9 +1898,14 @@ class HLAReportGeneratorApp(QMainWindow):
             hla_pat_form.addRow(f"{locus}:", row_w)
             self._bulk_hla_pat[locus] = [a1, a2]
 
+        # ── CDC Cross match branch — separate form for CDC reports ───────────
+        if case.get("report_type") == "cdc_crossmatch":
+            self._rebuild_bulk_cdc_editor(idx, case, pat_group, meta_group)
+            return
+
         self._bulk_editor_layout.addWidget(pat_group)
         self._bulk_editor_layout.addWidget(meta_group)
-        
+
         # ── RPL Reference Section (Conditional) ─────────────────────────────
         self._bulk_rpl_fields = {}
         if case.get("report_type") == "rpl_couple":
@@ -2003,16 +2057,182 @@ class HLAReportGeneratorApp(QMainWindow):
         # Auto-generate preview for this case
         QTimer.singleShot(200, self._refresh_bulk_preview)
 
+    # ── Bulk CDC editor builder ────────────────────────────────────────────────
+    def _rebuild_bulk_cdc_editor(self, idx, case, _old_pat_group, meta_group):
+        """Build CDC-specific editor form inside the bulk editor scroll area."""
+        p = case["patient"]
+        d = case["donors"][0] if case.get("donors") else {}
+        cdc = case.get("cdc_results", {})
+
+        self._bulk_cdc_pat_f    = {}
+        self._bulk_cdc_don_f    = {}
+        self._bulk_cdc_result_f = {}
+        self._bulk_cdc_photo_bytes = dict(case.get("_photo_bytes_tmp", {}))
+
+        # ── Patient info ────────────────────────────────────────────────────
+        cdc_pat_grp = QGroupBox("Patient Information")
+        cpf = QFormLayout(); cdc_pat_grp.setLayout(cpf)
+        cpf.setSpacing(1); cpf.setContentsMargins(4, 2, 4, 2)
+        CDC_PAT = [
+            ("name",             "Patient Name *",      ""),
+            ("gender_age",       "Gender / Age",        ""),
+            ("pin",              "PIN",                  ""),
+            ("sample_number",    "Sample Number",        ""),
+            ("diagnosis",        "Diagnosis",            "NA"),
+            ("hospital_clinic",  "Hospital / Clinic",   ""),
+            ("sample_type",      "Sample Type",         "Serum"),
+            ("collection_date",  "Collection Date",     ""),
+            ("receipt_date",     "Sample Receipt Date", ""),
+            ("report_date",      "Report Date",         ""),
+        ]
+        for key, lbl, dflt in CDC_PAT:
+            w = QLineEdit(str(p.get(key, dflt) or dflt))
+            w.setFixedHeight(24)
+            if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
+            w.textChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_cdc_pat_f[key] = w
+            cpf.addRow(lbl + ":", w)
+
+        _nabl_default = case.get("nabl", self.qsettings.value("nabl_stamp", True, type=bool))
+        self._bulk_nabl_chk = QCheckBox("NABL Accreditation")
+        self._bulk_nabl_chk.setChecked(_nabl_default)
+        self._bulk_nabl_chk.stateChanged.connect(self._on_bulk_field_debounced)
+        cpf.addRow(self._bulk_nabl_chk)
+
+        # Patient photo
+        _pprow = QHBoxLayout()
+        _pplbl = QLabel(os.path.basename(p.get("_photo_path", "")) or "No photo selected")
+        _pplbl.setStyleSheet("color:gray;font-style:italic;")
+        _ppbtn = QPushButton("Upload Patient Photo"); _ppbtn.setMaximumHeight(26)
+        _ppbtn.clicked.connect(lambda: self._bulk_upload_cdc_photo("patient", _pplbl))
+        _pprow.addWidget(_pplbl, 1); _pprow.addWidget(_ppbtn)
+        cpf.addRow("Patient Photo:", _pprow)
+
+        # ── Donor info ──────────────────────────────────────────────────────
+        cdc_don_grp = QGroupBox("Donor Information")
+        cdf = QFormLayout(); cdc_don_grp.setLayout(cdf)
+        cdf.setSpacing(1); cdf.setContentsMargins(4, 2, 4, 2)
+        CDC_DON = [
+            ("name",             "Donor Name",                  ""),
+            ("gender_age",       "Gender / Age",                ""),
+            ("pin",              "Donor PIN",                   "NA"),
+            ("sample_number",    "Sample Number",               "NA"),
+            ("relationship",     "Relationship to Recipient",   ""),
+            ("sample_type",      "Sample Type",                 "Sodium Heparin Whole Blood"),
+            ("collection_date",  "Collection Date",             ""),
+            ("receipt_date",     "Sample Receipt Date",         ""),
+            ("report_date",      "Report Date",                 ""),
+        ]
+        for key, lbl, dflt in CDC_DON:
+            w = QLineEdit(str(d.get(key, dflt) or dflt))
+            w.setFixedHeight(24)
+            if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
+            w.textChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_cdc_don_f[key] = w
+            cdf.addRow(lbl + ":", w)
+
+        # Donor photo
+        _dprow = QHBoxLayout()
+        _dplbl = QLabel(os.path.basename(d.get("_photo_path", "")) or "No photo selected")
+        _dplbl.setStyleSheet("color:gray;font-style:italic;")
+        _dpbtn = QPushButton("Upload Donor Photo"); _dpbtn.setMaximumHeight(26)
+        _dpbtn.clicked.connect(lambda: self._bulk_upload_cdc_photo("donor", _dplbl))
+        _dprow.addWidget(_dplbl, 1); _dprow.addWidget(_dpbtn)
+        cdf.addRow("Donor Photo:", _dprow)
+
+        # ── CDC Results ─────────────────────────────────────────────────────
+        cdc_res_grp = QGroupBox("CDC Results")
+        crf = QFormLayout(); cdc_res_grp.setLayout(crf)
+        crf.setSpacing(1); crf.setContentsMargins(4, 2, 4, 2)
+        _RES_OPTS = ["Negative", "Doubtful", "Weak Positive", "Positive", "Strong Positive"]
+        _DTT_OPTS = ["<10% Dead cells", "10-20% Dead cells", "20-50% Dead cells",
+                     "50-80% Dead cells", ">80% Dead cells"]
+        for key, lbl, opts in [
+            ("t_cell",       "T Cell Crossmatch",    _RES_OPTS),
+            ("b_cell",       "B Cell Crossmatch",    _RES_OPTS),
+            ("t_with_dtt",   "T Cells (With DTT)",   _DTT_OPTS),
+            ("t_without_dtt","T Cells (Without DTT)",_DTT_OPTS),
+            ("b_with_dtt",   "B Cells (With DTT)",   _DTT_OPTS),
+            ("b_without_dtt","B Cells (Without DTT)",_DTT_OPTS),
+        ]:
+            cmb = ClickOnlyComboBox(); cmb.addItems(opts); cmb.setFixedHeight(24)
+            saved = cdc.get(key, opts[0])
+            pos = cmb.findText(saved)
+            if pos >= 0: cmb.setCurrentIndex(pos)
+            cmb.currentIndexChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_cdc_result_f[key] = cmb
+            crf.addRow(lbl + ":", cmb)
+
+        # Assemble + signature override
+        for grp in (cdc_pat_grp, meta_group, cdc_don_grp, cdc_res_grp):
+            self._bulk_editor_layout.addWidget(grp)
+
+        self._bulk_sig_combos = {}
+        name_overrides = case.get("sig_name_overrides", {})
+        sig_group = QGroupBox("Signature Override")
+        sig_form  = QFormLayout(); sig_group.setLayout(sig_form)
+        sig_form.setSpacing(2); sig_form.setContentsMargins(4, 2, 4, 2)
+        _sig_opts = ["(Use Default)"] + list(hla_assets.SIGN_BY_NAME.keys())
+        for i in range(3):
+            cmb = ClickOnlyComboBox(); cmb.addItems(_sig_opts); cmb.setFixedHeight(24)
+            saved_name = name_overrides.get(i, name_overrides.get(str(i), ""))
+            if saved_name:
+                pos = cmb.findText(saved_name)
+                if pos >= 0: cmb.setCurrentIndex(pos)
+            cmb.currentTextChanged.connect(
+                lambda text, ci=idx, slot=i: self._on_bulk_sig_changed(ci, slot, text))
+            self._bulk_sig_combos[i] = cmb
+            sig_form.addRow(f"Signatory {i+1}:", cmb)
+        self._bulk_editor_layout.addWidget(sig_group)
+        self._bulk_editor_layout.addStretch()
+
+        self._bulk_apply_btn.setText(f"Apply Edits to Case {idx+1}")
+        self._bulk_apply_btn.setEnabled(True)
+        self._bulk_save_draft_btn.setEnabled(True)
+        QTimer.singleShot(200, self._refresh_bulk_preview)
+
+    def _bulk_upload_cdc_photo(self, who: str, label: QLabel):
+        """File picker for CDC photo in the bulk editor."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, f"Select {who.title()} Photo", str(Path.home()),
+            "Images (*.png *.jpg *.jpeg *.bmp *.tiff)")
+        if not path: return
+        with open(path, "rb") as fh:
+            self._bulk_cdc_photo_bytes[who] = fh.read()
+        label.setText(os.path.basename(path))
+        self._on_bulk_field_debounced()
+
     def _flush_bulk_edits(self, idx):
         """Read current form field values and write back to cases[idx]."""
         if idx < 0 or idx >= len(self.cases): return
-        if not self._bulk_fields: return
         case = self.cases[idx]
         p    = case["patient"]
 
+        # ── CDC path ────────────────────────────────────────────────────────
+        if case.get("report_type") == "cdc_crossmatch":
+            if hasattr(self, "_bulk_cdc_pat_f"):
+                for key, w in self._bulk_cdc_pat_f.items():
+                    p[key] = w.text().strip()
+                p["photo_bytes"] = self._bulk_cdc_photo_bytes.get("patient")
+            if case.get("donors") and hasattr(self, "_bulk_cdc_don_f"):
+                d = case["donors"][0]
+                for key, w in self._bulk_cdc_don_f.items():
+                    d[key] = w.text().strip()
+                d["photo_bytes"] = self._bulk_cdc_photo_bytes.get("donor")
+            if hasattr(self, "_bulk_cdc_result_f"):
+                case["cdc_results"] = {k: w.currentText()
+                                       for k, w in self._bulk_cdc_result_f.items()}
+            if hasattr(self, "_bulk_rtype_combo") and self._bulk_rtype_combo is not None:
+                case["report_type"] = TEMPLATE_TO_RTYPE.get(
+                    self._bulk_rtype_combo.currentText(), "cdc_crossmatch")
+            case["with_logo"] = self.logo_combo.currentText() == "With Logo"
+            if hasattr(self, "_bulk_nabl_chk") and self._bulk_nabl_chk is not None:
+                case["nabl"] = self._bulk_nabl_chk.isChecked()
+            return
+
+        if not self._bulk_fields: return
+
         # Patient fields
-        for key, w in self._bulk_fields.items():
-            p[key] = w.text().strip()
 
         # Patient HLA
         if not isinstance(p.get("hla"), dict): p["hla"] = {}
@@ -2217,10 +2437,16 @@ class HLAReportGeneratorApp(QMainWindow):
         )
         # Apply any per-case signature overrides
         self._apply_sig_name_overrides(c, case.get("sig_name_overrides", {}))
-        # Copy case-level imgt/methodology/typing_status overrides
-        for key in ("imgt_release", "methodology", "typing_status", "coverage", "rpl_reference"):
+        # Copy case-level overrides including CDC results and photo bytes
+        for key in ("imgt_release", "methodology", "typing_status", "coverage",
+                    "rpl_reference", "cdc_results"):
             if case.get(key):
                 c[key] = case[key]
+        # Carry CDC photo bytes into the preview case patient/donor dicts
+        if case.get("report_type") == "cdc_crossmatch":
+            c["patient"]["photo_bytes"] = case["patient"].get("photo_bytes")
+            if c.get("donors") and case.get("donors"):
+                c["donors"][0]["photo_bytes"] = case["donors"][0].get("photo_bytes")
         tmp = TEMP_PREVIEW_PATH.replace(".pdf", "_bulk.pdf")
         self.bulk_preview_status.setText("Generating preview…")
         if hasattr(self, "_bulk_preview_worker") and self._bulk_preview_worker \

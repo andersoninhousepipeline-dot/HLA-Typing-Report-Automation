@@ -619,8 +619,6 @@ class _HFCanvas:
         with_logo = self.case.get("with_logo", True)
 
         # ── Header ──────────────────────────────────────────────────────────
-        # Always use the non-NABL header; the NABL seal is placed at the bottom
-        # QR zone instead so it doesn't appear in the header banner.
         if with_logo:
             raw = hla_assets.get_image_bytes(hla_assets.HEADER_NONNABL_B64)
             canvas.drawImage(
@@ -1534,6 +1532,14 @@ def _build_cdc_report(case: dict, S: dict) -> list:
         s = str(val).strip() if val else ""
         return s if s and s.lower() not in ("nan", "none", "") else "NA"
 
+    def _norm(val):
+        """Title-case for names/text; 'NA' fallback for empty."""
+        return _title_case(_clean_display(val)) or "NA"
+
+    def _raw(val):
+        """No case change — for PIN, sample numbers, dates."""
+        return _clean_display(val) or "NA"
+
     def _color_hex(c):
         """Return 6-char hex string for a reportlab color."""
         try:
@@ -1550,77 +1556,69 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     # ── Info table ────────────────────────────────────────────────────────────
     info_lbl_style = ParagraphStyle("_cdc_lbl", fontName=F_BOLD, fontSize=10,
                                     textColor=BLACK, leading=12)
+    info_val_style = ParagraphStyle("_cdc_val", fontName=F_BOLD, fontSize=10,
+                                    textColor=BLACK, leading=12)
 
     def IL(t): return Paragraph(f"<b>{t}</b>", info_lbl_style)
-    def IV(t): return Paragraph(_clean(t), info_lbl_style)
+    def IV(t): return Paragraph(_norm(t),  info_val_style)   # title-case text fields
+    def IR(t): return Paragraph(_raw(t),   info_val_style)   # raw: PIN / dates / sample no
     def IC():  return Paragraph("<b>:</b>", info_lbl_style)
 
-    p_name    = _clean(patient.get("name", ""))
-    p_gender  = _clean(patient.get("gender_age", ""))
-    p_pin     = _clean(patient.get("pin", ""))
-    p_sampno  = _clean(patient.get("sample_number", ""))
-    p_diag    = _clean(patient.get("diagnosis", ""))
-    p_hosp    = _clean(patient.get("hospital_clinic", ""))
-
-    d_name    = _clean(donor.get("name", ""))
-    d_gender  = _clean(donor.get("gender_age", ""))
-    d_pin     = _clean(donor.get("pin", "NA"))
-    d_sampno  = _clean(donor.get("sample_number", "NA"))
-    d_receipt = _clean(donor.get("receipt_date", ""))
-    d_report  = _clean(donor.get("report_date", ""))
-
+    # 7-col layout: [lbl_L, colon_L, val_L, GAP, lbl_R, colon_R, val_R]
+    # val_L is wide enough for long hospital names (~182pt avail).
+    # GAP creates visible separation between patient and donor sections.
+    # All fracs sum to 1.000.
     cw = CONTENT_W
-    lw = cw * 0.13
-    sw = cw * 0.03
-    vw = cw * 0.34
-    info_col_w = [lw, sw, vw, lw, sw, vw]
+    info_col_w = [cw * 0.176, cw * 0.016, cw * 0.365,   # left
+                  cw * 0.035,                             # gap
+                  cw * 0.196, cw * 0.016, cw * 0.196]   # right
+
+    def E(): return Paragraph("", info_lbl_style)
 
     info_rows = [
-        [IL("Patient name"),    IC(), IV(p_name),   IL("Donor name"),          IC(), IV(d_name)],
-        [IL("Gender/ Age"),     IC(), IV(p_gender),  IL("Gender/ Age"),         IC(), IV(d_gender)],
-        [IL("PIN"),             IC(), IV(p_pin),     IL("PIN"),                 IC(), IV(d_pin)],
-        [IL("Sample Number"),   IC(), IV(p_sampno),  IL("Sample Number"),       IC(), IV(d_sampno)],
-        [IL("Diagnosis"),       IC(), IV(p_diag),    IL("Sample receipt date"), IC(), IV(d_receipt)],
-        [IL("Hospital/Clinic"), IC(), IV(p_hosp),    IL("Report date"),         IC(), IV(d_report)],
+        [IL("Patient name"),    IC(), IV(patient.get("name","")),            E(), IL("Donor name"),          IC(), IV(donor.get("name",""))],
+        [IL("Gender/ Age"),     IC(), IR(patient.get("gender_age","")),      E(), IL("Gender/ Age"),         IC(), IR(donor.get("gender_age",""))],
+        [IL("PIN"),             IC(), IR(patient.get("pin","")),             E(), IL("PIN"),                 IC(), IR(donor.get("pin","NA"))],
+        [IL("Sample Number"),   IC(), IR(patient.get("sample_number","")),   E(), IL("Sample Number"),       IC(), IR(donor.get("sample_number","NA"))],
+        [IL("Diagnosis"),       IC(), IV(patient.get("diagnosis","")),       E(), IL("Sample receipt date"), IC(), IR(donor.get("receipt_date",""))],
+        [IL("Hospital/Clinic"), IC(), IV(patient.get("hospital_clinic","")), E(), IL("Report date"),         IC(), IR(donor.get("report_date",""))],
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
     info_t.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#E8E8E8")),
         ("VALIGN",        (0, 0), (-1, -1), "TOP"),
         ("TOPPADDING",    (0, 0), (-1, -1), 5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
         ("LEFTPADDING",   (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 2),
         ("LEFTPADDING",   (1, 0), (1, -1), 0),
         ("RIGHTPADDING",  (1, 0), (1, -1), 2),
-        ("LEFTPADDING",   (4, 0), (4, -1), 0),
-        ("RIGHTPADDING",  (4, 0), (4, -1), 2),
+        ("LEFTPADDING",   (3, 0), (3, -1), 0),
+        ("RIGHTPADDING",  (3, 0), (3, -1), 0),
+        ("LEFTPADDING",   (5, 0), (5, -1), 0),
+        ("RIGHTPADDING",  (5, 0), (5, -1), 2),
         ("LINEBELOW",     (0, -1), (-1, -1), 0.5, colors.grey),
     ]))
     elems.append(info_t)
     elems.append(Spacer(1, 6 * mm))
 
     # ── Photo / sample-type table ─────────────────────────────────────────────
-    photo_w = 35 * mm
-    col_w_photo = [(cw - 2 * photo_w) / 2, photo_w, photo_w]
+    # Sized to fit "Sodium Heparin Whole Blood" (131pt) on one line so the
+    # Sample type row stays single-line → less vertical height.
+    # Photo height reduced to 30mm to keep the table compact.
+    _ph_w   = 28 * mm   # passport photo display width
+    _ph_h   = 30 * mm   # reduced height — keeps table short
+    _pc_w   = 54 * mm   # avail ≈ 141pt — fits "Sodium Heparin Whole Blood" (131pt)
+    _lbl_w  = 38 * mm   # label column — fits "Date of Collection"
+    col_w_photo = [_lbl_w, _pc_w, _pc_w]
 
     def _photo_cell(photo_bytes):
         if photo_bytes:
             try:
-                return Image(io.BytesIO(photo_bytes), width=photo_w - 4 * mm,
-                             height=28 * mm)
+                return Image(io.BytesIO(photo_bytes), width=_ph_w, height=_ph_h)
             except Exception:
                 pass
-        placeholder = Table(
-            [[Paragraph("No Photo", ParagraphStyle("_ph_np", fontName=F_REG,
-                fontSize=8, textColor=colors.grey, alignment=TA_CENTER))]],
-            colWidths=[photo_w - 4 * mm]
-        )
-        placeholder.setStyle(TableStyle([
-            ("BOX",          (0, 0), (-1, -1), 0.5, colors.grey),
-            ("MINROWHEIGHT", (0, 0), (-1, -1), 28 * mm),
-            ("VALIGN",       (0, 0), (-1, -1), "MIDDLE"),
-        ]))
-        return placeholder
+        return Spacer(1, _ph_h)
 
     pat_photo = _photo_cell(patient.get("photo_bytes"))
     don_photo = _photo_cell(donor.get("photo_bytes"))
@@ -1630,29 +1628,40 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     p_collect     = _clean(patient.get("collection_date", ""))
     d_collect     = _clean(donor.get("collection_date", ""))
 
+    _GREY = colors.HexColor("#E8E8E8")
+
     photo_rows = [
-        [_P("Photo", F_BOLD, 10, BLACK, TA_LEFT),
-         _P("PATIENT DETAILS", F_BOLD, 10, BLACK, TA_CENTER),
-         _P("DONOR DETAILS",   F_BOLD, 10, BLACK, TA_CENTER)],
-        ["", pat_photo, don_photo],
-        [_P("Sample type",        F_BOLD, 10, BLACK),
-         _P(p_sample_type,        F_BOLD, 10, BLACK, TA_CENTER),
-         _P(d_sample_type,        F_BOLD, 10, BLACK, TA_CENTER)],
-        [_P("Date of Collection", F_BOLD, 10, BLACK),
-         _P(p_collect,            F_BOLD, 10, BLACK, TA_CENTER),
-         _P(d_collect,            F_BOLD, 10, BLACK, TA_CENTER)],
+        # Row 1: header — empty | PATIENT DETAILS | DONOR DETAILS
+        [Paragraph("", info_lbl_style),
+         _P("PATIENT DETAILS", F_BOLD, 11, BLACK, TA_CENTER),
+         _P("DONOR DETAILS",   F_BOLD, 11, BLACK, TA_CENTER)],
+        # Row 2: Photo (bold, left+middle) | passport photo | passport photo
+        [_P("Photo", F_BOLD, 10, BLACK, TA_LEFT), pat_photo, don_photo],
+        # Row 3: Sample type (regular weight)
+        [_P("Sample type",        F_REG, 10, BLACK, TA_LEFT),
+         _P(p_sample_type,        F_REG, 10, BLACK, TA_CENTER),
+         _P(d_sample_type,        F_REG, 10, BLACK, TA_CENTER)],
+        # Row 4: Date of Collection (regular weight)
+        [_P("Date of Collection", F_REG, 10, BLACK, TA_LEFT),
+         _P(p_collect,            F_REG, 10, BLACK, TA_CENTER),
+         _P(d_collect,            F_REG, 10, BLACK, TA_CENTER)],
     ]
     photo_t = Table(photo_rows, colWidths=col_w_photo)
     photo_t.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), _GREY),          # light grey — whole table
+        ("BOX",           (0, 0), (-1, -1), 1.0, colors.white),   # thin white outer border
+        ("INNERGRID",     (0, 0), (-1, -1), 1.0, colors.white),   # thin white inner grid
         ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING",    (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("LEFTPADDING",   (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING",  (0, 0), (-1, -1), 4),
-        ("BOX",           (1, 0), (2, -1), 0.5, colors.grey),
-        ("INNERGRID",     (1, 0), (2, -1), 0.5, colors.grey),
-        ("BACKGROUND",    (1, 0), (2, 0),  C_INFO_BG),
+        ("ALIGN",         (0, 0), (0, -1),  "LEFT"),          # label column: left
+        ("ALIGN",         (1, 0), (2, -1),  "CENTER"),        # photo columns: centered
+        ("TOPPADDING",    (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 6),
+        # Photo row height
+        ("MINROWHEIGHT",  (0, 1), (-1, 1),  _ph_h + 4 * mm),
     ]))
+    photo_t.hAlign = 'CENTER'
     elems.append(photo_t)
     elems.append(Spacer(1, 5 * mm))
 
@@ -1675,111 +1684,119 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     elems.append(rel_t)
     elems.append(Spacer(1, 6 * mm))
 
-    # ── Result section ────────────────────────────────────────────────────────
-    elems.append(Paragraph("<b>Result</b>", ParagraphStyle("_cdc_sec",
-        fontName=F_BOLD, fontSize=13, textColor=C_CDC_SECTION, leading=16,
-        spaceAfter=2)))
-    elems.append(HRFlowable(width=CONTENT_W, thickness=1.2, color=C_CDC_SECTION,
-                             spaceAfter=4))
-
+    # ── Result section — kept together so DTT table never splits from its header ─
+    _C_RES_HDR = C_NGS_TITLE
     t_result = cdc.get("t_cell", "Negative")
     b_result = cdc.get("b_cell", "Negative")
-
     t_color_hex = _color_hex(_cdc_result_color(t_result))
     b_color_hex = _color_hex(_cdc_result_color(b_result))
 
-    elems.append(Paragraph(
-        f"<b>T cell crossmatch: </b><font color='#{t_color_hex}'><b>{t_result}</b></font>"
-        f"<b> (&lt;10% Dead)</b>",
-        ParagraphStyle("_rline", fontName=F_BOLD, fontSize=10, leading=16)
-    ))
-    elems.append(Paragraph(
-        f"<b>B cell crossmatch: </b><font color='#{b_color_hex}'><b>{b_result}</b></font>"
-        f"<b> (&lt;10% Dead)</b>",
-        ParagraphStyle("_rline2", fontName=F_BOLD, fontSize=10, leading=16)
-    ))
-    elems.append(Spacer(1, 5 * mm))
+    _res_style = ParagraphStyle("_rline", fontName=F_BOLD, fontSize=10, leading=18)
 
-    # ── DTT table ─────────────────────────────────────────────────────────────
-    dtt_hdr_style = ParagraphStyle("_dtt_h", fontName=F_BOLD, fontSize=10,
-                                    textColor=WHITE, alignment=TA_CENTER, leading=12)
-    dtt_val_style = ParagraphStyle("_dtt_v", fontName=F_REG,  fontSize=10,
-                                    textColor=BLACK, alignment=TA_CENTER, leading=12)
-    dtt_lbl_style = ParagraphStyle("_dtt_l", fontName=F_BOLD, fontSize=10,
-                                    textColor=BLACK, alignment=TA_CENTER, leading=12)
+    _dtt_total  = CONTENT_W * 0.70
+    _dtt_col_w  = [_dtt_total * 0.26, _dtt_total * 0.37, _dtt_total * 0.37]
+    _dtt_hdr_bg = colors.HexColor("#FABF8F")
 
-    dtt_col_w = [CONTENT_W * 0.25, CONTENT_W * 0.375, CONTENT_W * 0.375]
-    dtt_rows = [
-        [Paragraph("<b>Cells</b>",                dtt_hdr_style),
-         Paragraph("<b>With DTT Treatment</b>",    dtt_hdr_style),
-         Paragraph("<b>Without DTT Treatment</b>", dtt_hdr_style)],
-        [Paragraph("T Cells", dtt_lbl_style),
-         Paragraph(cdc.get("t_with_dtt",    "<10% Dead cells"), dtt_val_style),
-         Paragraph(cdc.get("t_without_dtt", "<10% Dead cells"), dtt_val_style)],
-        [Paragraph("B Cells", dtt_lbl_style),
-         Paragraph(cdc.get("b_with_dtt",    "<10% Dead cells"), dtt_val_style),
-         Paragraph(cdc.get("b_without_dtt", "<10% Dead cells"), dtt_val_style)],
-    ]
-    dtt_t = Table(dtt_rows, colWidths=dtt_col_w)
+    dtt_hdr_s = ParagraphStyle("_dtt_h", fontName=F_BOLD, fontSize=10,
+                                textColor=BLACK, alignment=TA_CENTER, leading=13)
+    dtt_val_s = ParagraphStyle("_dtt_v", fontName=F_REG,  fontSize=10,
+                                textColor=BLACK, alignment=TA_CENTER, leading=13)
+    dtt_lbl_s = ParagraphStyle("_dtt_l", fontName=F_BOLD, fontSize=10,
+                                textColor=BLACK, alignment=TA_CENTER, leading=13)
+
+    dtt_t = Table([
+        [Paragraph("<b>Cells</b>",                dtt_hdr_s),
+         Paragraph("<b>With DTT Treatment</b>",    dtt_hdr_s),
+         Paragraph("<b>Without DTT Treatment</b>", dtt_hdr_s)],
+        [Paragraph("T Cells", dtt_lbl_s),
+         Paragraph(cdc.get("t_with_dtt",    "<10% Dead cells"), dtt_val_s),
+         Paragraph(cdc.get("t_without_dtt", "<10% Dead cells"), dtt_val_s)],
+        [Paragraph("B Cells", dtt_lbl_s),
+         Paragraph(cdc.get("b_with_dtt",    "<10% Dead cells"), dtt_val_s),
+         Paragraph(cdc.get("b_without_dtt", "<10% Dead cells"), dtt_val_s)],
+    ], colWidths=_dtt_col_w)
     dtt_t.setStyle(TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, 0),  C_CDC_DTT_HDR),
-        ("BACKGROUND",    (0, 1), (-1, -1), C_HLA_ROW),
-        ("INNERGRID",     (0, 0), (-1, -1), 0.5, colors.grey),
-        ("BOX",           (0, 0), (-1, -1), 0.5, colors.grey),
+        ("BACKGROUND",    (0, 0), (-1, 0),  _dtt_hdr_bg),
+        ("BACKGROUND",    (0, 1), (-1, -1), colors.HexColor("#E8E8E8")),
+        ("INNERGRID",     (0, 0), (-1, -1), 0.5, colors.white),
+        ("BOX",           (0, 0), (-1, -1), 0.5, colors.white),
         ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING",    (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING",    (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
     ]))
-    elems.append(dtt_t)
+    dtt_t.hAlign = 'CENTER'
+
+    elems.append(KeepTogether([
+        Paragraph("<b>Result</b>", ParagraphStyle("_cdc_sec",
+            fontName=F_BOLD, fontSize=14, textColor=_C_RES_HDR, leading=18,
+            spaceAfter=2)),
+        HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=6),
+        Paragraph(
+            f"<b>T cell crossmatch:</b><font color='#{t_color_hex}'><b>{t_result}</b></font>"
+            f" <font color='#000000'>(&lt;10% Dead)</font>", _res_style),
+        Paragraph(
+            f"<b>B cell crossmatch:</b><font color='#{b_color_hex}'><b>{b_result}</b></font>"
+            f" <font color='#000000'>(&lt;10% Dead)</font>", _res_style),
+        Spacer(1, 5 * mm),
+        dtt_t,
+    ]))
 
     # ── Page break → page 2 ───────────────────────────────────────────────────
     elems.append(PageBreak())
 
     # ── Interpretation ────────────────────────────────────────────────────────
-    elems.append(Paragraph("<b>Interpretation</b>", ParagraphStyle("_cdc_sec2",
-        fontName=F_BOLD, fontSize=13, textColor=C_CDC_SECTION, leading=16,
-        spaceAfter=2)))
-    elems.append(HRFlowable(width=CONTENT_W, thickness=1.2, color=C_CDC_SECTION,
-                             spaceAfter=6))
+    _sec_style = ParagraphStyle("_cdc_sec_hdr", fontName=F_BOLD, fontSize=14,
+                                 textColor=C_NGS_TITLE, leading=18, spaceAfter=2)
+    elems.append(Paragraph("<b>Interpretation</b>", _sec_style))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey,
+                             spaceAfter=8))
 
-    interp_hdr_s = ParagraphStyle("_ih", fontName=F_BOLD, fontSize=10,
-                                   textColor=BLACK, alignment=TA_CENTER, leading=12)
-    interp_val_s = ParagraphStyle("_iv", fontName=F_REG, fontSize=10,
-                                   textColor=BLACK, alignment=TA_CENTER, leading=14)
-    interp_col_w = [CONTENT_W * 0.45, CONTENT_W * 0.45]
-    interp_rows = [
-        [Paragraph("<b>Percentage of dead cells</b>", interp_hdr_s),
-         Paragraph("<b>Results</b>", interp_hdr_s)],
-        [Paragraph("0- 10 %",  interp_val_s), Paragraph("Negative",       interp_val_s)],
-        [Paragraph("10%-20%",  interp_val_s), Paragraph("Doubtful",        interp_val_s)],
-        [Paragraph("20%-50%",  interp_val_s), Paragraph("Weak Positive",   interp_val_s)],
-        [Paragraph("50-80%",   interp_val_s), Paragraph("Positive",        interp_val_s)],
-        [Paragraph(">80%",     interp_val_s), Paragraph("Strong Positive", interp_val_s)],
+    _i_hdr = ParagraphStyle("_ih", fontName=F_BOLD, fontSize=10,
+                              textColor=BLACK, alignment=TA_CENTER, leading=13)
+    _i_val = ParagraphStyle("_iv", fontName=F_REG,  fontSize=10,
+                              textColor=BLACK, alignment=TA_CENTER, leading=14)
+    _i_cw  = [CONTENT_W * 0.30, CONTENT_W * 0.28]   # total ≈ 58%, centered
+
+    interp_data = [
+        [Paragraph("<b>Percentage of dead cells</b>", _i_hdr),
+         Paragraph("<b>Results</b>",                  _i_hdr)],
+        [Paragraph("0- 10 %",   _i_val), Paragraph("Negative",       _i_val)],
+        [Paragraph("10%-20%",   _i_val), Paragraph("Doubtful",        _i_val)],
+        [Paragraph("20%-50%",   _i_val), Paragraph("Weak Positive",   _i_val)],
+        [Paragraph("50-80%",    _i_val), Paragraph("Positive",        _i_val)],
+        [Paragraph(">80%",      _i_val), Paragraph("Strong Positive", _i_val)],
     ]
-    interp_t = Table(interp_rows, colWidths=interp_col_w, hAlign="CENTER")
+    interp_t = Table(interp_data, colWidths=_i_cw, hAlign="CENTER")
     interp_t.setStyle(TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, 0),  C_INFO_BG),
-        ("INNERGRID",     (0, 0), (-1, -1), 0.5, colors.grey),
+        ("BACKGROUND",    (0, 0), (-1, 0),  colors.HexColor("#FABF8F")),  # orange header
+        ("BACKGROUND",    (0, 1), (-1, 1),  colors.white),
+        ("BACKGROUND",    (0, 2), (-1, 2),  colors.HexColor("#E8E8E8")),
+        ("BACKGROUND",    (0, 3), (-1, 3),  colors.white),
+        ("BACKGROUND",    (0, 4), (-1, 4),  colors.HexColor("#E8E8E8")),
+        ("BACKGROUND",    (0, 5), (-1, 5),  colors.white),
         ("BOX",           (0, 0), (-1, -1), 0.5, colors.grey),
+        ("INNERGRID",     (0, 0), (-1, -1), 0.5, colors.grey),
         ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING",    (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING",    (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
     ]))
     elems.append(interp_t)
     elems.append(Spacer(1, 8 * mm))
 
     # ── Comments ──────────────────────────────────────────────────────────────
-    elems.append(Paragraph("<b>Comments</b>", ParagraphStyle("_cdc_sec3",
-        fontName=F_BOLD, fontSize=13, textColor=C_CDC_SECTION, leading=16,
-        spaceAfter=2)))
-    elems.append(HRFlowable(width=CONTENT_W, thickness=1.2, color=C_CDC_SECTION,
-                             spaceAfter=4))
+    elems.append(Paragraph("<b>Comments</b>", _sec_style))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey,
+                             spaceAfter=6))
 
-    bullet_style = ParagraphStyle("_bull", fontName=F_REG, fontSize=10,
-                                   leading=14, leftIndent=12, bulletIndent=0,
-                                   spaceBefore=2)
-    for comment in CDC_COMMENTS:
-        elems.append(Paragraph(f"• {comment}", bullet_style))
+    _bull_left = ParagraphStyle("_bull", fontName=F_REG, fontSize=10,
+                                 leading=15, leftIndent=18, firstLineIndent=-10,
+                                 spaceBefore=3, alignment=TA_LEFT)
+    _bull_just = ParagraphStyle("_bull_j", fontName=F_REG, fontSize=10,
+                                 leading=15, leftIndent=18, firstLineIndent=-10,
+                                 spaceBefore=3, alignment=TA_JUSTIFY)
+    for i, comment in enumerate(CDC_COMMENTS):
+        style = _bull_just if i == len(CDC_COMMENTS) - 1 else _bull_left
+        elems.append(Paragraph(f"• {comment}", style))
     elems.append(Spacer(1, 8 * mm))
 
     # ── Signatures ────────────────────────────────────────────────────────────
@@ -1858,8 +1875,6 @@ def generate_pdf(case: dict, output_path: str) -> str:
     # content area position is identical whether or not logos are shown.
     from PIL import Image as PILImage
 
-    # Always measure from HEADER_NONNABL_B64 — that is the image actually drawn
-    # on every page (NABL seal moved to footer QR zone, not embedded in header).
     raw  = hla_assets.get_image_bytes(hla_assets.HEADER_NONNABL_B64)
     pil  = PILImage.open(io.BytesIO(raw))
     ow, oh   = pil.size
