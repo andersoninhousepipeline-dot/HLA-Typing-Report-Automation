@@ -63,7 +63,7 @@ C_CDC_SECTION  = colors.HexColor("#C0392B")   # red for Result/Interpretation/Co
 C_CDC_NEG      = colors.HexColor("#27AE60")   # green for Negative result
 C_CDC_POS      = colors.HexColor("#E74C3C")   # red for Positive result
 C_CDC_DOUBTFUL = colors.HexColor("#E67E22")   # orange for Doubtful
-C_CDC_REL_BG   = colors.HexColor("#FFF3CD")   # cream for relationship box background
+C_CDC_REL_BG   = colors.HexColor("#FABF8F")   # orange for relationship box (matches DTT header)
 C_CDC_DTT_HDR  = colors.HexColor("#2C3E50")   # dark header for DTT table
 
 # ─── Static text constants ────────────────────────────────────────────────────
@@ -1591,7 +1591,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
 
     info_rows = [
         [IL("Patient name"),    IC(), IV(patient.get("name","")),            E(), IL("Donor name"),          IC(), IV(donor.get("name",""))],
-        [IL("Gender/ Age"),     IC(), IR(patient.get("gender_age","")),      E(), IL("Gender/ Age"),         IC(), IR(donor.get("gender_age",""))],
+        [IL("Gender/ Age"),     IC(), IR(_normalize_age(patient.get("gender_age",""))),      E(), IL("Gender/ Age"),         IC(), IR(_normalize_age(donor.get("gender_age","")))],
         [IL("PIN"),             IC(), IR(patient.get("pin","")),             E(), IL("PIN"),                 IC(), IR(donor.get("pin","NA"))],
         [IL("Sample Number"),   IC(), IR(patient.get("sample_number","")),   E(), IL("Sample Number"),       IC(), IR(donor.get("sample_number","NA"))],
         [IL("Diagnosis"),       IC(), IV(patient.get("diagnosis","")),       E(), IL("Sample receipt date"), IC(), IR(donor.get("receipt_date",""))],
@@ -1611,7 +1611,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
         ("RIGHTPADDING",  (3, 0), (3, -1), 0),
         ("LEFTPADDING",   (5, 0), (5, -1), 0),
         ("RIGHTPADDING",  (5, 0), (5, -1), 2),
-        ("LINEBELOW",     (0, -1), (-1, -1), 0.5, colors.grey),
+        # no bottom border — demography table sits flush above the photo table
     ]))
     elems.append(info_t)
     elems.append(Spacer(1, 6 * mm))
@@ -1740,17 +1740,27 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     ]))
     dtt_t.hAlign = 'CENTER'
 
+    _cdc_rmk = patient.get("remarks", "").strip()
+    _cdc_rmk_items = ([
+        Paragraph(
+            f"<b>Remarks : </b>{_clean_display(_cdc_rmk)}",
+            ParagraphStyle("_cdc_rmk2", fontName=F_BOLD, fontSize=10,
+                           leading=14, spaceBefore=4, spaceAfter=4)
+        )
+    ] if _cdc_rmk else [])
+
     elems.append(KeepTogether([
         Paragraph("<b>Result</b>", ParagraphStyle("_cdc_sec",
             fontName=F_BOLD, fontSize=14, textColor=_C_RES_HDR, leading=18,
             spaceAfter=2)),
         HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=6),
         Paragraph(
-            f"<b>T cell crossmatch:</b><font color='#{t_color_hex}'><b>{t_result}</b></font>"
+            f"<b>T cell crossmatch : </b><font color='#{t_color_hex}'><b>{t_result}</b></font>"
             f" <font color='#000000'>(&lt;10% Dead)</font>", _res_style),
         Paragraph(
-            f"<b>B cell crossmatch:</b><font color='#{b_color_hex}'><b>{b_result}</b></font>"
+            f"<b>B cell crossmatch : </b><font color='#{b_color_hex}'><b>{b_result}</b></font>"
             f" <font color='#000000'>(&lt;10% Dead)</font>", _res_style),
+    ] + _cdc_rmk_items + [
         Spacer(1, 5 * mm),
         dtt_t,
     ]))
@@ -1761,6 +1771,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     # ── Interpretation ────────────────────────────────────────────────────────
     _sec_style = ParagraphStyle("_cdc_sec_hdr", fontName=F_BOLD, fontSize=14,
                                  textColor=C_NGS_TITLE, leading=18, spaceAfter=2)
+
     elems.append(Paragraph("<b>Interpretation</b>", _sec_style))
     elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey,
                              spaceAfter=8))
@@ -1783,13 +1794,9 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     interp_t = Table(interp_data, colWidths=_i_cw, hAlign="CENTER")
     interp_t.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, 0),  colors.HexColor("#FABF8F")),  # orange header
-        ("BACKGROUND",    (0, 1), (-1, 1),  colors.white),
-        ("BACKGROUND",    (0, 2), (-1, 2),  colors.HexColor("#E8E8E8")),
-        ("BACKGROUND",    (0, 3), (-1, 3),  colors.white),
-        ("BACKGROUND",    (0, 4), (-1, 4),  colors.HexColor("#E8E8E8")),
-        ("BACKGROUND",    (0, 5), (-1, 5),  colors.white),
-        ("BOX",           (0, 0), (-1, -1), 0.5, colors.grey),
-        ("INNERGRID",     (0, 0), (-1, -1), 0.5, colors.grey),
+        ("BACKGROUND",    (0, 1), (-1, -1), colors.HexColor("#E8E8E8")),  # grey all data rows
+        ("BOX",           (0, 0), (-1, -1), 0.8, colors.white),
+        ("INNERGRID",     (0, 0), (-1, -1), 0.8, colors.white),
         ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
         ("TOPPADDING",    (0, 0), (-1, -1), 7),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
@@ -1814,44 +1821,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     elems.append(Spacer(1, 8 * mm))
 
     # ── Signatures ────────────────────────────────────────────────────────────
-    sigs = case.get("signatories", [])
-    if sigs:
-        elems.append(Paragraph(
-            "<b>This report has been reviewed and approved by:</b>",
-            ParagraphStyle("_app", fontName=F_BOLD, fontSize=11,
-                           textColor=C_APPROVAL, leading=14, spaceAfter=6)
-        ))
-        sig_cells_img   = []
-        sig_cells_name  = []
-        sig_cells_title = []
-        for sig in sigs:
-            raw = hla_assets.get_image_bytes(sig.get("sign_b64", b""))
-            if raw:
-                try:
-                    s_img = Image(io.BytesIO(raw), width=28 * mm, height=14 * mm)
-                except Exception:
-                    s_img = Spacer(28 * mm, 14 * mm)
-            else:
-                s_img = Spacer(28 * mm, 14 * mm)
-            sig_cells_img.append(s_img)
-            sig_cells_name.append(Paragraph(f"<b>{sig.get('name','')}</b>",
-                ParagraphStyle("_sn", fontName=F_BOLD, fontSize=10,
-                               alignment=TA_CENTER, leading=12)))
-            sig_cells_title.append(Paragraph(
-                sig.get("title", "").replace("<br/>", "\n"),
-                ParagraphStyle("_st", fontName=F_REG, fontSize=9,
-                               alignment=TA_CENTER, leading=11)))
-
-        sig_col_w = CONTENT_W / max(len(sigs), 1)
-        sig_rows  = [sig_cells_img, sig_cells_name, sig_cells_title]
-        sig_t = Table(sig_rows, colWidths=[sig_col_w] * len(sigs))
-        sig_t.setStyle(TableStyle([
-            ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
-            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING",    (0, 0), (-1, -1), 3),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ]))
-        elems.append(sig_t)
+    elems.extend(_signature_block(case.get("signatories", []), S))
 
     return elems
 
@@ -1926,7 +1896,7 @@ def _build_dsa_report(case: dict, S: dict) -> list:
 
     info_rows = [
         [IL("Patient name"),    IC(), IV(patient.get("name","")),            E(), IL("Donor name"),          IC(), IV(donor.get("name",""))],
-        [IL("Gender/ Age"),     IC(), IR(patient.get("gender_age","")),      E(), IL("Gender/ Age"),         IC(), IR(donor.get("gender_age",""))],
+        [IL("Gender/ Age"),     IC(), IR(_normalize_age(patient.get("gender_age",""))),      E(), IL("Gender/ Age"),         IC(), IR(_normalize_age(donor.get("gender_age","")))],
         [IL("PIN"),             IC(), IR(patient.get("pin","")),             E(), IL("PIN"),                 IC(), IR(donor.get("pin","NA"))],
         [IL("Sample Number"),   IC(), IR(patient.get("sample_number","")),   E(), IL("Sample Number"),       IC(), IR(donor.get("sample_number","NA"))],
         [IL("Diagnosis"),       IC(), IV(patient.get("diagnosis","")),       E(), IL("Sample receipt date"), IC(), IR(donor.get("receipt_date",""))],
@@ -1946,7 +1916,7 @@ def _build_dsa_report(case: dict, S: dict) -> list:
         ("RIGHTPADDING",  (3, 0), (3, -1), 0),
         ("LEFTPADDING",   (5, 0), (5, -1), 0),
         ("RIGHTPADDING",  (5, 0), (5, -1), 2),
-        ("LINEBELOW",     (0, -1), (-1, -1), 0.5, colors.grey),
+        # no bottom border — demography table sits flush above the photo table
     ]))
     elems.append(info_t)
     elems.append(Spacer(1, 6 * mm))
@@ -2018,32 +1988,37 @@ def _build_dsa_report(case: dict, S: dict) -> list:
     elems.append(Spacer(1, 6 * mm))
 
     # ── Detection section heading ─────────────────────────────────────────────
-    _det_style = ParagraphStyle("_dsa_det_hdr", fontName=F_BOLD, fontSize=11,
-                                 textColor=C_NGS_TITLE, alignment=TA_CENTER,
-                                 leading=15, spaceAfter=6)
-    elems.append(Paragraph(
-        "<u><b>Detection of HLA Class I and Class II (Donor specific IgG Antibodies)</b></u>",
-        _det_style
-    ))
+    # Compute remarks early so it can influence padding/spacing of elements below.
+    _rmk = patient.get("remarks", "").strip()
+
+    _det_heading = (
+        "Detection of HLA Class I and Class II "
+        "(Donor specific IgG Antibodies)"
+    )
+    # Reduce heading space when remarks is present to keep block compact
+    _det_para = Paragraph(
+        f"<u><b>{_det_heading}</b></u>",
+        ParagraphStyle("_dsa_det", fontName=F_BOLD, fontSize=11,
+                       textColor=BLACK, alignment=TA_CENTER, leading=15,
+                       spaceAfter=4 if _rmk else 8)
+    )
 
     # ── DSA Results table ─────────────────────────────────────────────────────
     _dsa_col_w = [
-        CONTENT_W * 0.35,
-        CONTENT_W * 0.20,
-        CONTENT_W * 0.225,
-        CONTENT_W * 0.225,
+        CONTENT_W * 0.30,   # Test
+        CONTENT_W * 0.20,   # Result
+        CONTENT_W * 0.25,   # MFI
+        CONTENT_W * 0.25,   # MFI Positive cutoff
     ]
-    _dsa_hdr_bg  = colors.HexColor("#2C3E50")
-    _dsa_row_bg  = colors.HexColor("#E8E8E8")
-    _dsa_hdr_s   = ParagraphStyle("_dsa_th", fontName=F_BOLD, fontSize=10,
-                                   textColor=WHITE, alignment=TA_CENTER, leading=13)
-    _dsa_lbl_s   = ParagraphStyle("_dsa_td_l", fontName=F_BOLD, fontSize=10,
-                                   textColor=BLACK, alignment=TA_LEFT, leading=13)
-    _dsa_cen_s   = ParagraphStyle("_dsa_td_c", fontName=F_REG, fontSize=10,
-                                   textColor=BLACK, alignment=TA_CENTER, leading=13)
-    _dsa_foot_s  = ParagraphStyle("_dsa_foot", fontName=F_REG, fontSize=9,
-                                   textColor=colors.grey, alignment=TA_CENTER,
-                                   leading=12, fontStyle="italic" if False else None)
+    # Styles matching reference: white bg header, black bold text, grey borders
+    _dsa_hdr_s  = ParagraphStyle("_dsa_th", fontName=F_BOLD, fontSize=10,
+                                  textColor=BLACK, alignment=TA_CENTER, leading=13)
+    _dsa_hdr_lL = ParagraphStyle("_dsa_th_l", fontName=F_BOLD, fontSize=10,
+                                  textColor=BLACK, alignment=TA_LEFT, leading=13)
+    _dsa_lbl_s  = ParagraphStyle("_dsa_td_l", fontName=F_REG, fontSize=10,
+                                  textColor=BLACK, alignment=TA_LEFT, leading=13)
+    _dsa_cen_s  = ParagraphStyle("_dsa_td_c", fontName=F_REG, fontSize=10,
+                                  textColor=BLACK, alignment=TA_CENTER, leading=13)
 
     c1_result  = dsa.get("class1_result", "Negative")
     c1_mfi     = dsa.get("class1_mfi", "")
@@ -2052,50 +2027,57 @@ def _build_dsa_report(case: dict, S: dict) -> list:
     c2_mfi     = dsa.get("class2_mfi", "")
     c2_cutoff  = dsa.get("class2_cutoff", ">1000")
 
-    c1_color_hex = _color_hex(_cdc_result_color(c1_result))
-    c2_color_hex = _color_hex(_cdc_result_color(c2_result))
+    c1_hex = _color_hex(_cdc_result_color(c1_result))
+    c2_hex = _color_hex(_cdc_result_color(c2_result))
 
     dsa_data = [
-        # Header row
-        [Paragraph("<b>Test</b>", _dsa_hdr_s),
-         Paragraph("<b>Result</b>", _dsa_hdr_s),
-         Paragraph("<b>Mean Fluorescent Intensity</b>", _dsa_hdr_s),
-         Paragraph("<b>Mean Fluorescent Intensity Positive cutoff</b>", _dsa_hdr_s)],
+        # Header row — white background, black bold text
+        [Paragraph("<b>Test</b>",                                 _dsa_hdr_lL),
+         Paragraph("<b>Result</b>",                               _dsa_hdr_s),
+         Paragraph("<b>Mean Fluorescent\nIntensity</b>",          _dsa_hdr_s),
+         Paragraph("<b>Mean Fluorescent\nIntensity Positive\ncutoff</b>", _dsa_hdr_s)],
         # Class I row
-        [Paragraph("Anti HLA Class I antibodies", _dsa_lbl_s),
-         Paragraph(f"<font color='#{c1_color_hex}'><b>{c1_result}</b></font>", _dsa_cen_s),
-         Paragraph(c1_mfi, _dsa_cen_s),
+        [Paragraph("Anti HLA Class I\nantibodies",               _dsa_lbl_s),
+         Paragraph(f"<font color='#{c1_hex}'><b>{c1_result}</b></font>", _dsa_cen_s),
+         Paragraph(c1_mfi,    _dsa_cen_s),
          Paragraph(c1_cutoff, _dsa_cen_s)],
         # Class II row
-        [Paragraph("Anti HLA Class II antibodies", _dsa_lbl_s),
-         Paragraph(f"<font color='#{c2_color_hex}'><b>{c2_result}</b></font>", _dsa_cen_s),
-         Paragraph(c2_mfi, _dsa_cen_s),
+        [Paragraph("Anti HLA Class II\nantibodies",              _dsa_lbl_s),
+         Paragraph(f"<font color='#{c2_hex}'><b>{c2_result}</b></font>", _dsa_cen_s),
+         Paragraph(c2_mfi,    _dsa_cen_s),
          Paragraph(c2_cutoff, _dsa_cen_s)],
-        # Footer row spanning all columns
-        [Paragraph("<i>*To be correlated clinically</i>",
-                   ParagraphStyle("_dsa_foot2", fontName=F_REG, fontSize=9,
-                                  textColor=colors.grey, alignment=TA_CENTER, leading=12)),
+        # Footer row
+        [Paragraph("*To be correlated clinically",
+                   ParagraphStyle("_dsa_ft", fontName=F_REG, fontSize=10,
+                                  textColor=BLACK, alignment=TA_LEFT, leading=13)),
          "", "", ""],
     ]
+    _rmk = patient.get("remarks", "").strip()
+    # Use tighter row padding when remarks is present so the whole block fits on page 1
+    _row_pad = 4 if _rmk else 7
+
     dsa_t = Table(dsa_data, colWidths=_dsa_col_w)
     dsa_t.setStyle(TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, 0),  _dsa_hdr_bg),
-        ("BACKGROUND",    (0, 1), (-1, 2),  _dsa_row_bg),
-        ("BACKGROUND",    (0, 3), (-1, 3),  colors.white),
+        ("BACKGROUND",    (0, 0), (-1, -1), colors.white),
+        ("BOX",           (0, 0), (-1, -1), 0.8, colors.grey),
+        ("INNERGRID",     (0, 0), (-1, -1), 0.5, colors.grey),
         ("SPAN",          (0, 3), (-1, 3)),
-        ("INNERGRID",     (0, 0), (-1, -1), 0.5, colors.white),
-        ("BOX",           (0, 0), (-1, -1), 0.5, colors.white),
         ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-        ("ALIGN",         (0, 0), (-1, 0),  "CENTER"),
-        ("ALIGN",         (0, 1), (0, 2),   "LEFT"),
-        ("ALIGN",         (1, 1), (-1, 2),  "CENTER"),
-        ("ALIGN",         (0, 3), (-1, 3),  "CENTER"),
-        ("TOPPADDING",    (0, 0), (-1, -1), 7),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ("ALIGN",         (0, 0), (0, -1),  "LEFT"),
+        ("ALIGN",         (1, 0), (-1, -1), "CENTER"),
+        ("TOPPADDING",    (0, 0), (-1, -1), _row_pad),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), _row_pad),
         ("LEFTPADDING",   (0, 0), (-1, -1), 6),
         ("RIGHTPADDING",  (0, 0), (-1, -1), 6),
     ]))
-    elems.append(dsa_t)
+    # Wrap detection heading + results table + remarks in KeepTogether
+    _rmk_para = ([Paragraph(
+        f"<b>Remarks : </b>{_clean_display(_rmk)}",
+        ParagraphStyle("_dsa_rmk", fontName=F_BOLD, fontSize=10,
+                       leading=14, spaceBefore=6)
+    )] if _rmk else [])
+
+    elems.append(KeepTogether([_det_para, dsa_t] + _rmk_para))
 
     # ── Page break → page 2 ───────────────────────────────────────────────────
     elems.append(PageBreak())
@@ -2125,44 +2107,7 @@ def _build_dsa_report(case: dict, S: dict) -> list:
     elems.append(Spacer(1, 8 * mm))
 
     # ── Signatures ────────────────────────────────────────────────────────────
-    sigs = case.get("signatories", [])
-    if sigs:
-        elems.append(Paragraph(
-            "<b>This report has been reviewed and approved by:</b>",
-            ParagraphStyle("_dsa_app", fontName=F_BOLD, fontSize=11,
-                           textColor=C_APPROVAL, leading=14, spaceAfter=6)
-        ))
-        sig_cells_img   = []
-        sig_cells_name  = []
-        sig_cells_title = []
-        for sig in sigs:
-            raw = hla_assets.get_image_bytes(sig.get("sign_b64", b""))
-            if raw:
-                try:
-                    s_img = Image(io.BytesIO(raw), width=28 * mm, height=14 * mm)
-                except Exception:
-                    s_img = Spacer(28 * mm, 14 * mm)
-            else:
-                s_img = Spacer(28 * mm, 14 * mm)
-            sig_cells_img.append(s_img)
-            sig_cells_name.append(Paragraph(f"<b>{sig.get('name','')}</b>",
-                ParagraphStyle("_dsa_sn", fontName=F_BOLD, fontSize=10,
-                               alignment=TA_CENTER, leading=12)))
-            sig_cells_title.append(Paragraph(
-                sig.get("title", "").replace("<br/>", "\n"),
-                ParagraphStyle("_dsa_st", fontName=F_REG, fontSize=9,
-                               alignment=TA_CENTER, leading=11)))
-
-        sig_col_w = CONTENT_W / max(len(sigs), 1)
-        sig_rows  = [sig_cells_img, sig_cells_name, sig_cells_title]
-        sig_t = Table(sig_rows, colWidths=[sig_col_w] * len(sigs))
-        sig_t.setStyle(TableStyle([
-            ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
-            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING",    (0, 0), (-1, -1), 3),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ]))
-        elems.append(sig_t)
+    elems.extend(_signature_block(case.get("signatories", []), S))
 
     return elems
 
