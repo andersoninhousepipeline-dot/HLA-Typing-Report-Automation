@@ -1790,8 +1790,7 @@ def _build_flow_report(case: dict, S: dict) -> list:
     elems.append(res_t)
 
     # ── Page break → page 2 ───────────────────────────────────────────────────
-    elems.append(PageBreak())
-
+    elems.append(Spacer(1, 6*mm))
     # ── Interpretation ────────────────────────────────────────────────────────
     _sec_s    = ParagraphStyle("_fsh", fontName=F_BOLD, fontSize=14,
                                 textColor=C_NGS_TITLE, leading=18, spaceAfter=2)
