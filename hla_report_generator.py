@@ -3250,7 +3250,9 @@ class HLAReportGeneratorApp(QMainWindow):
 
         if not self._bulk_fields: return
 
-        # Patient fields
+        # Patient fields — write every text widget back to case["patient"]
+        for key, w in self._bulk_fields.items():
+            p[key] = w.text().strip()
 
         # Patient HLA
         if not isinstance(p.get("hla"), dict): p["hla"] = {}
