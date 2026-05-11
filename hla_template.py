@@ -1701,6 +1701,14 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     t_color_hex = _color_hex(_cdc_result_color(t_result))
     b_color_hex = _color_hex(_cdc_result_color(b_result))
 
+    def _dtt_label(key, default="<10% Dead"):
+        v = cdc.get(key, "").strip()
+        v = re.sub(r"\s*cells\s*$", "", v, flags=re.IGNORECASE).strip()
+        return v or default
+
+    t_dtt_label = _dtt_label("t_with_dtt")
+    b_dtt_label = _dtt_label("b_with_dtt")
+
     _res_style = ParagraphStyle("_rline", fontName=F_BOLD, fontSize=10, leading=18)
 
     _dtt_total  = CONTENT_W * 0.70
@@ -1754,10 +1762,10 @@ def _build_cdc_report(case: dict, S: dict) -> list:
         HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=6),
         Paragraph(
             f"<b>T cell crossmatch : </b><font color='#{t_color_hex}'><b>{t_result}</b></font>"
-            f" <font color='#000000'>(&lt;10% Dead)</font>", _res_style),
+            f" <font color='#000000'>({t_dtt_label})</font>", _res_style),
         Paragraph(
             f"<b>B cell crossmatch : </b><font color='#{b_color_hex}'><b>{b_result}</b></font>"
-            f" <font color='#000000'>(&lt;10% Dead)</font>", _res_style),
+            f" <font color='#000000'>({b_dtt_label})</font>", _res_style),
     ] + _cdc_rmk_items + [
         Spacer(1, 3 * mm if _cdc_rmk else 5 * mm),
         dtt_t,
