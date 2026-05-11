@@ -1651,7 +1651,8 @@ def _build_flow_report(case: dict, S: dict) -> list:
     elems.append(Spacer(1, 4*mm))
 
     # ── Photo / sample-type table ─────────────────────────────────────────────
-    _ph_w = 40*mm; _ph_h = 45*mm; _pc_w = 54*mm; _lbl_w = 38*mm
+    # ── Photo / sample-type table ─────────────────────────────────────────
+    _ph_w = 30*mm; _ph_h = 36*mm; _pc_w = 54*mm; _lbl_w = 38*mm
     _GREY = colors.HexColor("#E8E8E8")
 
     def _photo_cell(pb):
@@ -1681,18 +1682,18 @@ def _build_flow_report(case: dict, S: dict) -> list:
          _P(_raw(donor.get("collection_date","")),   F_REG, 10, BLACK, TA_CENTER)],
     ]
     photo_t = Table(photo_rows, colWidths=[_lbl_w, _pc_w, _pc_w],
-                    rowHeights=[None, _ph_h + 10, None, None])
+                    rowHeights=[None, _ph_h + 8, None, None])
     photo_t.setStyle(TableStyle([
         ("BACKGROUND",  (0,0), (-1,-1), _GREY),
         ("BACKGROUND",  (0,0), (-1, 0), colors.white),
-        ("BACKGROUND",  (1,0), (2, 0), _GREY),
+        ("ALIGN",       (1,1), (2, 1), "CENTER"),
         ("VALIGN",      (0,0), (-1,-1), "MIDDLE"),
         ("TOPPADDING",    (0,0), (-1,-1), 4), ("BOTTOMPADDING", (0,0), (-1,-1), 4),
         ("LEFTPADDING",   (0,0), (-1,-1), 4), ("RIGHTPADDING",  (0,0), (-1,-1), 4),
         ("INNERGRID",   (0,0), (-1,-1), 0.5, colors.white),
         ("BOX",         (0,0), (-1,-1), 0.5, colors.white),
     ]))
-    photo_t.hAlign = "LEFT"
+    photo_t.hAlign = "CENTER"
     elems.append(photo_t)
     elems.append(Spacer(1, 4*mm))
 
