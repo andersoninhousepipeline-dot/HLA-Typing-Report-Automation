@@ -1651,15 +1651,19 @@ def _build_flow_report(case: dict, S: dict) -> list:
     elems.append(Spacer(1, 4*mm))
 
     # ── Photo / sample-type table ─────────────────────────────────────────────
-    _ph_w = 28*mm; _ph_h = 30*mm; _pc_w = 54*mm; _lbl_w = 38*mm
+    _ph_w = 40*mm; _ph_h = 45*mm; _pc_w = 54*mm; _lbl_w = 38*mm
     _GREY = colors.HexColor("#E8E8E8")
 
     def _photo_cell(pb):
         if pb:
-            try: return Image(io.BytesIO(pb), width=_ph_w, height=_ph_h)
+            try:
+                img = Image(io.BytesIO(pb), width=_ph_w, height=_ph_h)
+                img.hAlign = "CENTER"
+                return img
             except Exception: pass
         _emp = Table([[""]], colWidths=[_ph_w], rowHeights=[_ph_h])
         _emp.setStyle(TableStyle([("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#D0D0D0"))]))
+        _emp.hAlign = "CENTER"
         return _emp
 
     photo_rows = [
@@ -1677,7 +1681,7 @@ def _build_flow_report(case: dict, S: dict) -> list:
          _P(_raw(donor.get("collection_date","")),   F_REG, 10, BLACK, TA_CENTER)],
     ]
     photo_t = Table(photo_rows, colWidths=[_lbl_w, _pc_w, _pc_w],
-                    rowHeights=[None, _ph_h + 8, None, None])
+                    rowHeights=[None, _ph_h + 10, None, None])
     photo_t.setStyle(TableStyle([
         ("BACKGROUND",  (0,0), (-1,-1), _GREY),
         ("BACKGROUND",  (0,0), (-1, 0), colors.white),
