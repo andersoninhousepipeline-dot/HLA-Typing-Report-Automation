@@ -1577,11 +1577,20 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     # 7-col layout: [lbl_L, colon_L, val_L, GAP, lbl_R, colon_R, val_R]
     # val_L is wide enough for long hospital names (~182pt avail).
     # GAP creates visible separation between patient and donor sections.
-    # All fracs sum to 1.000.
+    # Adaptive widths: long donor names squeeze the gap so the right value
+    # column gets more room; short donor names keep the original generous
+    # left-value column to accommodate long hospital/clinic names.
     cw = CONTENT_W
-    info_col_w = [cw * 0.163, cw * 0.016, cw * 0.280,   # left
-                  cw * 0.020,                             # gap
-                  cw * 0.210, cw * 0.016, cw * 0.295]   # right
+    if len(donor.get("name", "")) > 12:
+        # Long donor name — reduce gap, widen right value column
+        info_col_w = [cw * 0.173, cw * 0.016, cw * 0.340,   # left
+                      cw * 0.008,                             # gap (minimal)
+                      cw * 0.196, cw * 0.016, cw * 0.251]   # right
+    else:
+        # Short donor name — original generous left-value column
+        info_col_w = [cw * 0.176, cw * 0.016, cw * 0.365,   # left
+                      cw * 0.035,                             # gap
+                      cw * 0.196, cw * 0.016, cw * 0.196]   # right
 
     def E(): return Paragraph("", info_lbl_style)
 
