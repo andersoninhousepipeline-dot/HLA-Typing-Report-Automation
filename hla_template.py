@@ -637,11 +637,10 @@ class _HFCanvas:
         # ── Footer ──────────────────────────────────────────────────────────
         if with_logo:
             raw_f = hla_assets.get_image_bytes(hla_assets.FOOTER_BAR_B64)
-            # Footer bar anchored to page bottom
-            fy = MARGIN_B
+            # Footer bar anchored flush to the absolute page bottom (y=0)
             canvas.drawImage(
                 ImageReader(io.BytesIO(raw_f)),
-                MARGIN_L, fy,
+                MARGIN_L, 0,
                 width=CONTENT_W, height=self.footer_h,
                 preserveAspectRatio=True, mask="auto"
             )
