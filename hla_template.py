@@ -1718,6 +1718,9 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     dtt_lbl_s = ParagraphStyle("_dtt_l", fontName=F_BOLD, fontSize=10,
                                 textColor=BLACK, alignment=TA_CENTER, leading=13)
 
+    _cdc_rmk = patient.get("remarks", "").strip()
+    _row_pad  = 4 if _cdc_rmk else 7
+
     dtt_t = Table([
         [Paragraph("<b>Cells</b>",                dtt_hdr_s),
          Paragraph("<b>With DTT Treatment</b>",    dtt_hdr_s),
@@ -1735,12 +1738,11 @@ def _build_cdc_report(case: dict, S: dict) -> list:
         ("INNERGRID",     (0, 0), (-1, -1), 0.5, colors.white),
         ("BOX",           (0, 0), (-1, -1), 0.5, colors.white),
         ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING",    (0, 0), (-1, -1), 7),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING",    (0, 0), (-1, -1), _row_pad),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), _row_pad),
     ]))
     dtt_t.hAlign = 'CENTER'
 
-    _cdc_rmk = patient.get("remarks", "").strip()
     _cdc_rmk_items = ([
         Paragraph(
             f"<b>Remarks : </b>{_clean_display(_cdc_rmk)}",
@@ -1752,7 +1754,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     elems.append(KeepTogether([
         Paragraph("<b>Result</b>", ParagraphStyle("_cdc_sec",
             fontName=F_BOLD, fontSize=14, textColor=_C_RES_HDR, leading=18,
-            spaceAfter=2)),
+            spaceAfter=(2 if not _cdc_rmk else 2))),
         HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=6),
         Paragraph(
             f"<b>T cell crossmatch : </b><font color='#{t_color_hex}'><b>{t_result}</b></font>"
@@ -1761,7 +1763,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
             f"<b>B cell crossmatch : </b><font color='#{b_color_hex}'><b>{b_result}</b></font>"
             f" <font color='#000000'>(&lt;10% Dead)</font>", _res_style),
     ] + _cdc_rmk_items + [
-        Spacer(1, 5 * mm),
+        Spacer(1, 3 * mm if _cdc_rmk else 5 * mm),
         dtt_t,
     ]))
 
