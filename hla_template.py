@@ -66,6 +66,11 @@ C_CDC_DOUBTFUL = colors.HexColor("#E67E22")   # orange for Doubtful
 C_CDC_REL_BG   = colors.HexColor("#FABF8F")   # orange for relationship box (matches DTT header)
 C_CDC_DTT_HDR  = colors.HexColor("#2C3E50")   # dark header for DTT table
 
+# SAB Assay
+C_SAB_HEADING  = colors.HexColor("#C55A11")   # orange-amber for section headings
+C_SAB_TBL_HDR  = colors.HexColor("#9DC3E6")   # steel blue for allele table headers
+C_SAB_HIGH_ROW = colors.HexColor("#FFCCCC")   # light pink for MFI >=1000 data rows
+
 # ─── Static text constants ────────────────────────────────────────────────────
 COVERAGE_LINES = [
     ": Class I (HLA-A, -B & -C) - Whole gene",
