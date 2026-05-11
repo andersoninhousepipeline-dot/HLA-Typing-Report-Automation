@@ -1515,6 +1515,42 @@ DSA_RECOMMENDATIONS = [
     "The test results relate specifically to the sample received in the lab and are presumed to have been generated and transported per specific instructions given by the physicians/laboratory",
 ]
 
+# ─── SAB static text ─────────────────────────────────────────────────────────
+SAB_METHODOLOGY = (
+    "The test is based on the Luminex technology. The Single Antigen Class I "
+    "/Class II beads are designed to detect IgG antibodies to HLA Class I "
+    "/Class II glycoproteins. The SAB Class I /Class II are composed of "
+    "different Luminex Beads to which purified recombinant Class I /Class II "
+    "HLA glycoproteins are conjugated. The presence or absence of antibodies "
+    "in the sera depends on the antigen/antibody binding on these beads that "
+    "is detected by the Luminex optic system."
+)
+SAB_INTERPRETATION = (
+    "The level of antibody is measured as a Mean Fluorescent Intensity (MFI), "
+    "and if MFI is >= 1000 is considered as significant."
+)
+SAB_COMMENTS_LIST = [
+    "MFI for individual alleles are attached in the appendix section.",
+    "This test detects anti-HLA IgG antibodies sensitization status & differentiates "
+    "between Donor specific antibodies and non-donor specific antibodies.",
+    "The test is important to detect anti HLA antibodies in potential recipients "
+    "pre and post transplantation",
+]
+SAB_LIMITATIONS = [
+    "The reported results are for information and are subject to confirmation and "
+    "interpretation by the referring doctor.",
+    "The tests results relate specifically to the sample received in the lab and are "
+    "presumed to have been generated and transported per specific instructions given "
+    "by the physicians/laboratory.",
+    "The test results are not to be considered as diagnosis of any diseases. These "
+    "findings are meant to aid the clinician in taking a vital healthcare decision "
+    "and serve as a guide for providing the appropriate treatment.",
+]
+SAB_NOTE = (
+    "List of allele specificities included in the panel tested are given in the table attached."
+)
+
+
 
 def _cdc_result_color(val: str):
     """Return the display color for a CDC/DSA result string."""
@@ -2134,6 +2170,234 @@ def _build_dsa_report(case: dict, S: dict) -> list:
     return elems
 
 
+
+# ─── SAB (Single Antigen Bead) Assay report builder ──────────────────────────
+
+def _build_sab_report(case: dict, S: dict) -> list:
+    """Return story flowables for SAB Class I (or II) report."""
+    patient   = case.get("patient", {})
+    alleles   = case.get("sab_alleles", [])   # [(allele_str, mfi_int), ...] sorted desc
+    chart_b   = case.get("sab_chart_bytes")
+    sab_class = case.get("sab_class", "I")
+
+    F_BOLD = _f("SegoeUI-Bold", "Helvetica-Bold")
+    F_REG  = _f("SegoeUI",      "Helvetica")
+
+    def _raw(v):  return _clean_display(v) or "NA"
+    def _norm(v): return _title_case(_clean_display(v)) or "NA"
+    def _IL(t):   return Paragraph(f"<b>{t}</b>",
+                    ParagraphStyle("_sil", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
+    def _IV(t):   return Paragraph(_norm(t),
+                    ParagraphStyle("_siv", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
+    def _IR(t):   return Paragraph(_raw(t),
+                    ParagraphStyle("_sir", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
+    def _IC():    return Paragraph("<b>:</b>",
+                    ParagraphStyle("_sic", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
+    def _E():     return Paragraph("",
+                    ParagraphStyle("_sie", fontName=F_REG,  fontSize=10, textColor=BLACK, leading=12))
+
+    elems = []
+
+    # ── Info table ────────────────────────────────────────────────────────────
+    cw = CONTENT_W
+    # col: [lbl_L, colon_L, val_L, GAP, lbl_R, colon_R, val_R]  sum=1.000
+    info_col_w = [cw*0.167, cw*0.016, cw*0.340, cw*0.020, cw*0.225, cw*0.016, cw*0.216]
+    info_rows = [
+        [_IL("Patient name"),    _IC(), _IV(patient.get("name","")),
+         _E(), _IL("PIN"),                    _IC(), _IR(patient.get("pin",""))],
+        [_IL("Gender/ Age"),     _IC(), _IR(_normalize_age(patient.get("gender_age",""))),
+         _E(), _IL("Sample Number"),          _IC(), _IR(patient.get("sample_number",""))],
+        [_IL("Hospital MR No"),  _IC(), _IR(patient.get("hospital_mr_no","") or "NA"),
+         _E(), _IL("Sample collection date"), _IC(), _IR(patient.get("collection_date",""))],
+        [_IL("Specimen"),        _IC(), _IV(patient.get("specimen","") or "Serum"),
+         _E(), _IL("Sample receipt date"),    _IC(), _IR(patient.get("receipt_date",""))],
+        [_IL("Hospital/Clinic"), _IC(), _IV(patient.get("hospital_clinic","")),
+         _E(), _IL("Report date"),            _IC(), _IR(patient.get("report_date",""))],
+    ]
+    info_t = Table(info_rows, colWidths=info_col_w)
+    info_t.setStyle(TableStyle([
+        ("BACKGROUND",    (0,0), (-1,-1), colors.HexColor("#E8E8E8")),
+        ("VALIGN",        (0,0), (-1,-1), "TOP"),
+        ("TOPPADDING",    (0,0), (-1,-1), 5),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+        ("LEFTPADDING",   (0,0), (-1,-1), 4),
+        ("RIGHTPADDING",  (0,0), (-1,-1), 2),
+        ("LEFTPADDING",   (1,0), (1,-1), 0), ("RIGHTPADDING", (1,0), (1,-1), 2),
+        ("LEFTPADDING",   (3,0), (3,-1), 0), ("RIGHTPADDING", (3,0), (3,-1), 0),
+        ("LEFTPADDING",   (5,0), (5,-1), 0), ("RIGHTPADDING", (5,0), (5,-1), 2),
+    ]))
+    elems.append(info_t)
+    elems.append(Spacer(1, 5*mm))
+
+    # ── "Test Report" title + bordered test name box ──────────────────────────
+    _title_s = ParagraphStyle("_sab_ttl", fontName=F_BOLD, fontSize=14,
+                               textColor=C_NGS_TITLE, alignment=TA_CENTER, leading=18)
+    elems.append(Paragraph("<b>Test Report</b>", _title_s))
+    elems.append(Spacer(1, 3*mm))
+    _test_name   = f"HLA SINGLE ANTIGEN BEAD ASSAY FOR CLASS {sab_class} IgG ANTIBODIES"
+    _box_p_s     = ParagraphStyle("_sab_bn", fontName=F_BOLD, fontSize=10,
+                                   textColor=BLACK, alignment=TA_CENTER, leading=14)
+    _name_box    = Table([[Paragraph(_test_name, _box_p_s)]], colWidths=[cw * 0.88])
+    _name_box.setStyle(TableStyle([
+        ("BOX",           (0,0), (-1,-1), 0.8, BLACK),
+        ("TOPPADDING",    (0,0), (-1,-1), 5),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+        ("LEFTPADDING",   (0,0), (-1,-1), 8),
+        ("RIGHTPADDING",  (0,0), (-1,-1), 8),
+    ]))
+    _name_box.hAlign = "CENTER"
+    elems.append(_name_box)
+    elems.append(Spacer(1, 5*mm))
+
+    # ── Section styles ────────────────────────────────────────────────────────
+    _sec_s  = ParagraphStyle("_sab_sec",  fontName=F_BOLD, fontSize=13,
+                              textColor=C_SAB_HEADING, leading=16, spaceAfter=2)
+    _body_s = ParagraphStyle("_sab_bdy",  fontName=F_REG,  fontSize=10,
+                              leading=14, alignment=TA_JUSTIFY)
+    _bull_s = ParagraphStyle("_sab_bul",  fontName=F_REG,  fontSize=10,
+                              leading=14, spaceBefore=2)
+
+    # ── Methodology ───────────────────────────────────────────────────────────
+    elems.append(Paragraph("<b>Methodology</b>", _sec_s))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=4))
+    elems.append(Paragraph(SAB_METHODOLOGY, _body_s))
+    elems.append(Spacer(1, 4*mm))
+
+    # ── Interpretation ────────────────────────────────────────────────────────
+    elems.append(Paragraph("<b>Interpretation</b>", _sec_s))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=4))
+    elems.append(Paragraph(SAB_INTERPRETATION, _body_s))
+    elems.append(Spacer(1, 4*mm))
+
+    # ── Comments ──────────────────────────────────────────────────────────────
+    elems.append(Paragraph("<b>Comments</b>", _sec_s))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=4))
+    for i, c in enumerate(SAB_COMMENTS_LIST, 1):
+        elems.append(Paragraph(f"{i}. {c}", _bull_s))
+
+    # ── Remarks ───────────────────────────────────────────────────────────────
+    _rmk = _clean_display(patient.get("remarks", ""))
+    if _rmk and _rmk != "—":
+        elems.append(Spacer(1, 4*mm))
+        _rmk_s = ParagraphStyle("_sab_rmk", fontName=F_BOLD, fontSize=10, leading=14)
+        elems.append(Paragraph(f"<b>Remarks:</b> {_rmk}", _rmk_s))
+
+    # ── Page break -> allele result pages ─────────────────────────────────────
+    elems.append(PageBreak())
+
+    # ── Allele tables ─────────────────────────────────────────────────────────
+    high_alleles = [(a, m) for a, m in alleles if int(m) >= 1000]
+    low_alleles  = [(a, m) for a, m in alleles if int(m) <  1000]
+
+    _cls_hdr_s = ParagraphStyle("_sab_ch", fontName=F_BOLD, fontSize=11,
+                                 textColor=BLACK, leading=14, spaceAfter=4)
+    _sub_s     = ParagraphStyle("_sab_sb", fontName=F_REG,  fontSize=10,
+                                 leading=13, spaceAfter=3)
+    _th_s      = ParagraphStyle("_sab_th", fontName=F_BOLD, fontSize=11,
+                                 textColor=BLACK, alignment=TA_CENTER, leading=14)
+    _td_s      = ParagraphStyle("_sab_td", fontName=F_REG,  fontSize=10,
+                                 textColor=BLACK, alignment=TA_CENTER, leading=13)
+
+    elems.append(Paragraph(f"Class {sab_class} Single Antigen Bead (SAB) Result", _cls_hdr_s))
+    elems.append(Spacer(1, 3*mm))
+
+    def _allele_table(rows_data, high=False):
+        _acw = [cw * 0.55, cw * 0.45]
+        tdata = [[Paragraph("<b>Allele Specificity</b>", _th_s),
+                  Paragraph("<b>MFI</b>", _th_s)]]
+        for allele, mfi in rows_data:
+            tdata.append([Paragraph(str(allele), _td_s), Paragraph(str(mfi), _td_s)])
+        t = Table(tdata, colWidths=_acw, repeatRows=1)
+        style_cmds = [
+            ("BACKGROUND",    (0,0), (-1, 0), C_SAB_TBL_HDR),
+            ("BACKGROUND",    (0,1), (-1,-1), colors.white),
+            ("INNERGRID",     (0,0), (-1,-1), 0.5, colors.HexColor("#A0A0A0")),
+            ("BOX",           (0,0), (-1,-1), 0.5, colors.HexColor("#A0A0A0")),
+            ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
+            ("TOPPADDING",    (0,0), (-1,-1), 4),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+        ]
+        if high:
+            for i in range(1, len(tdata)):
+                style_cmds.append(("BACKGROUND", (0, i), (-1, i), C_SAB_HIGH_ROW))
+        t.setStyle(TableStyle(style_cmds))
+        return t
+
+    elems.append(Paragraph(
+        f"Antibodies detected against HLA Class {sab_class} antigens tested with MFI &gt;1000",
+        _sub_s))
+    if high_alleles:
+        elems.append(_allele_table(high_alleles, high=True))
+    else:
+        elems.append(Paragraph("No antibodies detected with MFI ≥ 1000.", _td_s))
+    elems.append(Spacer(1, 6*mm))
+
+    elems.append(Paragraph(
+        f"Antibodies detected against HLA Class {sab_class} antigens tested with MFI &lt;1000",
+        _sub_s))
+    if low_alleles:
+        elems.append(_allele_table(low_alleles, high=False))
+    else:
+        elems.append(Paragraph("No antibodies detected with MFI < 1000.", _td_s))
+
+    # ── Chart page (optional) ─────────────────────────────────────────────────
+    if chart_b:
+        elems.append(PageBreak())
+        _ct_s = ParagraphStyle("_sab_ct", fontName=F_BOLD, fontSize=12,
+                                textColor=BLACK, alignment=TA_CENTER, leading=16)
+        elems.append(Paragraph("Bead Specificity Chart", _ct_s))
+        elems.append(Spacer(1, 3*mm))
+        try:
+            img = Image(io.BytesIO(chart_b))
+            iw, ih = img.imageWidth, img.imageHeight
+            scale  = min(CONTENT_W / iw, 180*mm / ih, 1.0)
+            img.drawWidth  = iw * scale
+            img.drawHeight = ih * scale
+            elems.append(img)
+        except Exception:
+            pass
+
+    # ── Last page: comments box + limitations + signatures ────────────────────
+    elems.append(PageBreak())
+
+    _cb_lbl_s  = ParagraphStyle("_sab_cbl", fontName=F_BOLD, fontSize=10, leading=14)
+    _cb_val_s  = ParagraphStyle("_sab_cbv", fontName=F_REG,  fontSize=10, leading=14, spaceBefore=3)
+    _cb_note_s = ParagraphStyle("_sab_cbn", fontName=F_BOLD, fontSize=10, leading=14, spaceBefore=3)
+    _rmk_display = _clean_display(patient.get("remarks", ""))
+    _cmt_rows = [
+        [Paragraph("<b>Comments:</b>", _cb_lbl_s)],
+        [Paragraph(_rmk_display or "", _cb_val_s)],
+        [Paragraph(f"<b>Note:</b> {SAB_NOTE}", _cb_note_s)],
+    ]
+    _cmt_t = Table(_cmt_rows, colWidths=[cw * 0.90])
+    _cmt_t.setStyle(TableStyle([
+        ("BOX",           (0,0), (-1,-1), 0.8, BLACK),
+        ("TOPPADDING",    (0,0), (-1,-1), 5),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+        ("LEFTPADDING",   (0,0), (-1,-1), 10),
+        ("RIGHTPADDING",  (0,0), (-1,-1), 10),
+    ]))
+    _cmt_t.hAlign = "LEFT"
+    elems.append(_cmt_t)
+    elems.append(Spacer(1, 6*mm))
+
+    _lim_sec_s = ParagraphStyle("_sab_ls", fontName=F_BOLD, fontSize=13,
+                                 textColor=C_SAB_HEADING, leading=16, spaceAfter=2)
+    _disc_s    = ParagraphStyle("_sab_ds", fontName=F_REG,  fontSize=10, leading=14,
+                                 leftIndent=12, firstLineIndent=-10,
+                                 alignment=TA_JUSTIFY, spaceBefore=3)
+    elems.append(Paragraph("<b>Limitations &amp; Disclaimer</b>", _lim_sec_s))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=4))
+    for lim in SAB_LIMITATIONS:
+        elems.append(Paragraph(f"• {lim}", _disc_s))
+    elems.append(Spacer(1, 6*mm))
+
+    sig_items = _signature_block(case.get("signatories", []), S)
+    if sig_items:
+        elems.append(KeepTogether(sig_items))
+
+    return elems
+
 # ─── Top-level entry point ────────────────────────────────────────────────────
 
 def generate_pdf(case: dict, output_path: str) -> str:
@@ -2157,6 +2421,8 @@ def generate_pdf(case: dict, output_path: str) -> str:
         "rpl_couple":       "HLA Typing \u2013 NGS High Resolution Typing",
         "cdc_crossmatch":   "Complement Dependent Cytotoxicity (CDC) Cross match",
         "dsa_crossmatch":   "Donor Specific Antibody Crossmatch",
+        "sab_class1":       "",
+        "sab_class2":       "",
     }
     title = TITLES.get(report_type, "HLA Typing Report")
 
@@ -2202,6 +2468,8 @@ def generate_pdf(case: dict, output_path: str) -> str:
         body = _build_cdc_report(case, S)
     elif report_type == "dsa_crossmatch":
         body = _build_dsa_report(case, S)
+    elif report_type in ("sab_class1", "sab_class2"):
+        body = _build_sab_report(case, S)
     else:
         body = _build_ngs_single(case, S)
 
@@ -2229,7 +2497,7 @@ def make_filename(case: dict) -> str:
     )
     rtype = {"single_hla": "HLA_NGS", "transplant_donor": "HLA_NGS",
              "rpl_couple": "RPL", "cdc_crossmatch": "CDC",
-             "dsa_crossmatch": "DSA"}.get(case.get("report_type", ""), "HLA")
+             "dsa_crossmatch": "DSA", "sab_class1": "SAB_C1", "sab_class2": "SAB_C2"}.get(case.get("report_type", ""), "HLA")
     logo  = "WITH_LOGO" if case.get("with_logo", True) else "WITHOUT_LOGO"
     parts = [p] + ([donors] if donors else []) + [rtype, logo]
     return "_".join(parts) + ".pdf"

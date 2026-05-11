@@ -111,6 +111,16 @@ REPORT_TEMPLATES = [
         "report_type":  "dsa_crossmatch",
         "default_path": os.path.join(_TEMPLATE_DIR, ""),
     },
+    {
+        "name":         "SAB Class I",
+        "report_type":  "sab_class1",
+        "default_path": os.path.join(_TEMPLATE_DIR, ""),
+    },
+    {
+        "name":         "SAB Class II",
+        "report_type":  "sab_class2",
+        "default_path": os.path.join(_TEMPLATE_DIR, ""),
+    },
 ]
 TEMPLATE_NAMES    = [t["name"]        for t in REPORT_TEMPLATES]
 TEMPLATE_TO_RTYPE = {t["name"]:        t["report_type"] for t in REPORT_TEMPLATES}
@@ -833,6 +843,79 @@ class HLAReportGeneratorApp(QMainWindow):
         scroll_layout.addWidget(_dsa_res_group)
         _dsa_res_group.setVisible(False)
 
+        # ── SAB Patient Information (shown only when SAB template selected) ──────
+        self._sab_pat_f = {}
+        _sab_pat_group = QGroupBox("Patient Information")
+        self._sab_pat_group = _sab_pat_group
+        _spf = QFormLayout(); _sab_pat_group.setLayout(_spf)
+        _spf.setSpacing(1); _spf.setContentsMargins(4, 2, 4, 2)
+        _SAB_PAT_FIELDS = [
+            ("patient_name",    "Patient Name *",         ""),
+            ("gender_age",      "Gender / Age",           ""),
+            ("hospital_mr_no",  "Hospital MR No",         "NA"),
+            ("specimen",        "Specimen",               "Serum"),
+            ("hospital_clinic", "Hospital / Clinic",      ""),
+            ("pin",             "PIN",                    ""),
+            ("sample_number",   "Sample Number",          ""),
+            ("collection_date", "Sample Collection Date", ""),
+            ("receipt_date",    "Sample Receipt Date",    ""),
+            ("report_date",     "Report Date",            ""),
+            ("remarks",         "Remarks",                ""),
+        ]
+        for _k, _l, _dflt in _SAB_PAT_FIELDS:
+            _w = QLineEdit(_dflt); _w.setFixedHeight(24)
+            if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
+            _w.textChanged.connect(self._on_manual_field_debounced)
+            self._sab_pat_f[_k] = _w
+            _spf.addRow(_l + ":", _w)
+
+        _sab_class_row = QHBoxLayout()
+        _sab_class_lbl = QLabel("SAB Class:")
+        self._sab_class_combo = ClickOnlyComboBox()
+        self._sab_class_combo.addItems(["I", "II"])
+        self._sab_class_combo.setFixedHeight(24)
+        self._sab_class_combo.currentIndexChanged.connect(self._on_manual_field_debounced)
+        _sab_class_row.addWidget(_sab_class_lbl); _sab_class_row.addWidget(self._sab_class_combo, 1)
+        _spf.addRow(_sab_class_row)
+
+        self._sab_nabl_chk = QCheckBox("NABL Accreditation")
+        self._sab_nabl_chk.setChecked(self.qsettings.value("nabl_stamp", True, type=bool))
+        self._sab_nabl_chk.stateChanged.connect(self._on_manual_field_debounced)
+        _spf.addRow(self._sab_nabl_chk)
+        self._sab_seal_chk = QCheckBox("Signature Seal")
+        self._sab_seal_chk.setChecked(self.qsettings.value("sig_stamp", True, type=bool))
+        self._sab_seal_chk.stateChanged.connect(self._on_manual_field_debounced)
+        _spf.addRow(self._sab_seal_chk)
+        scroll_layout.addWidget(_sab_pat_group)
+        _sab_pat_group.setVisible(False)
+
+        # ── SAB Allele Data ───────────────────────────────────────────────────────
+        _sab_allele_group = QGroupBox("Allele Data  (one per line:  Allele,MFI)")
+        self._sab_allele_group = _sab_allele_group
+        _saf = QVBoxLayout(); _sab_allele_group.setLayout(_saf)
+        _saf.setContentsMargins(4, 2, 4, 2)
+        self._sab_allele_edit = QTextEdit()
+        self._sab_allele_edit.setPlaceholderText("A*01:01,2126\nA*36:01,992\n...")
+        self._sab_allele_edit.setFixedHeight(120)
+        self._sab_allele_edit.textChanged.connect(self._on_manual_field_debounced)
+        _saf.addWidget(self._sab_allele_edit)
+
+        _sab_chart_row = QHBoxLayout()
+        self._sab_chart_lbl = QLabel("No chart selected"); self._sab_chart_lbl.setStyleSheet("color:gray;font-style:italic;")
+        _sab_chart_btn = QPushButton("Upload Chart Image"); _sab_chart_btn.setMaximumHeight(26)
+        self._sab_chart_bytes = None
+        def _upload_sab_chart():
+            path, _ = QFileDialog.getOpenFileName(self, "Select Chart Image", str(Path.home()), "Images (*.png *.jpg *.jpeg *.bmp *.tiff)")
+            if path:
+                with open(path, "rb") as fh: self._sab_chart_bytes = fh.read()
+                self._sab_chart_lbl.setText(os.path.basename(path))
+                self._on_manual_field_debounced()
+        _sab_chart_btn.clicked.connect(_upload_sab_chart)
+        _sab_chart_row.addWidget(self._sab_chart_lbl, 1); _sab_chart_row.addWidget(_sab_chart_btn)
+        _saf.addLayout(_sab_chart_row)
+        scroll_layout.addWidget(_sab_allele_group)
+        _sab_allele_group.setVisible(False)
+
         # ── Patient HLA Results ────────────────────────────────────────────────
         hla_group = QGroupBox("HLA Results — Patient")
         self._std_hla_group = hla_group   # ref for show/hide
@@ -996,6 +1079,24 @@ class HLAReportGeneratorApp(QMainWindow):
             self.manual_output_label.setText(path)
             self.bulk_output_label.setText(path)   # sync with bulk tab
             self.qsettings.setValue("last_output_dir", path)
+
+    @staticmethod
+    def _parse_sab_allele_text_static(text: str) -> list:
+        """Parse allele text (allele,mfi per line) into [(allele, mfi_int), ...] desc."""
+        import re as _re2
+        result = []
+        for line in text.strip().splitlines():
+            line = line.strip()
+            if not line: continue
+            parts = _re2.split(r"[,\t]", line)
+            if len(parts) >= 2:
+                allele = parts[0].strip()
+                try:
+                    mfi = int(float(parts[1].strip()))
+                    result.append((allele, mfi))
+                except ValueError:
+                    continue
+        return sorted(result, key=lambda x: -x[1])
 
     def _collect_manual_case(self) -> dict:
         """Build a case dict from the current Manual tab form state + current settings."""
@@ -1179,6 +1280,37 @@ class HLAReportGeneratorApp(QMainWindow):
                 "class2_cutoff": rf["class2_cutoff"].text().strip() if "class2_cutoff" in rf else ">1000",
             }
 
+        # Attach SAB-specific fields
+        if rtype in ("sab_class1", "sab_class2"):
+            pf = getattr(self, "_sab_pat_f", {})
+            def _tv(d, k, default=""): return d[k].text().strip() if k in d else default
+            patient = {
+                "name":            _tv(pf, "patient_name"),
+                "gender_age":      _tv(pf, "gender_age"),
+                "hospital_mr_no":  _tv(pf, "hospital_mr_no") or "NA",
+                "specimen":        _tv(pf, "specimen") or "Serum",
+                "hospital_clinic": _tv(pf, "hospital_clinic"),
+                "pin":             _tv(pf, "pin"),
+                "sample_number":   _tv(pf, "sample_number"),
+                "collection_date": _tv(pf, "collection_date"),
+                "receipt_date":    _tv(pf, "receipt_date"),
+                "report_date":     _tv(pf, "report_date"),
+                "remarks":         _tv(pf, "remarks"),
+                "hla": {}, "hla_c_type": "", "_join_key": _tv(pf, "pin"),
+                "_has_insufficient_hla": False,
+            }
+            nabl      = self._sab_nabl_chk.isChecked() if hasattr(self, "_sab_nabl_chk") else nabl
+            sig_stamp = self._sab_seal_chk.isChecked() if hasattr(self, "_sab_seal_chk") else sig_stamp
+            _raw_alleles = getattr(self, "_sab_allele_edit", None)
+            _allele_text = _raw_alleles.toPlainText() if _raw_alleles else ""
+            _alleles = self._parse_sab_allele_text_static(_allele_text)
+            _sab_class = getattr(self, "_sab_class_combo", None)
+            _class = _sab_class.currentText() if _sab_class else "I"
+            case = self._build_case(rtype, nabl, with_logo, sig_stamp, patient, [])
+            case["sab_alleles"]    = _alleles
+            case["sab_chart_bytes"] = getattr(self, "_sab_chart_bytes", None)
+            case["sab_class"]      = _class
+
         self._apply_sig_name_overrides(case, self._manual_sig_name_overrides)
         return case
 
@@ -1297,10 +1429,11 @@ class HLAReportGeneratorApp(QMainWindow):
         rtype = TEMPLATE_TO_RTYPE.get(self._manual_rtype_combo.currentText(), "single_hla")
         is_cdc = rtype == "cdc_crossmatch"
         is_dsa = rtype == "dsa_crossmatch"
-        # Standard form groups — hidden for CDC and DSA
+        # Standard form groups — hidden for CDC, DSA and SAB
+        is_sab_check = rtype in ("sab_class1", "sab_class2")
         for _grp in ("_std_pat_group", "_std_hla_group", "_std_donors_outer"):
             if hasattr(self, _grp):
-                getattr(self, _grp).setVisible(not is_cdc and not is_dsa)
+                getattr(self, _grp).setVisible(not is_cdc and not is_dsa and not is_sab_check)
         # RPL reference — only for rpl_couple, only within standard form
         self._manual_rpl_group.setVisible(rtype == "rpl_couple")
         # CDC form groups — only for CDC
@@ -1311,6 +1444,11 @@ class HLAReportGeneratorApp(QMainWindow):
         for _grp in ("_dsa_pat_group", "_dsa_don_group", "_dsa_res_group"):
             if hasattr(self, _grp):
                 getattr(self, _grp).setVisible(is_dsa)
+        # SAB form groups — only for SAB
+        is_sab = rtype in ("sab_class1", "sab_class2")
+        for _grp in ("_sab_pat_group", "_sab_allele_group"):
+            if hasattr(self, _grp):
+                getattr(self, _grp).setVisible(is_sab)
 
     def _upload_cdc_photo(self, who: str):
         """Open file dialog for CDC patient/donor photo upload."""
@@ -2144,6 +2282,11 @@ class HLAReportGeneratorApp(QMainWindow):
             hla_pat_form.addRow(f"{locus}:", row_w)
             self._bulk_hla_pat[locus] = [a1, a2]
 
+        # ── SAB branch ──────────────────────────────────────────────────────────
+        if case.get("report_type") in ("sab_class1", "sab_class2"):
+            self._rebuild_bulk_sab_editor(idx, case, pat_group, meta_group)
+            return
+
         # ── CDC Cross match branch — separate form for CDC reports ───────────
         if case.get("report_type") == "cdc_crossmatch":
             self._rebuild_bulk_cdc_editor(idx, case, pat_group, meta_group)
@@ -2635,6 +2778,103 @@ class HLAReportGeneratorApp(QMainWindow):
         label.setText(os.path.basename(path))
         self._on_bulk_field_debounced()
 
+    # ── Bulk SAB editor builder ────────────────────────────────────────────────
+    def _rebuild_bulk_sab_editor(self, idx, case, _old_pat_group, meta_group):
+        """Build SAB-specific editor form inside the bulk editor scroll area."""
+        p = case["patient"]
+        self._bulk_sab_pat_f       = {}
+        self._bulk_sab_chart_bytes = case.get("sab_chart_bytes")
+
+        sab_pat_grp = QGroupBox("Patient Information")
+        spf = QFormLayout(); sab_pat_grp.setLayout(spf)
+        spf.setSpacing(1); spf.setContentsMargins(4, 2, 4, 2)
+        SAB_PAT = [
+            ("name",            "Patient Name *",         ""),
+            ("gender_age",      "Gender / Age",           ""),
+            ("hospital_mr_no",  "Hospital MR No",         "NA"),
+            ("specimen",        "Specimen",               "Serum"),
+            ("hospital_clinic", "Hospital / Clinic",      ""),
+            ("pin",             "PIN",                    ""),
+            ("sample_number",   "Sample Number",          ""),
+            ("collection_date", "Sample Collection Date", ""),
+            ("receipt_date",    "Sample Receipt Date",    ""),
+            ("report_date",     "Report Date",            ""),
+            ("remarks",         "Remarks",                ""),
+        ]
+        for key, lbl, dflt in SAB_PAT:
+            w = QLineEdit(str(p.get(key, dflt) or dflt))
+            w.setFixedHeight(24)
+            if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
+            w.textChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_sab_pat_f[key] = w
+            spf.addRow(lbl + ":", w)
+
+        _nabl_default = case.get("nabl", self.qsettings.value("nabl_stamp", True, type=bool))
+        self._bulk_nabl_chk = QCheckBox("NABL Accreditation")
+        self._bulk_nabl_chk.setChecked(_nabl_default)
+        self._bulk_nabl_chk.stateChanged.connect(self._on_bulk_field_debounced)
+        spf.addRow(self._bulk_nabl_chk)
+
+        sab_allele_grp = QGroupBox("Allele Data  (one per line:  Allele,MFI)")
+        saf = QVBoxLayout(); sab_allele_grp.setLayout(saf)
+        saf.setContentsMargins(4, 2, 4, 2)
+        self._bulk_sab_allele_edit = QTextEdit()
+        self._bulk_sab_allele_edit.setPlaceholderText("A*01:01,2126\nA*36:01,992\n...")
+        self._bulk_sab_allele_edit.setFixedHeight(140)
+        existing_alleles = case.get("sab_alleles", [])
+        if existing_alleles:
+            self._bulk_sab_allele_edit.setPlainText(
+                "\n".join(f"{a},{m}" for a, m in existing_alleles))
+        self._bulk_sab_allele_edit.textChanged.connect(self._on_bulk_field_debounced)
+        saf.addWidget(self._bulk_sab_allele_edit)
+
+        _chart_row = QHBoxLayout()
+        _chart_lbl = QLabel("No chart selected"); _chart_lbl.setStyleSheet("color:gray;font-style:italic;")
+        _chart_btn = QPushButton("Upload Chart Image"); _chart_btn.setMaximumHeight(26)
+        def _upload():
+            path, _ = QFileDialog.getOpenFileName(self, "Select Chart Image", str(Path.home()),
+                                                  "Images (*.png *.jpg *.jpeg *.bmp *.tiff)")
+            if path:
+                with open(path, "rb") as fh: self._bulk_sab_chart_bytes = fh.read()
+                _chart_lbl.setText(os.path.basename(path))
+                self._on_bulk_field_debounced()
+        _chart_btn.clicked.connect(_upload)
+        _chart_row.addWidget(_chart_lbl, 1); _chart_row.addWidget(_chart_btn)
+        saf.addLayout(_chart_row)
+
+        _class_row = QHBoxLayout()
+        _class_lbl = QLabel("SAB Class:")
+        self._bulk_sab_class_combo = ClickOnlyComboBox()
+        self._bulk_sab_class_combo.addItems(["I", "II"])
+        _cur_class = "II" if case.get("sab_class") == "II" else "I"
+        self._bulk_sab_class_combo.setCurrentText(_cur_class)
+        self._bulk_sab_class_combo.setFixedHeight(24)
+        self._bulk_sab_class_combo.currentIndexChanged.connect(self._on_bulk_field_debounced)
+        _class_row.addWidget(_class_lbl); _class_row.addWidget(self._bulk_sab_class_combo, 1)
+        saf.addLayout(_class_row)
+
+        for grp in (sab_pat_grp, meta_group, sab_allele_grp):
+            self._bulk_editor_layout.addWidget(grp)
+
+        self._bulk_sig_combos = {}
+        name_overrides = case.get("sig_name_overrides", {})
+        sig_group = QGroupBox("Signature Override")
+        sig_form  = QFormLayout(); sig_group.setLayout(sig_form)
+        sig_form.setSpacing(2); sig_form.setContentsMargins(4, 2, 4, 2)
+        _sig_opts = ["(Use Default)"] + list(hla_assets.SIGN_BY_NAME.keys())
+        for i in range(3):
+            cmb = ClickOnlyComboBox(); cmb.addItems(_sig_opts); cmb.setFixedHeight(24)
+            saved_name = name_overrides.get(i, name_overrides.get(str(i), ""))
+            if saved_name:
+                pos = cmb.findText(saved_name)
+                if pos >= 0: cmb.setCurrentIndex(pos)
+            cmb.currentIndexChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_sig_combos[i] = cmb
+            sig_form.addRow(f"Signatory {i+1}:", cmb)
+        self._bulk_editor_layout.addWidget(sig_group)
+
+        QTimer.singleShot(200, self._refresh_bulk_preview)
+
     def _flush_bulk_edits(self, idx):
         """Read current form field values and write back to cases[idx]."""
         if idx < 0 or idx >= len(self.cases): return
@@ -2685,6 +2925,26 @@ class HLAReportGeneratorApp(QMainWindow):
             if hasattr(self, "_bulk_rtype_combo") and self._bulk_rtype_combo is not None:
                 case["report_type"] = TEMPLATE_TO_RTYPE.get(
                     self._bulk_rtype_combo.currentText(), "dsa_crossmatch")
+            case["with_logo"] = self.logo_combo.currentText() == "With Logo"
+            if hasattr(self, "_bulk_nabl_chk") and self._bulk_nabl_chk is not None:
+                case["nabl"] = self._bulk_nabl_chk.isChecked()
+            return
+
+        # ── SAB path ────────────────────────────────────────────────────────
+        if case.get("report_type") in ("sab_class1", "sab_class2"):
+            if hasattr(self, "_bulk_sab_pat_f"):
+                for key, w in self._bulk_sab_pat_f.items():
+                    p[key] = w.text().strip()
+            if hasattr(self, "_bulk_sab_allele_edit"):
+                case["sab_alleles"] = self._parse_sab_allele_text_static(
+                    self._bulk_sab_allele_edit.toPlainText())
+            if hasattr(self, "_bulk_sab_chart_bytes"):
+                case["sab_chart_bytes"] = self._bulk_sab_chart_bytes
+            if hasattr(self, "_bulk_sab_class_combo"):
+                case["sab_class"] = self._bulk_sab_class_combo.currentText()
+            if hasattr(self, "_bulk_rtype_combo") and self._bulk_rtype_combo is not None:
+                case["report_type"] = TEMPLATE_TO_RTYPE.get(
+                    self._bulk_rtype_combo.currentText(), "sab_class1")
             case["with_logo"] = self.logo_combo.currentText() == "With Logo"
             if hasattr(self, "_bulk_nabl_chk") and self._bulk_nabl_chk is not None:
                 case["nabl"] = self._bulk_nabl_chk.isChecked()
