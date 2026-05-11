@@ -1550,6 +1550,21 @@ SAB_NOTE = (
     "List of allele specificities included in the panel tested are given in the table attached."
 )
 
+# ─── Flow Cytometry static text ──────────────────────────────────────────────
+FLOW_INTERPRETATION_TEXT = (
+    "T-CELLS (CD3): MCS < 45 = Negative,  MCS 45–60 = Borderline,  MCS > 60 = Positive.\n"
+    "B-CELLS (CD19): MCS < 86 = Negative,  MCS 86–116 = Borderline,  MCS > 116 = Positive."
+)
+FLOW_COMMENTS = [
+    "Positive crossmatch is contraindicated in solid organ transplantation.",
+    "The test should be performed within one week before transplantation.",
+    "Flow cytometry crossmatch is a highly sensitive technique that detects "
+    "both IgM and IgG antibodies.",
+    "MCS (Mean Channel Shift) is used as a measure of the degree of donor "
+    "specific antibody binding on T and B lymphocytes.",
+]
+
+
 
 
 def _cdc_result_color(val: str):
@@ -2398,6 +2413,232 @@ def _build_sab_report(case: dict, S: dict) -> list:
 
     return elems
 
+
+# ─── Flow Cytometry Cross match report builder ────────────────────────────────
+
+def _build_flow_report(case: dict, S: dict) -> list:
+    """Return story flowables for Flow Cytometry Crossmatch report (2 pages)."""
+    patient = case.get("patient", {})
+    donors  = case.get("donors", [])
+    donor   = donors[0] if donors else {}
+    flow    = case.get("flow_results", {})
+
+    F_BOLD = _f("SegoeUI-Bold", "Helvetica-Bold")
+    F_REG  = _f("SegoeUI",      "Helvetica")
+
+    def _P(text, font=F_BOLD, size=10, color=BLACK, align=TA_LEFT, leading=None):
+        return Paragraph(text, ParagraphStyle("_fc", fontName=font, fontSize=size,
+            textColor=color, alignment=align, leading=leading or size + 2))
+
+    def _clean(val):
+        s = str(val).strip() if val else ""
+        return s if s and s.lower() not in ("nan", "none", "") else "NA"
+
+    def _norm(val):  return _title_case(_clean_display(val)) or "NA"
+    def _raw(val):   return _clean_display(val) or "NA"
+
+    def _color_hex(c):
+        try:
+            return "%02x%02x%02x" % (int(round(c.red*255)), int(round(c.green*255)), int(round(c.blue*255)))
+        except Exception:
+            return "000000"
+
+    def _flow_result_color(val):
+        v = val.strip().lower()
+        if "negative" in v:   return C_CDC_NEG
+        if "borderline" in v: return C_CDC_DOUBTFUL
+        return C_CDC_POS
+
+    elems = []
+
+    # ── Info table ────────────────────────────────────────────────────────────
+    # Reuse CDC info table layout
+    info_lbl_s = ParagraphStyle("_fi_lbl", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12)
+    info_val_s = ParagraphStyle("_fi_val", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12)
+
+    def IL(t): return Paragraph(f"<b>{t}</b>", info_lbl_s)
+    def IV(t): return Paragraph(_norm(t), info_val_s)
+    def IR(t): return Paragraph(_raw(t),  info_val_s)
+    def IC():  return Paragraph("<b>:</b>", info_lbl_s)
+    def E():   return Paragraph("", info_lbl_s)
+
+    cw = CONTENT_W
+    _donor_name_len = len(donor.get("name", ""))
+    if _donor_name_len > 12:
+        info_col_w = [cw*0.173, cw*0.016, cw*0.340, cw*0.008, cw*0.196, cw*0.016, cw*0.251]
+    else:
+        info_col_w = [cw*0.176, cw*0.016, cw*0.365, cw*0.035, cw*0.196, cw*0.016, cw*0.196]
+
+    info_rows = [
+        [IL("Patient name"),    IC(), IV(patient.get("name","")),            E(), IL("Donor name"),          IC(), IV(donor.get("name",""))],
+        [IL("Gender/ Age"),     IC(), IR(_normalize_age(patient.get("gender_age",""))),  E(), IL("Gender/ Age"),         IC(), IR(_normalize_age(donor.get("gender_age","")))],
+        [IL("PIN"),             IC(), IR(patient.get("pin","")),             E(), IL("PIN"),                 IC(), IR(donor.get("pin","NA"))],
+        [IL("Sample Number"),   IC(), IR(patient.get("sample_number","")),   E(), IL("Sample Number"),       IC(), IR(donor.get("sample_number","NA"))],
+        [IL("Diagnosis"),       IC(), IV(patient.get("diagnosis","")),       E(), IL("Sample receipt date"), IC(), IR(donor.get("receipt_date",""))],
+        [IL("Hospital/Clinic"), IC(), IV(patient.get("hospital_clinic","")), E(), IL("Report date"),         IC(), IR(donor.get("report_date",""))],
+    ]
+    info_t = Table(info_rows, colWidths=info_col_w)
+    info_t.setStyle(TableStyle([
+        ("BACKGROUND",    (0,0), (-1,-1), colors.HexColor("#E8E8E8")),
+        ("VALIGN",        (0,0), (-1,-1), "TOP"),
+        ("TOPPADDING",    (0,0), (-1,-1), 5), ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+        ("LEFTPADDING",   (0,0), (-1,-1), 4), ("RIGHTPADDING",  (0,0), (-1,-1), 2),
+        ("LEFTPADDING",   (1,0), (1,-1), 0),  ("RIGHTPADDING",  (1,0), (1,-1), 2),
+        ("LEFTPADDING",   (3,0), (3,-1), 0),  ("RIGHTPADDING",  (3,0), (3,-1), 0),
+        ("LEFTPADDING",   (5,0), (5,-1), 0),  ("RIGHTPADDING",  (5,0), (5,-1), 2),
+    ]))
+    elems.append(info_t)
+    elems.append(Spacer(1, 4*mm))
+
+    # ── Photo / sample-type table ─────────────────────────────────────────────
+    _ph_w = 28*mm; _ph_h = 30*mm; _pc_w = 54*mm; _lbl_w = 38*mm
+    col_w_photo = [_lbl_w, _pc_w, _pc_w]
+
+    def _photo_cell(pb):
+        if pb:
+            try: return Image(io.BytesIO(pb), width=_ph_w, height=_ph_h)
+            except Exception: pass
+        return Spacer(1, _ph_h)
+
+    _GREY = colors.HexColor("#E8E8E8")
+    photo_rows = [
+        [Paragraph("", info_lbl_s),
+         _P("PATIENT DETAILS", F_BOLD, 11, BLACK, TA_CENTER),
+         _P("DONOR DETAILS",   F_BOLD, 11, BLACK, TA_CENTER)],
+        [_P("Photo", F_BOLD, 10, BLACK, TA_LEFT),
+         _photo_cell(patient.get("photo_bytes")),
+         _photo_cell(donor.get("photo_bytes"))],
+        [_P("Sample type",        F_REG, 10, BLACK, TA_LEFT),
+         _P(_clean(patient.get("sample_type","Serum")),           F_REG, 10, BLACK, TA_CENTER),
+         _P(_clean(donor.get("sample_type","Sodium Heparin Whole Blood")), F_REG, 10, BLACK, TA_CENTER)],
+        [_P("Date of Collection", F_REG, 10, BLACK, TA_LEFT),
+         _P(_clean(patient.get("collection_date","")), F_REG, 10, BLACK, TA_CENTER),
+         _P(_clean(donor.get("collection_date","")),   F_REG, 10, BLACK, TA_CENTER)],
+    ]
+    photo_t = Table(photo_rows, colWidths=col_w_photo)
+    photo_t.setStyle(TableStyle([
+        ("BACKGROUND",    (0,0), (-1,-1), _GREY),
+        ("BACKGROUND",    (0,0), (-1, 0), colors.white),
+        ("BACKGROUND",    (1,0), (2, 0),  colors.HexColor("#E8E8E8")),
+        ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
+        ("TOPPADDING",    (0,0), (-1,-1), 4), ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+        ("LEFTPADDING",   (0,0), (-1,-1), 4), ("RIGHTPADDING",  (0,0), (-1,-1), 4),
+        ("INNERGRID",     (0,0), (-1,-1), 0.5, colors.white),
+        ("BOX",           (0,0), (-1,-1), 0.5, colors.white),
+    ]))
+    photo_t.hAlign = "LEFT"
+    elems.append(photo_t)
+    elems.append(Spacer(1, 4*mm))
+
+    # ── Relationship box ──────────────────────────────────────────────────────
+    _rel = _norm(donor.get("relationship", ""))
+    if _rel and _rel != "NA":
+        _rel_s = ParagraphStyle("_frel", fontName=F_BOLD, fontSize=10, textColor=BLACK,
+                                 alignment=TA_CENTER, leading=14)
+        _rel_t = Table([[Paragraph(f"Relationship Of The Donor With Recipient: {_rel}", _rel_s)]],
+                       colWidths=[CONTENT_W])
+        _rel_t.setStyle(TableStyle([
+            ("BACKGROUND",    (0,0), (-1,-1), C_CDC_REL_BG),
+            ("TOPPADDING",    (0,0), (-1,-1), 4),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+        ]))
+        elems.append(_rel_t)
+        elems.append(Spacer(1, 4*mm))
+
+    # ── Result section ────────────────────────────────────────────────────────
+    _C_RES_HDR = C_NGS_TITLE
+    t_interp   = flow.get("t_interpretation", "Negative")
+    b_interp   = flow.get("b_interpretation", "Negative")
+    t_mcs      = flow.get("t_mcs", "<45")
+    b_mcs      = flow.get("b_mcs", "<86")
+    t_col_hex  = _color_hex(_flow_result_color(t_interp))
+    b_col_hex  = _color_hex(_flow_result_color(b_interp))
+
+    _res_style = ParagraphStyle("_frl", fontName=F_BOLD, fontSize=10, leading=18)
+    _rmk       = patient.get("remarks", "").strip()
+    _rmk_items = ([Paragraph(f"<b>Remarks : </b>{_clean_display(_rmk)}",
+        ParagraphStyle("_frmk", fontName=F_BOLD, fontSize=10, leading=14, spaceBefore=4, spaceAfter=4))
+    ] if _rmk else [])
+
+    # References table
+    _ref_hdr_bg  = colors.HexColor("#FABF8F")
+    _ref_total   = CONTENT_W * 0.80
+    _ref_col_w   = [_ref_total*0.22, _ref_total*0.25, _ref_total*0.53]
+    _rh_s = ParagraphStyle("_frh", fontName=F_BOLD, fontSize=10, textColor=BLACK, alignment=TA_CENTER, leading=13)
+    _rv_s = ParagraphStyle("_frv", fontName=F_REG,  fontSize=10, textColor=BLACK, alignment=TA_CENTER, leading=13)
+    _rl_s = ParagraphStyle("_rfl", fontName=F_BOLD, fontSize=10, textColor=BLACK, alignment=TA_CENTER, leading=13)
+    _row_pad = 4 if _rmk else 6
+    ref_t = Table([
+        [Paragraph("<b>Cells</b>", _rh_s), Paragraph("<b>MCS Value</b>", _rh_s), Paragraph("<b>Interpretation</b>", _rh_s)],
+        [Paragraph("T Cells", _rl_s), Paragraph("< 45",     _rv_s), Paragraph("Negative",   _rv_s)],
+        [Paragraph("T Cells", _rl_s), Paragraph("45 – 60",  _rv_s), Paragraph("Borderline", _rv_s)],
+        [Paragraph("T Cells", _rl_s), Paragraph("> 60",     _rv_s), Paragraph("Positive",   _rv_s)],
+        [Paragraph("B Cells", _rl_s), Paragraph("< 86",     _rv_s), Paragraph("Negative",   _rv_s)],
+        [Paragraph("B Cells", _rl_s), Paragraph("86 – 116", _rv_s), Paragraph("Borderline", _rv_s)],
+        [Paragraph("B Cells", _rl_s), Paragraph("> 116",    _rv_s), Paragraph("Positive",   _rv_s)],
+    ], colWidths=_ref_col_w)
+    ref_t.setStyle(TableStyle([
+        ("BACKGROUND",    (0,0), (-1, 0), _ref_hdr_bg),
+        ("BACKGROUND",    (0,1), (-1,-1), colors.HexColor("#E8E8E8")),
+        ("INNERGRID",     (0,0), (-1,-1), 0.5, colors.white),
+        ("BOX",           (0,0), (-1,-1), 0.5, colors.white),
+        ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
+        ("TOPPADDING",    (0,0), (-1,-1), _row_pad),
+        ("BOTTOMPADDING", (0,0), (-1,-1), _row_pad),
+    ]))
+    ref_t.hAlign = "CENTER"
+
+    elems.append(KeepTogether([
+        Paragraph("<b>Result</b>", ParagraphStyle("_frs", fontName=F_BOLD, fontSize=14,
+            textColor=_C_RES_HDR, leading=18, spaceAfter=2)),
+        HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=6),
+        Paragraph(
+            f"<b>T cell crossmatch : </b><font color='#{t_col_hex}'><b>{t_interp}</b></font>"
+            f" <font color='#000000'>(MCS: {t_mcs})</font>", _res_style),
+        Paragraph(
+            f"<b>B cell crossmatch : </b><font color='#{b_col_hex}'><b>{b_interp}</b></font>"
+            f" <font color='#000000'>(MCS: {b_mcs})</font>", _res_style),
+    ] + _rmk_items + [
+        Spacer(1, 3*mm if _rmk else 5*mm),
+        ref_t,
+    ]))
+
+    # ── Page break → page 2 ───────────────────────────────────────────────────
+    elems.append(PageBreak())
+
+    # ── Interpretation ────────────────────────────────────────────────────────
+    _sec_style = ParagraphStyle("_fcs", fontName=F_BOLD, fontSize=14,
+                                 textColor=C_NGS_TITLE, leading=18, spaceAfter=2)
+    _body_s    = ParagraphStyle("_fcb", fontName=F_REG,  fontSize=10, leading=14, alignment=TA_JUSTIFY)
+    _bull_s    = ParagraphStyle("_fcl", fontName=F_REG,  fontSize=10, leading=14, leftIndent=14, firstLineIndent=-10)
+
+    elems.append(Paragraph("<b>Interpretation</b>", _sec_style))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=6))
+    for line in FLOW_INTERPRETATION_TEXT.split("\n"):
+        if line.strip():
+            elems.append(Paragraph(line.strip(), _body_s))
+    elems.append(Spacer(1, 6*mm))
+
+    # ── Comments ──────────────────────────────────────────────────────────────
+    elems.append(Paragraph("<b>Comments</b>", _sec_style))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=6))
+    _bull_left = ParagraphStyle("_fbl", fontName=F_REG, fontSize=10,
+                                 leading=15, leftIndent=18, firstLineIndent=-10, spaceBefore=3)
+    _bull_just = ParagraphStyle("_fbj", fontName=F_REG, fontSize=10,
+                                 leading=15, leftIndent=18, firstLineIndent=-10, spaceBefore=3, alignment=TA_JUSTIFY)
+    for i, c in enumerate(FLOW_COMMENTS):
+        st = _bull_just if i == len(FLOW_COMMENTS)-1 else _bull_left
+        elems.append(Paragraph(f"\u2022 {c}", st))
+    _flow_user_comment = _clean_display(patient.get("comments", ""))
+    if _flow_user_comment and _flow_user_comment != "\u2014":
+        elems.append(Paragraph(f"\u2022 {_flow_user_comment}", _bull_just))
+    elems.append(Spacer(1, 8*mm))
+
+    # ── Signatures ────────────────────────────────────────────────────────────
+    elems.extend(_signature_block(case.get("signatories", []), S))
+    return elems
+
+
 # ─── Top-level entry point ────────────────────────────────────────────────────
 
 def generate_pdf(case: dict, output_path: str) -> str:
@@ -2423,6 +2664,7 @@ def generate_pdf(case: dict, output_path: str) -> str:
         "dsa_crossmatch":   "Donor Specific Antibody Crossmatch",
         "sab_class1":       "",
         "sab_class2":       "",
+        "flow_crossmatch":  "Flow Cytometry Crossmatch for T \u0026 B Lymphocytes",
     }
     title = TITLES.get(report_type, "HLA Typing Report")
 
@@ -2470,6 +2712,8 @@ def generate_pdf(case: dict, output_path: str) -> str:
         body = _build_dsa_report(case, S)
     elif report_type in ("sab_class1", "sab_class2"):
         body = _build_sab_report(case, S)
+    elif report_type == "flow_crossmatch":
+        body = _build_flow_report(case, S)
     else:
         body = _build_ngs_single(case, S)
 
@@ -2497,7 +2741,7 @@ def make_filename(case: dict) -> str:
     )
     rtype = {"single_hla": "HLA_NGS", "transplant_donor": "HLA_NGS",
              "rpl_couple": "RPL", "cdc_crossmatch": "CDC",
-             "dsa_crossmatch": "DSA", "sab_class1": "SAB_C1", "sab_class2": "SAB_C2"}.get(case.get("report_type", ""), "HLA")
+             "dsa_crossmatch": "DSA", "sab_class1": "SAB_C1", "sab_class2": "SAB_C2", "flow_crossmatch": "FLOW"}.get(case.get("report_type", ""), "HLA")
     logo  = "WITH_LOGO" if case.get("with_logo", True) else "WITHOUT_LOGO"
     parts = [p] + ([donors] if donors else []) + [rtype, logo]
     return "_".join(parts) + ".pdf"

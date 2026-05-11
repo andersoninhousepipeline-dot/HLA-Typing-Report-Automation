@@ -121,6 +121,11 @@ REPORT_TEMPLATES = [
         "report_type":  "sab_class2",
         "default_path": os.path.join(_TEMPLATE_DIR, ""),
     },
+    {
+        "name":         "Flow",
+        "report_type":  "flow_crossmatch",
+        "default_path": os.path.join(_TEMPLATE_DIR, ""),
+    },
 ]
 TEMPLATE_NAMES    = [t["name"]        for t in REPORT_TEMPLATES]
 TEMPLATE_TO_RTYPE = {t["name"]:        t["report_type"] for t in REPORT_TEMPLATES}
@@ -916,6 +921,87 @@ class HLAReportGeneratorApp(QMainWindow):
         scroll_layout.addWidget(_sab_allele_group)
         _sab_allele_group.setVisible(False)
 
+        # ---- Flow Cytometry Patient Information ------------------------------
+        self._flow_pat_f = {}
+        _flow_pat_group = QGroupBox("Patient Information")
+        self._flow_pat_group = _flow_pat_group
+        _fpf = QFormLayout(); _flow_pat_group.setLayout(_fpf)
+        _fpf.setSpacing(1); _fpf.setContentsMargins(4, 2, 4, 2)
+        _FLOW_PAT_FIELDS = [
+            ("patient_name",    "Patient Name *",      ""),
+            ("gender_age",      "Gender / Age",        ""),
+            ("pin",             "PIN",                 ""),
+            ("sample_number",   "Sample Number",       ""),
+            ("diagnosis",       "Diagnosis",           "NA"),
+            ("hospital_clinic", "Hospital / Clinic",   ""),
+            ("sample_type",     "Sample Type",         "Serum"),
+            ("collection_date", "Collection Date",     ""),
+            ("receipt_date",    "Sample Receipt Date", ""),
+            ("report_date",     "Report Date",         ""),
+            ("remarks",         "Remarks",             ""),
+            ("comments",        "Additional Comments", ""),
+        ]
+        for _k, _l, _dflt in _FLOW_PAT_FIELDS:
+            _w = QLineEdit(_dflt); _w.setFixedHeight(24)
+            if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
+            _w.textChanged.connect(self._on_manual_field_debounced)
+            self._flow_pat_f[_k] = _w
+            _fpf.addRow(_l + ":", _w)
+        self._flow_nabl_chk = QCheckBox("NABL Accreditation")
+        self._flow_nabl_chk.setChecked(self.qsettings.value("nabl_stamp", True, type=bool))
+        self._flow_nabl_chk.stateChanged.connect(self._on_manual_field_debounced)
+        _fpf.addRow(self._flow_nabl_chk)
+        self._flow_seal_chk = QCheckBox("Signature Seal")
+        self._flow_seal_chk.setChecked(self.qsettings.value("sig_stamp", True, type=bool))
+        self._flow_seal_chk.stateChanged.connect(self._on_manual_field_debounced)
+        _fpf.addRow(self._flow_seal_chk)
+        scroll_layout.addWidget(_flow_pat_group)
+        _flow_pat_group.setVisible(False)
+
+        self._flow_don_f = {}
+        _flow_don_group = QGroupBox("Donor Information")
+        self._flow_don_group = _flow_don_group
+        _fdf = QFormLayout(); _flow_don_group.setLayout(_fdf)
+        _fdf.setSpacing(1); _fdf.setContentsMargins(4, 2, 4, 2)
+        _FLOW_DON_FIELDS = [
+            ("name",            "Donor Name",                ""),
+            ("gender_age",      "Gender / Age",              ""),
+            ("pin",             "Donor PIN",                 "NA"),
+            ("sample_number",   "Sample Number",             "NA"),
+            ("relationship",    "Relationship to Recipient", ""),
+            ("sample_type",     "Sample Type",               "Sodium Heparin Whole Blood"),
+            ("collection_date", "Collection Date",           ""),
+            ("receipt_date",    "Sample Receipt Date",       ""),
+            ("report_date",     "Report Date",               ""),
+        ]
+        for _k, _l, _dflt in _FLOW_DON_FIELDS:
+            _w = QLineEdit(_dflt); _w.setFixedHeight(24)
+            if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
+            _w.textChanged.connect(self._on_manual_field_debounced)
+            self._flow_don_f[_k] = _w
+            _fdf.addRow(_l + ":", _w)
+        scroll_layout.addWidget(_flow_don_group)
+        _flow_don_group.setVisible(False)
+
+        self._flow_result_f = {}
+        _flow_res_group = QGroupBox("Flow Results")
+        self._flow_res_group = _flow_res_group
+        _frf = QFormLayout(); _flow_res_group.setLayout(_frf)
+        _frf.setSpacing(1); _frf.setContentsMargins(4, 2, 4, 2)
+        _FLOW_INTERP_OPTS = ["Negative", "Borderline", "Positive"]
+        for _k, _l in [("t_interpretation", "T Cell Crossmatch"), ("b_interpretation", "B Cell Crossmatch")]:
+            _cmb = ClickOnlyComboBox(); _cmb.addItems(_FLOW_INTERP_OPTS); _cmb.setFixedHeight(24)
+            self._flow_result_f[_k] = _cmb
+            _frf.addRow(_l + ":", _cmb)
+            _cmb.currentIndexChanged.connect(self._on_manual_field_debounced)
+        for _k, _l, _ph in [("t_mcs", "T Cell MCS Value", "<45"), ("b_mcs", "B Cell MCS Value", "<86")]:
+            _w = QLineEdit(); _w.setFixedHeight(24); _w.setPlaceholderText(_ph)
+            self._flow_result_f[_k] = _w
+            _frf.addRow(_l + ":", _w)
+            _w.textChanged.connect(self._on_manual_field_debounced)
+        scroll_layout.addWidget(_flow_res_group)
+        _flow_res_group.setVisible(False)
+
         # ── Patient HLA Results ────────────────────────────────────────────────
         hla_group = QGroupBox("HLA Results — Patient")
         self._std_hla_group = hla_group   # ref for show/hide
@@ -1311,6 +1397,52 @@ class HLAReportGeneratorApp(QMainWindow):
             case["sab_chart_bytes"] = getattr(self, "_sab_chart_bytes", None)
             case["sab_class"]      = _class
 
+        # Attach Flow-specific fields
+        if rtype == "flow_crossmatch":
+            pf = getattr(self, "_flow_pat_f", {})
+            df = getattr(self, "_flow_don_f", {})
+            rf = getattr(self, "_flow_result_f", {})
+            def _tv(d, k, default=""): return d[k].text().strip() if k in d and hasattr(d[k], "text") else (d[k].currentText() if k in d else default)
+            patient = {
+                "name":            _tv(pf, "patient_name"),
+                "gender_age":      _tv(pf, "gender_age"),
+                "pin":             _tv(pf, "pin"),
+                "sample_number":   _tv(pf, "sample_number"),
+                "diagnosis":       _tv(pf, "diagnosis") or "NA",
+                "hospital_clinic": _tv(pf, "hospital_clinic"),
+                "sample_type":     _tv(pf, "sample_type") or "Serum",
+                "collection_date": _tv(pf, "collection_date"),
+                "receipt_date":    _tv(pf, "receipt_date"),
+                "report_date":     _tv(pf, "report_date"),
+                "remarks":         _tv(pf, "remarks"),
+                "comments":        _tv(pf, "comments"),
+                "photo_bytes":     None,
+                "hla": {}, "hla_c_type": "", "_join_key": _tv(pf, "pin"),
+                "_has_insufficient_hla": False,
+            }
+            flow_donor = {
+                "name":            _tv(df, "name"),
+                "gender_age":      _tv(df, "gender_age"),
+                "pin":             _tv(df, "pin") or "NA",
+                "sample_number":   _tv(df, "sample_number") or "NA",
+                "relationship":    _tv(df, "relationship"),
+                "sample_type":     _tv(df, "sample_type") or "Sodium Heparin Whole Blood",
+                "collection_date": _tv(df, "collection_date"),
+                "receipt_date":    _tv(df, "receipt_date"),
+                "report_date":     _tv(df, "report_date"),
+                "photo_bytes": None, "hla": {}, "hla_c_type": "",
+                "_join_key": "", "_has_insufficient_hla": False,
+            }
+            nabl      = self._flow_nabl_chk.isChecked() if hasattr(self, "_flow_nabl_chk") else nabl
+            sig_stamp = self._flow_seal_chk.isChecked() if hasattr(self, "_flow_seal_chk") else sig_stamp
+            case = self._build_case(rtype, nabl, with_logo, sig_stamp, patient, [flow_donor])
+            case["flow_results"] = {
+                "t_interpretation": rf["t_interpretation"].currentText() if "t_interpretation" in rf else "Negative",
+                "t_mcs":            rf["t_mcs"].text().strip()            if "t_mcs"            in rf else "<45",
+                "b_interpretation": rf["b_interpretation"].currentText() if "b_interpretation" in rf else "Negative",
+                "b_mcs":            rf["b_mcs"].text().strip()            if "b_mcs"            in rf else "<86",
+            }
+
         self._apply_sig_name_overrides(case, self._manual_sig_name_overrides)
         return case
 
@@ -1430,10 +1562,11 @@ class HLAReportGeneratorApp(QMainWindow):
         is_cdc = rtype == "cdc_crossmatch"
         is_dsa = rtype == "dsa_crossmatch"
         # Standard form groups — hidden for CDC, DSA and SAB
-        is_sab_check = rtype in ("sab_class1", "sab_class2")
+        is_sab_check  = rtype in ("sab_class1", "sab_class2")
+        is_flow_check = rtype == "flow_crossmatch"
         for _grp in ("_std_pat_group", "_std_hla_group", "_std_donors_outer"):
             if hasattr(self, _grp):
-                getattr(self, _grp).setVisible(not is_cdc and not is_dsa and not is_sab_check)
+                getattr(self, _grp).setVisible(not is_cdc and not is_dsa and not is_sab_check and not is_flow_check)
         # RPL reference — only for rpl_couple, only within standard form
         self._manual_rpl_group.setVisible(rtype == "rpl_couple")
         # CDC form groups — only for CDC
@@ -1449,6 +1582,11 @@ class HLAReportGeneratorApp(QMainWindow):
         for _grp in ("_sab_pat_group", "_sab_allele_group"):
             if hasattr(self, _grp):
                 getattr(self, _grp).setVisible(is_sab)
+        # Flow form groups — only for Flow
+        is_flow = rtype == "flow_crossmatch"
+        for _grp in ("_flow_pat_group", "_flow_don_group", "_flow_res_group"):
+            if hasattr(self, _grp):
+                getattr(self, _grp).setVisible(is_flow)
 
     def _upload_cdc_photo(self, who: str):
         """Open file dialog for CDC patient/donor photo upload."""
@@ -2287,6 +2425,11 @@ class HLAReportGeneratorApp(QMainWindow):
             self._rebuild_bulk_sab_editor(idx, case, pat_group, meta_group)
             return
 
+        # ── Flow Cytometry branch ────────────────────────────────────────────
+        if case.get("report_type") == "flow_crossmatch":
+            self._rebuild_bulk_flow_editor(idx, case, pat_group, meta_group)
+            return
+
         # ── CDC Cross match branch — separate form for CDC reports ───────────
         if case.get("report_type") == "cdc_crossmatch":
             self._rebuild_bulk_cdc_editor(idx, case, pat_group, meta_group)
@@ -2778,6 +2921,89 @@ class HLAReportGeneratorApp(QMainWindow):
         label.setText(os.path.basename(path))
         self._on_bulk_field_debounced()
 
+    # ── Bulk Flow editor builder ───────────────────────────────────────────────
+    def _rebuild_bulk_flow_editor(self, idx, case, _old_pat_group, meta_group):
+        """Build Flow-specific editor form inside the bulk editor scroll area."""
+        p   = case["patient"]
+        d   = case["donors"][0] if case.get("donors") else {}
+        fr  = case.get("flow_results", {})
+        self._bulk_flow_pat_f    = {}
+        self._bulk_flow_don_f    = {}
+        self._bulk_flow_result_f = {}
+
+        flow_pat_grp = QGroupBox("Patient Information")
+        fpf = QFormLayout(); flow_pat_grp.setLayout(fpf)
+        fpf.setSpacing(1); fpf.setContentsMargins(4, 2, 4, 2)
+        for key, lbl, dflt in [
+            ("name","Patient Name *",""), ("gender_age","Gender / Age",""),
+            ("pin","PIN",""), ("sample_number","Sample Number",""),
+            ("diagnosis","Diagnosis","NA"), ("hospital_clinic","Hospital / Clinic",""),
+            ("sample_type","Sample Type","Serum"), ("collection_date","Collection Date",""),
+            ("receipt_date","Sample Receipt Date",""), ("report_date","Report Date",""),
+            ("remarks","Remarks",""), ("comments","Additional Comments",""),
+        ]:
+            w = QLineEdit(str(p.get(key, dflt) or dflt)); w.setFixedHeight(24)
+            if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
+            w.textChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_flow_pat_f[key] = w; fpf.addRow(lbl + ":", w)
+
+        _nabl_default = case.get("nabl", self.qsettings.value("nabl_stamp", True, type=bool))
+        self._bulk_nabl_chk = QCheckBox("NABL Accreditation")
+        self._bulk_nabl_chk.setChecked(_nabl_default)
+        self._bulk_nabl_chk.stateChanged.connect(self._on_bulk_field_debounced)
+        fpf.addRow(self._bulk_nabl_chk)
+
+        flow_don_grp = QGroupBox("Donor Information")
+        fdf = QFormLayout(); flow_don_grp.setLayout(fdf)
+        fdf.setSpacing(1); fdf.setContentsMargins(4, 2, 4, 2)
+        for key, lbl, dflt in [
+            ("name","Donor Name",""), ("gender_age","Gender / Age",""),
+            ("pin","Donor PIN","NA"), ("sample_number","Sample Number","NA"),
+            ("relationship","Relationship to Recipient",""),
+            ("sample_type","Sample Type","Sodium Heparin Whole Blood"),
+            ("collection_date","Collection Date",""), ("receipt_date","Sample Receipt Date",""),
+            ("report_date","Report Date",""),
+        ]:
+            w = QLineEdit(str(d.get(key, dflt) or dflt)); w.setFixedHeight(24)
+            if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
+            w.textChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_flow_don_f[key] = w; fdf.addRow(lbl + ":", w)
+
+        flow_res_grp = QGroupBox("Flow Results")
+        frf = QFormLayout(); flow_res_grp.setLayout(frf)
+        frf.setSpacing(1); frf.setContentsMargins(4, 2, 4, 2)
+        _FLOW_OPTS = ["Negative", "Borderline", "Positive"]
+        for key, lbl in [("t_interpretation","T Cell Crossmatch"), ("b_interpretation","B Cell Crossmatch")]:
+            cmb = ClickOnlyComboBox(); cmb.addItems(_FLOW_OPTS); cmb.setFixedHeight(24)
+            pos = cmb.findText(fr.get(key, "Negative"))
+            if pos >= 0: cmb.setCurrentIndex(pos)
+            cmb.currentIndexChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_flow_result_f[key] = cmb; frf.addRow(lbl + ":", cmb)
+        for key, lbl, ph in [("t_mcs","T Cell MCS Value","<45"), ("b_mcs","B Cell MCS Value","<86")]:
+            w = QLineEdit(fr.get(key, "")); w.setFixedHeight(24); w.setPlaceholderText(ph)
+            w.textChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_flow_result_f[key] = w; frf.addRow(lbl + ":", w)
+
+        for grp in (flow_pat_grp, meta_group, flow_don_grp, flow_res_grp):
+            self._bulk_editor_layout.addWidget(grp)
+
+        self._bulk_sig_combos = {}
+        name_overrides = case.get("sig_name_overrides", {})
+        sig_group = QGroupBox("Signature Override")
+        sig_form  = QFormLayout(); sig_group.setLayout(sig_form)
+        sig_form.setSpacing(2); sig_form.setContentsMargins(4, 2, 4, 2)
+        _sig_opts = ["(Use Default)"] + list(hla_assets.SIGN_BY_NAME.keys())
+        for i in range(3):
+            cmb = ClickOnlyComboBox(); cmb.addItems(_sig_opts); cmb.setFixedHeight(24)
+            saved_name = name_overrides.get(i, name_overrides.get(str(i), ""))
+            if saved_name:
+                pos = cmb.findText(saved_name)
+                if pos >= 0: cmb.setCurrentIndex(pos)
+            cmb.currentIndexChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_sig_combos[i] = cmb; sig_form.addRow(f"Signatory {i+1}:", cmb)
+        self._bulk_editor_layout.addWidget(sig_group)
+        QTimer.singleShot(200, self._refresh_bulk_preview)
+
     # ── Bulk SAB editor builder ────────────────────────────────────────────────
     def _rebuild_bulk_sab_editor(self, idx, case, _old_pat_group, meta_group):
         """Build SAB-specific editor form inside the bulk editor scroll area."""
@@ -2945,6 +3171,27 @@ class HLAReportGeneratorApp(QMainWindow):
             if hasattr(self, "_bulk_rtype_combo") and self._bulk_rtype_combo is not None:
                 case["report_type"] = TEMPLATE_TO_RTYPE.get(
                     self._bulk_rtype_combo.currentText(), "sab_class1")
+            case["with_logo"] = self.logo_combo.currentText() == "With Logo"
+            if hasattr(self, "_bulk_nabl_chk") and self._bulk_nabl_chk is not None:
+                case["nabl"] = self._bulk_nabl_chk.isChecked()
+            return
+
+        # ---- Flow path ----------------------------------------------------------
+        if case.get("report_type") == "flow_crossmatch":
+            if hasattr(self, "_bulk_flow_pat_f"):
+                for key, w in self._bulk_flow_pat_f.items():
+                    p[key] = w.text().strip()
+            if hasattr(self, "_bulk_flow_don_f") and case.get("donors"):
+                d = case["donors"][0]
+                for key, w in self._bulk_flow_don_f.items():
+                    d[key] = w.text().strip()
+            if hasattr(self, "_bulk_flow_result_f"):
+                fr = {}
+                for k, w in self._bulk_flow_result_f.items():
+                    fr[k] = w.currentText() if isinstance(w, QComboBox) else w.text().strip()
+                case["flow_results"] = fr
+            if hasattr(self, "_bulk_rtype_combo") and self._bulk_rtype_combo is not None:
+                case["report_type"] = TEMPLATE_TO_RTYPE.get(self._bulk_rtype_combo.currentText(), "flow_crossmatch")
             case["with_logo"] = self.logo_combo.currentText() == "With Logo"
             if hasattr(self, "_bulk_nabl_chk") and self._bulk_nabl_chk is not None:
                 case["nabl"] = self._bulk_nabl_chk.isChecked()

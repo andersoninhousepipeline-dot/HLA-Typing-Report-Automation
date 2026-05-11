@@ -671,6 +671,120 @@ def parse_cdc_excel(filepath: str, nabl: bool = True) -> list:
     return cases
 
 
+# ─── Flow Cytometry Cross match parser ───────────────────────────────────────
+
+def parse_flow_excel(filepath: str, nabl: bool = True) -> list:
+    """
+    Parse a Flow Cytometry Cross match Excel (Sheet2 format) into case dicts.
+
+    Layout (same column positions as CDC):
+      Row 5: headers; rows 6+ alternate patient/donor pairs.
+      Patient row: T-CELLS data in col 17 (antibody), 18 (MCS), 19 (interpretation)
+      Donor  row:  B-CELLS data in same columns.
+    """
+    df = pd.read_excel(filepath, sheet_name="Sheet2", header=None)
+
+    header_row = None
+    for i, row in df.iterrows():
+        if "patient name" in str(row.iloc[2]).strip().lower():
+            header_row = i
+            break
+    if header_row is None:
+        return []
+
+    def _rv(row, col):
+        return _clean_str(row.iloc[col]) if col < len(row) else ""
+
+    def _rd(row, col):
+        return _fmt_date(row.iloc[col]) if col < len(row) else ""
+
+    def _ga(row):
+        gender = _sentence_case(_rv(row, 6))
+        raw_age = row.iloc[5] if 5 < len(row) else ""
+        age = str(int(raw_age)) if isinstance(raw_age, (int, float)) and not pd.isna(raw_age) \
+              else _clean_str(raw_age)
+        return " / ".join(p for p in (gender, age) if p)
+
+    cases = []
+    cur_pat = None
+    cur_don = None
+
+    def _flush():
+        nonlocal cur_pat, cur_don
+        if cur_pat is None:
+            return
+        patient = {
+            "name":            _sentence_case(_rv(cur_pat, 2)),
+            "gender_age":      _ga(cur_pat),
+            "pin":             _rv(cur_pat, 7),
+            "sample_number":   _rv(cur_pat, 8),
+            "diagnosis":       _sentence_case(_rv(cur_pat, 9)) or "NA",
+            "hospital_clinic": _sentence_case(_rv(cur_pat, 11)),
+            "sample_type":     _rv(cur_pat, 10) or "Serum",
+            "collection_date": _rd(cur_pat, 12),
+            "receipt_date":    _rd(cur_pat, 13),
+            "report_date":     _rd(cur_pat, 14),
+            "remarks": "", "comments": "",
+            "photo_bytes": None,
+            "hla": {}, "hla_c_type": "",
+            "_join_key": _rv(cur_pat, 8), "_has_insufficient_hla": False,
+        }
+        donor = {}
+        if cur_don is not None:
+            donor = {
+                "name":            _sentence_case(_rv(cur_don, 2)),
+                "gender_age":      _ga(cur_don),
+                "pin":             _rv(cur_don, 7) or "NA",
+                "sample_number":   _rv(cur_don, 8) or "NA",
+                "relationship":    _sentence_case(_rv(cur_don, 4)),
+                "sample_type":     _rv(cur_don, 10) or "Sodium Heparin Whole Blood",
+                "collection_date": _rd(cur_don, 12),
+                "receipt_date":    _rd(cur_don, 13),
+                "report_date":     _rd(cur_don, 14),
+                "photo_bytes": None,
+                "hla": {}, "hla_c_type": "",
+                "_join_key": "", "_has_insufficient_hla": False,
+            }
+        cases.append({
+            "report_type":     "flow_crossmatch",
+            "nabl":            nabl,
+            "with_logo":       True,
+            "signature_stamp": False,
+            "methodology": "", "imgt_release": "",
+            "coverage":    "", "typing_status": "Complete",
+            "reviewer":    "",
+            "patient":     patient,
+            "donors":      [donor] if donor else [],
+            "rpl_reference": {},
+            "flow_results": {
+                "t_antibody":       _rv(cur_pat, 17) or "T-CELLS (CD3)",
+                "t_mcs":            _rv(cur_pat, 18) or "<45",
+                "t_interpretation": _sentence_case(_rv(cur_pat, 19)) or "Negative",
+                "b_antibody":       _rv(cur_don, 17) if cur_don is not None else "B-CELLS (CD19)",
+                "b_mcs":            _rv(cur_don, 18) if cur_don is not None else "<86",
+                "b_interpretation": _sentence_case(_rv(cur_don, 19)) if cur_don is not None else "Negative",
+            },
+        })
+        cur_pat = None
+        cur_don = None
+
+    for i in range(header_row + 1, len(df)):
+        row  = df.iloc[i]
+        name = _clean_str(row.iloc[2])
+        role = _clean_str(row.iloc[3]).lower().strip()
+        if not name:
+            continue
+        if role.startswith("pati"):
+            _flush()
+            cur_pat = row
+            cur_don = None
+        elif "donor" in role and cur_pat is not None:
+            cur_don = row
+
+    _flush()
+    return cases
+
+
 # ─── DSA Cross match parser ───────────────────────────────────────────────────
 
 def parse_dsa_excel(filepath: str, nabl: bool = True) -> list:
@@ -829,6 +943,8 @@ def parse_excel(filepath: str, nabl: bool = True) -> list:
             title_cell = ""
         if "donor specific" in title_cell or "dsa" in title_cell:
             return parse_dsa_excel(filepath, nabl)
+        if "flow cytometry" in title_cell or "flow cross" in title_cell:
+            return parse_flow_excel(filepath, nabl)
         return parse_cdc_excel(filepath, nabl)
     # ── Determine lab type from filename ──────────────────────────────────────
     fname_upper = filepath.upper()
