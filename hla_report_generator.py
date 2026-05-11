@@ -687,6 +687,7 @@ class HLAReportGeneratorApp(QMainWindow):
             "Positive":        "50-80% Dead cells",
             "Strong Positive": ">80% Dead cells",
         }
+        _DTT_TO_CDC_RES = {v: k for k, v in _CDC_RES_TO_DTT.items()}
         def _sync_manual_t_dtt():
             v = _CDC_RES_TO_DTT.get(self._manual_cdc_fields["t_cell"].currentText())
             if v:
@@ -697,8 +698,18 @@ class HLAReportGeneratorApp(QMainWindow):
             if v:
                 self._manual_cdc_fields["b_with_dtt"].setCurrentText(v)
                 self._manual_cdc_fields["b_without_dtt"].setCurrentText(v)
+        def _sync_manual_t_from_dtt():
+            r = _DTT_TO_CDC_RES.get(self._manual_cdc_fields["t_with_dtt"].currentText())
+            if r: self._manual_cdc_fields["t_cell"].setCurrentText(r)
+        def _sync_manual_b_from_dtt():
+            r = _DTT_TO_CDC_RES.get(self._manual_cdc_fields["b_with_dtt"].currentText())
+            if r: self._manual_cdc_fields["b_cell"].setCurrentText(r)
         self._manual_cdc_fields["t_cell"].currentIndexChanged.connect(lambda _: _sync_manual_t_dtt())
         self._manual_cdc_fields["b_cell"].currentIndexChanged.connect(lambda _: _sync_manual_b_dtt())
+        self._manual_cdc_fields["t_with_dtt"].currentIndexChanged.connect(lambda _: _sync_manual_t_from_dtt())
+        self._manual_cdc_fields["t_without_dtt"].currentIndexChanged.connect(lambda _: _sync_manual_t_from_dtt())
+        self._manual_cdc_fields["b_with_dtt"].currentIndexChanged.connect(lambda _: _sync_manual_b_from_dtt())
+        self._manual_cdc_fields["b_without_dtt"].currentIndexChanged.connect(lambda _: _sync_manual_b_from_dtt())
 
         scroll_layout.addWidget(_cdc_res_group)
         _cdc_res_group.setVisible(False)
@@ -2412,6 +2423,7 @@ class HLAReportGeneratorApp(QMainWindow):
             "Positive":        "50-80% Dead cells",
             "Strong Positive": ">80% Dead cells",
         }
+        _DTT_TO_CDC_RES = {v: k for k, v in _CDC_RES_TO_DTT.items()}
         def _sync_bulk_t_dtt():
             v = _CDC_RES_TO_DTT.get(self._bulk_cdc_result_f["t_cell"].currentText())
             if v:
@@ -2422,8 +2434,18 @@ class HLAReportGeneratorApp(QMainWindow):
             if v:
                 self._bulk_cdc_result_f["b_with_dtt"].setCurrentText(v)
                 self._bulk_cdc_result_f["b_without_dtt"].setCurrentText(v)
+        def _sync_bulk_t_from_dtt():
+            r = _DTT_TO_CDC_RES.get(self._bulk_cdc_result_f["t_with_dtt"].currentText())
+            if r: self._bulk_cdc_result_f["t_cell"].setCurrentText(r)
+        def _sync_bulk_b_from_dtt():
+            r = _DTT_TO_CDC_RES.get(self._bulk_cdc_result_f["b_with_dtt"].currentText())
+            if r: self._bulk_cdc_result_f["b_cell"].setCurrentText(r)
         self._bulk_cdc_result_f["t_cell"].currentIndexChanged.connect(lambda _: _sync_bulk_t_dtt())
         self._bulk_cdc_result_f["b_cell"].currentIndexChanged.connect(lambda _: _sync_bulk_b_dtt())
+        self._bulk_cdc_result_f["t_with_dtt"].currentIndexChanged.connect(lambda _: _sync_bulk_t_from_dtt())
+        self._bulk_cdc_result_f["t_without_dtt"].currentIndexChanged.connect(lambda _: _sync_bulk_t_from_dtt())
+        self._bulk_cdc_result_f["b_with_dtt"].currentIndexChanged.connect(lambda _: _sync_bulk_b_from_dtt())
+        self._bulk_cdc_result_f["b_without_dtt"].currentIndexChanged.connect(lambda _: _sync_bulk_b_from_dtt())
 
         # Assemble + signature override
         for grp in (cdc_pat_grp, meta_group, cdc_don_grp, cdc_res_grp):
