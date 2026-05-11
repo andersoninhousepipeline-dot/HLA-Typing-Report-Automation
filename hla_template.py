@@ -1519,12 +1519,8 @@ DSA_RECOMMENDATIONS = [
 def _cdc_result_color(val: str):
     """Return the display color for a CDC/DSA result string."""
     v = val.strip().lower()
-    if "negative" in v:        return C_CDC_NEG
-    if "strong positive" in v: return C_CDC_POS
-    if "weak positive" in v:   return C_CDC_DOUBTFUL
-    if "positive" in v:        return C_CDC_POS
-    if "doubtful" in v:        return C_CDC_DOUBTFUL
-    return BLACK
+    if "negative" in v: return C_CDC_NEG
+    return C_CDC_POS
 
 
 def _build_cdc_report(case: dict, S: dict) -> list:
@@ -1583,9 +1579,9 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     # GAP creates visible separation between patient and donor sections.
     # All fracs sum to 1.000.
     cw = CONTENT_W
-    info_col_w = [cw * 0.176, cw * 0.016, cw * 0.365,   # left
-                  cw * 0.035,                             # gap
-                  cw * 0.196, cw * 0.016, cw * 0.196]   # right
+    info_col_w = [cw * 0.163, cw * 0.016, cw * 0.280,   # left
+                  cw * 0.020,                             # gap
+                  cw * 0.210, cw * 0.016, cw * 0.295]   # right
 
     def E(): return Paragraph("", info_lbl_style)
 

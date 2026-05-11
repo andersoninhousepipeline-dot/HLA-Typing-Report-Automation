@@ -680,6 +680,26 @@ class HLAReportGeneratorApp(QMainWindow):
             _crf.addRow(_l + ":", _cmb)
             _cmb.currentIndexChanged.connect(self._on_manual_field_debounced)
 
+        _CDC_RES_TO_DTT = {
+            "Negative":        "<10% Dead cells",
+            "Doubtful":        "10-20% Dead cells",
+            "Weak Positive":   "20-50% Dead cells",
+            "Positive":        "50-80% Dead cells",
+            "Strong Positive": ">80% Dead cells",
+        }
+        def _sync_manual_t_dtt():
+            v = _CDC_RES_TO_DTT.get(self._manual_cdc_fields["t_cell"].currentText())
+            if v:
+                self._manual_cdc_fields["t_with_dtt"].setCurrentText(v)
+                self._manual_cdc_fields["t_without_dtt"].setCurrentText(v)
+        def _sync_manual_b_dtt():
+            v = _CDC_RES_TO_DTT.get(self._manual_cdc_fields["b_cell"].currentText())
+            if v:
+                self._manual_cdc_fields["b_with_dtt"].setCurrentText(v)
+                self._manual_cdc_fields["b_without_dtt"].setCurrentText(v)
+        self._manual_cdc_fields["t_cell"].currentIndexChanged.connect(lambda _: _sync_manual_t_dtt())
+        self._manual_cdc_fields["b_cell"].currentIndexChanged.connect(lambda _: _sync_manual_b_dtt())
+
         scroll_layout.addWidget(_cdc_res_group)
         _cdc_res_group.setVisible(False)
 
@@ -2384,6 +2404,26 @@ class HLAReportGeneratorApp(QMainWindow):
             cmb.currentIndexChanged.connect(self._on_bulk_field_debounced)
             self._bulk_cdc_result_f[key] = cmb
             crf.addRow(lbl + ":", cmb)
+
+        _CDC_RES_TO_DTT = {
+            "Negative":        "<10% Dead cells",
+            "Doubtful":        "10-20% Dead cells",
+            "Weak Positive":   "20-50% Dead cells",
+            "Positive":        "50-80% Dead cells",
+            "Strong Positive": ">80% Dead cells",
+        }
+        def _sync_bulk_t_dtt():
+            v = _CDC_RES_TO_DTT.get(self._bulk_cdc_result_f["t_cell"].currentText())
+            if v:
+                self._bulk_cdc_result_f["t_with_dtt"].setCurrentText(v)
+                self._bulk_cdc_result_f["t_without_dtt"].setCurrentText(v)
+        def _sync_bulk_b_dtt():
+            v = _CDC_RES_TO_DTT.get(self._bulk_cdc_result_f["b_cell"].currentText())
+            if v:
+                self._bulk_cdc_result_f["b_with_dtt"].setCurrentText(v)
+                self._bulk_cdc_result_f["b_without_dtt"].setCurrentText(v)
+        self._bulk_cdc_result_f["t_cell"].currentIndexChanged.connect(lambda _: _sync_bulk_t_dtt())
+        self._bulk_cdc_result_f["b_cell"].currentIndexChanged.connect(lambda _: _sync_bulk_b_dtt())
 
         # Assemble + signature override
         for grp in (cdc_pat_grp, meta_group, cdc_don_grp, cdc_res_grp):
