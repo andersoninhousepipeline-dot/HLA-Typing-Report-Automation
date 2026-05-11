@@ -955,6 +955,13 @@ class HLAReportGeneratorApp(QMainWindow):
         self._flow_seal_chk.setChecked(self.qsettings.value("sig_stamp", True, type=bool))
         self._flow_seal_chk.stateChanged.connect(self._on_manual_field_debounced)
         _fpf.addRow(self._flow_seal_chk)
+        self._flow_photo_bytes = {}
+        _fp_row = QHBoxLayout()
+        self._flow_pat_photo_lbl = QLabel("No photo selected"); self._flow_pat_photo_lbl.setStyleSheet("color:gray;font-style:italic;")
+        _fp_btn = QPushButton("Upload Patient Photo"); _fp_btn.setMaximumHeight(26)
+        _fp_btn.clicked.connect(lambda: self._upload_flow_photo("patient"))
+        _fp_row.addWidget(self._flow_pat_photo_lbl, 1); _fp_row.addWidget(_fp_btn)
+        _fpf.addRow("Patient Photo:", _fp_row)
         scroll_layout.addWidget(_flow_pat_group)
         _flow_pat_group.setVisible(False)
 
@@ -980,6 +987,12 @@ class HLAReportGeneratorApp(QMainWindow):
             _w.textChanged.connect(self._on_manual_field_debounced)
             self._flow_don_f[_k] = _w
             _fdf.addRow(_l + ":", _w)
+        _fd_row = QHBoxLayout()
+        self._flow_don_photo_lbl = QLabel("No photo selected"); self._flow_don_photo_lbl.setStyleSheet("color:gray;font-style:italic;")
+        _fd_btn = QPushButton("Upload Donor Photo"); _fd_btn.setMaximumHeight(26)
+        _fd_btn.clicked.connect(lambda: self._upload_flow_photo("donor"))
+        _fd_row.addWidget(self._flow_don_photo_lbl, 1); _fd_row.addWidget(_fd_btn)
+        _fdf.addRow("Donor Photo:", _fd_row)
         scroll_layout.addWidget(_flow_don_group)
         _flow_don_group.setVisible(False)
 
@@ -1416,7 +1429,7 @@ class HLAReportGeneratorApp(QMainWindow):
                 "report_date":     _tv(pf, "report_date"),
                 "remarks":         _tv(pf, "remarks"),
                 "comments":        _tv(pf, "comments"),
-                "photo_bytes":     None,
+                "photo_bytes":     getattr(self, "_flow_photo_bytes", {}).get("patient"),
                 "hla": {}, "hla_c_type": "", "_join_key": _tv(pf, "pin"),
                 "_has_insufficient_hla": False,
             }
@@ -1430,7 +1443,7 @@ class HLAReportGeneratorApp(QMainWindow):
                 "collection_date": _tv(df, "collection_date"),
                 "receipt_date":    _tv(df, "receipt_date"),
                 "report_date":     _tv(df, "report_date"),
-                "photo_bytes": None, "hla": {}, "hla_c_type": "",
+                "photo_bytes": getattr(self, "_flow_photo_bytes", {}).get("donor"), "hla": {}, "hla_c_type": "",
                 "_join_key": "", "_has_insufficient_hla": False,
             }
             nabl      = self._flow_nabl_chk.isChecked() if hasattr(self, "_flow_nabl_chk") else nabl
@@ -2922,6 +2935,19 @@ class HLAReportGeneratorApp(QMainWindow):
         self._on_bulk_field_debounced()
 
     # ── Bulk Flow editor builder ───────────────────────────────────────────────
+    def _upload_flow_photo(self, who: str):
+        path, _ = QFileDialog.getOpenFileName(
+            self, f"Select {who.title()} Photo", str(Path.home()),
+            "Images (*.png *.jpg *.jpeg *.bmp *.tiff)")
+        if not path: return
+        if not hasattr(self, "_flow_photo_bytes"):
+            self._flow_photo_bytes = {}
+        with open(path, "rb") as fh:
+            self._flow_photo_bytes[who] = fh.read()
+        lbl = self._flow_pat_photo_lbl if who == "patient" else self._flow_don_photo_lbl
+        lbl.setText(os.path.basename(path))
+        self._on_manual_field_debounced()
+
     def _rebuild_bulk_flow_editor(self, idx, case, _old_pat_group, meta_group):
         """Build Flow-specific editor form inside the bulk editor scroll area."""
         p   = case["patient"]
@@ -2952,6 +2978,18 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_nabl_chk.setChecked(_nabl_default)
         self._bulk_nabl_chk.stateChanged.connect(self._on_bulk_field_debounced)
         fpf.addRow(self._bulk_nabl_chk)
+        self._bulk_flow_photo_bytes = dict(case.get("_photo_bytes_tmp", {}))
+        _bfpp_row = QHBoxLayout()
+        _bfpp_lbl = QLabel("No photo selected"); _bfpp_lbl.setStyleSheet("color:gray;font-style:italic;")
+        _bfpp_btn = QPushButton("Upload Patient Photo"); _bfpp_btn.setMaximumHeight(26)
+        def _upload_flow_pat():
+            path, _ = QFileDialog.getOpenFileName(self, "Select Patient Photo", str(Path.home()), "Images (*.png *.jpg *.jpeg *.bmp *.tiff)")
+            if path:
+                with open(path, "rb") as fh: self._bulk_flow_photo_bytes["patient"] = fh.read()
+                _bfpp_lbl.setText(os.path.basename(path)); self._on_bulk_field_debounced()
+        _bfpp_btn.clicked.connect(_upload_flow_pat)
+        _bfpp_row.addWidget(_bfpp_lbl, 1); _bfpp_row.addWidget(_bfpp_btn)
+        fpf.addRow("Patient Photo:", _bfpp_row)
 
         flow_don_grp = QGroupBox("Donor Information")
         fdf = QFormLayout(); flow_don_grp.setLayout(fdf)
@@ -2968,6 +3006,17 @@ class HLAReportGeneratorApp(QMainWindow):
             if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
             w.textChanged.connect(self._on_bulk_field_debounced)
             self._bulk_flow_don_f[key] = w; fdf.addRow(lbl + ":", w)
+        _bfdp_row = QHBoxLayout()
+        _bfdp_lbl = QLabel("No photo selected"); _bfdp_lbl.setStyleSheet("color:gray;font-style:italic;")
+        _bfdp_btn = QPushButton("Upload Donor Photo"); _bfdp_btn.setMaximumHeight(26)
+        def _upload_flow_don():
+            path, _ = QFileDialog.getOpenFileName(self, "Select Donor Photo", str(Path.home()), "Images (*.png *.jpg *.jpeg *.bmp *.tiff)")
+            if path:
+                with open(path, "rb") as fh: self._bulk_flow_photo_bytes["donor"] = fh.read()
+                _bfdp_lbl.setText(os.path.basename(path)); self._on_bulk_field_debounced()
+        _bfdp_btn.clicked.connect(_upload_flow_don)
+        _bfdp_row.addWidget(_bfdp_lbl, 1); _bfdp_row.addWidget(_bfdp_btn)
+        fdf.addRow("Donor Photo:", _bfdp_row)
 
         flow_res_grp = QGroupBox("Flow Results")
         frf = QFormLayout(); flow_res_grp.setLayout(frf)
@@ -3181,10 +3230,12 @@ class HLAReportGeneratorApp(QMainWindow):
             if hasattr(self, "_bulk_flow_pat_f"):
                 for key, w in self._bulk_flow_pat_f.items():
                     p[key] = w.text().strip()
+                p["photo_bytes"] = self._bulk_flow_photo_bytes.get("patient") if hasattr(self, "_bulk_flow_photo_bytes") else None
             if hasattr(self, "_bulk_flow_don_f") and case.get("donors"):
                 d = case["donors"][0]
                 for key, w in self._bulk_flow_don_f.items():
                     d[key] = w.text().strip()
+                d["photo_bytes"] = self._bulk_flow_photo_bytes.get("donor") if hasattr(self, "_bulk_flow_photo_bytes") else None
             if hasattr(self, "_bulk_flow_result_f"):
                 fr = {}
                 for k, w in self._bulk_flow_result_f.items():
