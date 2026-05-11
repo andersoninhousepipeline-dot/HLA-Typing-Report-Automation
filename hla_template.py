@@ -1658,7 +1658,9 @@ def _build_flow_report(case: dict, S: dict) -> list:
         if pb:
             try: return Image(io.BytesIO(pb), width=_ph_w, height=_ph_h)
             except Exception: pass
-        return Spacer(1, _ph_h)
+        _emp = Table([[""]], colWidths=[_ph_w], rowHeights=[_ph_h])
+        _emp.setStyle(TableStyle([("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#D0D0D0"))]))
+        return _emp
 
     photo_rows = [
         [Paragraph("", lbl_s),
@@ -1674,7 +1676,8 @@ def _build_flow_report(case: dict, S: dict) -> list:
          _P(_raw(patient.get("collection_date","")), F_REG, 10, BLACK, TA_CENTER),
          _P(_raw(donor.get("collection_date","")),   F_REG, 10, BLACK, TA_CENTER)],
     ]
-    photo_t = Table(photo_rows, colWidths=[_lbl_w, _pc_w, _pc_w])
+    photo_t = Table(photo_rows, colWidths=[_lbl_w, _pc_w, _pc_w],
+                    rowHeights=[None, _ph_h + 8, None, None])
     photo_t.setStyle(TableStyle([
         ("BACKGROUND",  (0,0), (-1,-1), _GREY),
         ("BACKGROUND",  (0,0), (-1, 0), colors.white),
@@ -1719,7 +1722,7 @@ def _build_flow_report(case: dict, S: dict) -> list:
     b_mcs         = flow.get("b_mcs", "<86")
     b_interp      = flow.get("b_interpretation", "Negative")
 
-    _tbl_col_w    = [cw*0.22, cw*0.10, cw*0.16, cw*0.52]
+    _tbl_col_w    = [cw*0.22, cw*0.10, cw*0.19, cw*0.49]
     _HDR_BG       = colors.HexColor("#1F3864")
     _hdr_s  = ParagraphStyle("_fth", fontName=F_BOLD, fontSize=10,
                                textColor=colors.white, alignment=TA_CENTER, leading=13)
