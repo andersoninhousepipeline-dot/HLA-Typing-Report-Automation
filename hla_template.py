@@ -625,7 +625,12 @@ class _HFCanvas:
 
         # ── Header ──────────────────────────────────────────────────────────
         if with_logo:
-            raw = hla_assets.get_image_bytes(hla_assets.HEADER_NONNABL_B64)
+            _rtype = self.case.get("report_type", "")
+            _is_cdc_dsa = _rtype in ("cdc_crossmatch", "dsa_crossmatch", "flow_crossmatch")
+            if _is_cdc_dsa and nabl:
+                raw = hla_assets.get_image_bytes(hla_assets.HEADER_NABL_CDC_B64)
+            else:
+                raw = hla_assets.get_image_bytes(hla_assets.HEADER_NONNABL_B64)
             canvas.drawImage(
                 ImageReader(io.BytesIO(raw)),
                 MARGIN_L, PAGE_H - MARGIN_T - self.banner_h,
