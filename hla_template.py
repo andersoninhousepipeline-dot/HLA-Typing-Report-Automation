@@ -1905,10 +1905,10 @@ def _build_cdc_report(case: dict, S: dict) -> list:
                                  spaceBefore=3, alignment=TA_JUSTIFY)
     for i, comment in enumerate(CDC_COMMENTS):
         style = _bull_just if i == len(CDC_COMMENTS) - 1 else _bull_left
-        elems.append(Paragraph(f"&#x2022;â€‚{comment}", style))
+        elems.append(Paragraph(f"&#x2022; {comment}", style))
     _cdc_user_comment = _clean_display(patient.get("comments", ""))
     if _cdc_user_comment and _cdc_user_comment != "â€”":
-        elems.append(Paragraph(f"&#x2022;â€‚{_cdc_user_comment}", _bull_just))
+        elems.append(Paragraph(f"&#x2022; {_cdc_user_comment}", _bull_just))
     elems.append(Spacer(1, 8 * mm))
 
     # â”€â”€ Signatures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
