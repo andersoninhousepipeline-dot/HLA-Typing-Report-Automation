@@ -2663,7 +2663,7 @@ def _build_flow_report(case: dict, S: dict) -> list:
             if "borderline" in v.strip().lower(): return "Borderline"
         return "Negative"
 
-        t_col = _color_hex(_flow_color(t_interp))
+    t_col = _color_hex(_flow_color(t_interp))
     b_col = _color_hex(_flow_color(b_interp))
     elems.append(Paragraph(
         f"Flow Cytometry Cross match is "
