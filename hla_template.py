@@ -629,8 +629,8 @@ class _HFCanvas:
                 hla_assets.HEADER_NABL_CDC_B64 if nabl else hla_assets.HEADER_NONNABL_B64)
             canvas.drawImage(
                 ImageReader(io.BytesIO(_hdr_raw)),
-                MARGIN_L, PAGE_H - MARGIN_T - self.banner_h,
-                width=CONTENT_W, height=self.banner_h,
+                0, PAGE_H - MARGIN_T - self.banner_h,
+                width=PAGE_W, height=self.banner_h,
                 preserveAspectRatio=False, mask="auto"
             )
         # Without logo: header space reserved but nothing is drawn.
@@ -638,12 +638,12 @@ class _HFCanvas:
         # ── Footer ──────────────────────────────────────────────────────────
         if with_logo:
             raw_f = hla_assets.get_image_bytes(hla_assets.FOOTER_BAR_B64)
-            # Footer bar anchored flush to the absolute page bottom (y=0)
+            # Footer bar flush to absolute page bottom, full page width
             canvas.drawImage(
                 ImageReader(io.BytesIO(raw_f)),
-                MARGIN_L, 0,
-                width=CONTENT_W, height=self.footer_h,
-                preserveAspectRatio=True, mask="auto"
+                0, 0,
+                width=PAGE_W, height=self.footer_h,
+                preserveAspectRatio=False, mask="auto"
             )
         # Page number always drawn — above the footer zone (whether logo is shown or not)
         canvas.setFont(_f("Calibri", "Helvetica"), 9)
@@ -2736,12 +2736,12 @@ def generate_pdf(case: dict, output_path: str) -> str:
     raw  = hla_assets.get_image_bytes(hla_assets.HEADER_NONNABL_B64)
     pil  = PILImage.open(io.BytesIO(raw))
     ow, oh   = pil.size
-    banner_h = (oh / ow) * CONTENT_W
+    banner_h = (oh / ow) * PAGE_W
 
     raw_f    = hla_assets.get_image_bytes(hla_assets.FOOTER_BAR_B64)
     pil_f    = PILImage.open(io.BytesIO(raw_f))
     fw, fh   = pil_f.size
-    footer_h = (fh / fw) * CONTENT_W
+    footer_h = (fh / fw) * PAGE_W
 
     top_margin    = MARGIN_T + banner_h + 4 * mm
     _PAGE_NUM_AREA = 4 * mm
