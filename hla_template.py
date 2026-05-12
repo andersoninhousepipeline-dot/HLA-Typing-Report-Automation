@@ -2744,12 +2744,12 @@ def generate_pdf(case: dict, output_path: str) -> str:
     raw  = hla_assets.get_image_bytes(hla_assets.HEADER_NONNABL_B64)
     pil  = PILImage.open(io.BytesIO(raw))
     ow, oh   = pil.size
-    banner_h = (oh / ow) * PAGE_W
+    banner_h = (oh / ow) * CONTENT_W
 
     raw_f    = hla_assets.get_image_bytes(hla_assets.FOOTER_BAR_B64)
     pil_f    = PILImage.open(io.BytesIO(raw_f))
     fw, fh   = pil_f.size
-    footer_h = (fh / fw) * PAGE_W
+    footer_h = (fh / fw) * CONTENT_W
 
     top_margin    = MARGIN_T + banner_h + 4 * mm
     _PAGE_NUM_AREA = 4 * mm
