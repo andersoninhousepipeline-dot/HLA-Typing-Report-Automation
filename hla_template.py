@@ -625,17 +625,13 @@ class _HFCanvas:
 
         # ── Header ──────────────────────────────────────────────────────────
         if with_logo:
-            _rtype = self.case.get("report_type", "")
-            _is_cdc_dsa = _rtype in ("cdc_crossmatch", "dsa_crossmatch", "flow_crossmatch")
-            if _is_cdc_dsa and nabl:
-                raw = hla_assets.get_image_bytes(hla_assets.HEADER_NABL_CDC_B64)
-            else:
-                raw = hla_assets.get_image_bytes(hla_assets.HEADER_NONNABL_B64)
+            _hdr_raw = hla_assets.get_image_bytes(
+                hla_assets.HEADER_NABL_CDC_B64 if nabl else hla_assets.HEADER_NONNABL_B64)
             canvas.drawImage(
-                ImageReader(io.BytesIO(raw)),
+                ImageReader(io.BytesIO(_hdr_raw)),
                 MARGIN_L, PAGE_H - MARGIN_T - self.banner_h,
                 width=CONTENT_W, height=self.banner_h,
-                preserveAspectRatio=True, mask="auto"
+                preserveAspectRatio=False, mask="auto"
             )
         # Without logo: header space reserved but nothing is drawn.
 
@@ -2667,11 +2663,12 @@ def _build_flow_report(case: dict, S: dict) -> list:
             if "borderline" in v.strip().lower(): return "Borderline"
         return "Negative"
 
-    overall      = _overall(t_interp, b_interp)
-    overall_col  = _color_hex(_flow_color(overall))
+        t_col = _color_hex(_flow_color(t_interp))
+    b_col = _color_hex(_flow_color(b_interp))
     elems.append(Paragraph(
         f"Flow Cytometry Cross match is "
-        f"<font color='#{overall_col}'>{overall}</font> for T &amp; B cells.",
+        f"<font color='#{t_col}'>{t_interp}</font> for T cells and "
+        f"<font color='#{b_col}'>{b_interp}</font> for B cells.",
         _body_s))
     elems.append(Spacer(1, 5*mm))
 
