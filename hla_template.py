@@ -2603,7 +2603,7 @@ def _build_flow_report(case: dict, S: dict) -> list:
         for line in lines:
             v = line.strip().lower()
             if "negative"   in v: col = _color_hex(C_CDC_NEG)
-            elif "borderline" in v: col = _color_hex(C_CDC_DOUBTFUL)
+            elif "borderline" in v: col = _color_hex(_FLOW_BORDERLINE)
             else:                   col = _color_hex(C_CDC_POS)
             parts.append(f"<font color='#{col}'><b>{line.strip()}</b></font>")
         return Paragraph("<br/>".join(parts), _ref_s)
