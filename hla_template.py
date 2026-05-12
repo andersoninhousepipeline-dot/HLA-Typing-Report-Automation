@@ -1906,8 +1906,8 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     for i, comment in enumerate(CDC_COMMENTS):
         style = _bull_just if i == len(CDC_COMMENTS) - 1 else _bull_left
         elems.append(Paragraph(f"&#x2022; {comment}", style))
-    _cdc_user_comment = _clean_display(patient.get("comments", ""))
-    if _cdc_user_comment and _cdc_user_comment != "â€”":
+    _cdc_user_comment = str(patient.get("comments", "") or "").strip()
+    if _cdc_user_comment and _cdc_user_comment.lower() not in ("nan","none","na","-","--"):
         elems.append(Paragraph(f"&#x2022; {_cdc_user_comment}", _bull_just))
     elems.append(Spacer(1, 8 * mm))
 
@@ -2188,8 +2188,8 @@ def _build_dsa_report(case: dict, S: dict) -> list:
     for comment in DSA_COMMENTS:
         elems.append(Paragraph(f"&#x2022; {comment}", _bull_just))
     # User-supplied additional comment â€” appended as a new bullet, same style
-    _dsa_user_comment = _clean_display(patient.get("comments", ""))
-    if _dsa_user_comment and _dsa_user_comment != "â€”":
+    _dsa_user_comment = str(patient.get("comments", "") or "").strip()
+    if _dsa_user_comment and _dsa_user_comment.lower() not in ("nan","none","na","-","--"):
         elems.append(Paragraph(f"&#x2022; {_dsa_user_comment}", _bull_just))
     elems.append(Spacer(1, 8 * mm))
 
@@ -2685,8 +2685,8 @@ def _build_flow_report(case: dict, S: dict) -> list:
     elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=6))
     for i, c in enumerate(FLOW_COMMENTS, 1):
         elems.append(Paragraph(f"{i}. {c}", _num_s))
-    _flow_user_comment = _clean_display(patient.get("comments", ""))
-    if _flow_user_comment and _flow_user_comment != "\u2014":
+        _flow_user_comment = str(patient.get("comments", "") or "").strip()
+    if _flow_user_comment and _flow_user_comment.lower() not in ("nan","none","na","-","--"):
         elems.append(Paragraph(f"\u2022 {_flow_user_comment}",
             ParagraphStyle("_fuc", fontName=F_REG, fontSize=10, leading=14, spaceBefore=3,
                            leftIndent=18, firstLineIndent=-10, alignment=TA_JUSTIFY)))
