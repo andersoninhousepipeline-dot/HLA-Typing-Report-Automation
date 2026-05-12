@@ -649,12 +649,13 @@ class _HFCanvas:
                 width=PAGE_W, height=self.footer_h,
                 preserveAspectRatio=False, mask="auto"
             )
-        # Page number always drawn — above the footer zone (whether logo is shown or not)
+        # Page number at top of the reserved bottom area (above external overlay content)
+        _page_num_y = MARGIN_B + self.footer_h + QR_ZONE + 2 * mm
         canvas.setFont(_f("Calibri", "Helvetica"), 9)
         canvas.setFillColor(BLACK)
         canvas.drawRightString(
             PAGE_W - MARGIN_R,
-            MARGIN_B + self.footer_h + 1 * mm,
+            _page_num_y,
             f"Page {doc.page} of {self.total_pages}"
         )
 
