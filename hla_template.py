@@ -2459,10 +2459,11 @@ def _build_flow_report(case: dict, S: dict) -> list:
         try: return "%02x%02x%02x" % (int(round(c.red*255)), int(round(c.green*255)), int(round(c.blue*255)))
         except Exception: return "000000"
 
+    _FLOW_BORDERLINE = colors.HexColor("#2980B9")   # blue for borderline result
     def _flow_color(val):
         v = val.strip().lower()
         if "negative"   in v: return C_CDC_NEG
-        if "borderline" in v: return C_CDC_DOUBTFUL
+        if "borderline" in v: return _FLOW_BORDERLINE
         return C_CDC_POS
 
     elems = []
@@ -2594,7 +2595,7 @@ def _build_flow_report(case: dict, S: dict) -> list:
                                alignment=TA_LEFT, leading=13, leftIndent=4)
 
     def _mcs_para(val):
-        return Paragraph(f"<font color='#{_color_hex(C_CDC_DOUBTFUL)}'><b>{val}</b></font>", _mcs_s)
+        return Paragraph(f"<b>{val}</b>", _mcs_s)
 
     def _interp_para(val):
         col = _color_hex(_flow_color(val))
