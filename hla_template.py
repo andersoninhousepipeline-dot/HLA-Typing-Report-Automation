@@ -629,7 +629,7 @@ class _HFCanvas:
                 hla_assets.HEADER_NABL_CDC_B64 if nabl else hla_assets.HEADER_NONNABL_B64)
             canvas.drawImage(
                 ImageReader(io.BytesIO(_hdr_raw)),
-                0, PAGE_H - MARGIN_T - self.banner_h,
+                0, PAGE_H - self.banner_h,
                 width=PAGE_W, height=self.banner_h,
                 preserveAspectRatio=False, mask="auto"
             )
