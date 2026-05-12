@@ -2663,13 +2663,17 @@ def _build_flow_report(case: dict, S: dict) -> list:
             if "borderline" in v.strip().lower(): return "Borderline"
         return "Negative"
 
-    t_col = _color_hex(_flow_color(t_interp))
-    b_col = _color_hex(_flow_color(b_interp))
-    elems.append(Paragraph(
-        f"Flow Cytometry Cross match is "
-        f"<font color='#{t_col}'>{t_interp}</font> for T cells and "
-        f"<font color='#{b_col}'>{b_interp}</font> for B cells.",
-        _body_s))
+    _manual_interp = flow.get("interpretation", "").strip()
+    if _manual_interp:
+        elems.append(Paragraph(_manual_interp, _body_s))
+    else:
+        t_col = _color_hex(_flow_color(t_interp))
+        b_col = _color_hex(_flow_color(b_interp))
+        elems.append(Paragraph(
+            f"Flow Cytometry Cross match is "
+            f"<font color='#{t_col}'>{t_interp}</font> for T cells and "
+            f"<font color='#{b_col}'>{b_interp}</font> for B cells.",
+            _body_s))
     elems.append(Spacer(1, 5*mm))
 
     # ── Comments ──────────────────────────────────────────────────────────────

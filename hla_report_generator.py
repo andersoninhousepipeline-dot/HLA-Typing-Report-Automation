@@ -1012,6 +1012,12 @@ class HLAReportGeneratorApp(QMainWindow):
             self._flow_result_f[_k] = _w
             _frf.addRow(_l + ":", _w)
             _w.textChanged.connect(self._on_manual_field_debounced)
+        _interp_w = QLineEdit()
+        _interp_w.setFixedHeight(24)
+        _interp_w.setPlaceholderText("Auto-generated if left blank")
+        self._flow_result_f["interpretation"] = _interp_w
+        _frf.addRow("Interpretation Override:", _interp_w)
+        _interp_w.textChanged.connect(self._on_manual_field_debounced)
         scroll_layout.addWidget(_flow_res_group)
         _flow_res_group.setVisible(False)
 
@@ -1454,6 +1460,7 @@ class HLAReportGeneratorApp(QMainWindow):
                 "t_mcs":            rf["t_mcs"].text().strip()            if "t_mcs"            in rf else "<45",
                 "b_interpretation": rf["b_interpretation"].currentText() if "b_interpretation" in rf else "Negative",
                 "b_mcs":            rf["b_mcs"].text().strip()            if "b_mcs"            in rf else "<86",
+                "interpretation":   rf["interpretation"].text().strip()   if "interpretation"   in rf else "",
             }
 
         self._apply_sig_name_overrides(case, self._manual_sig_name_overrides)
@@ -3033,6 +3040,12 @@ class HLAReportGeneratorApp(QMainWindow):
             w = QLineEdit(fr.get(key, "")); w.setFixedHeight(24); w.setPlaceholderText(ph)
             w.textChanged.connect(self._on_bulk_field_debounced)
             self._bulk_flow_result_f[key] = w; frf.addRow(lbl + ":", w)
+        _bfi = QLineEdit(fr.get("interpretation", ""))
+        _bfi.setFixedHeight(24)
+        _bfi.setPlaceholderText("Auto-generated if left blank")
+        _bfi.textChanged.connect(self._on_bulk_field_debounced)
+        self._bulk_flow_result_f["interpretation"] = _bfi
+        frf.addRow("Interpretation Override:", _bfi)
 
         for grp in (flow_pat_grp, meta_group, flow_don_grp, flow_res_grp):
             self._bulk_editor_layout.addWidget(grp)
