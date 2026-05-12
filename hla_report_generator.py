@@ -3457,13 +3457,14 @@ class HLAReportGeneratorApp(QMainWindow):
         )
         # Apply any per-case signature overrides
         self._apply_sig_name_overrides(c, case.get("sig_name_overrides", {}))
-        # Copy case-level overrides including CDC/DSA results and photo bytes
+        # Copy case-level overrides including all result types
         for key in ("imgt_release", "methodology", "typing_status", "coverage",
-                    "rpl_reference", "cdc_results", "dsa_results"):
+                    "rpl_reference", "cdc_results", "dsa_results",
+                    "flow_results", "sab_alleles", "sab_chart_bytes", "sab_class"):
             if case.get(key):
                 c[key] = case[key]
         # Carry photo bytes into the preview case patient/donor dicts
-        if case.get("report_type") in ("cdc_crossmatch", "dsa_crossmatch"):
+        if case.get("report_type") in ("cdc_crossmatch", "dsa_crossmatch", "flow_crossmatch"):
             c["patient"]["photo_bytes"] = case["patient"].get("photo_bytes")
             if c.get("donors") and case.get("donors"):
                 c["donors"][0]["photo_bytes"] = case["donors"][0].get("photo_bytes")

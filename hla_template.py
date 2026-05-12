@@ -1589,6 +1589,13 @@ FLOW_DISCLAIMER = [
 
 # ─── Flow Cytometry Cross match report builder ────────────────────────────────
 
+def _cdc_result_color(val: str):
+    """Return the display color for a CDC/DSA result string."""
+    v = val.strip().lower()
+    if "negative" in v: return C_CDC_NEG
+    return C_CDC_POS
+
+
 def _build_cdc_report(case: dict, S: dict) -> list:
     """Return story flowables for CDC Cross match report (2 pages)."""
 
