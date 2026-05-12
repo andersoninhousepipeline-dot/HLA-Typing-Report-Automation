@@ -642,10 +642,10 @@ class _HFCanvas:
         # ── Footer ──────────────────────────────────────────────────────────
         if with_logo:
             raw_f = hla_assets.get_image_bytes(hla_assets.FOOTER_BAR_B64)
-            # Footer bar flush to absolute page bottom, full page width
+            # Footer bar at MARGIN_B from page bottom (matches external overlay calibration)
             canvas.drawImage(
                 ImageReader(io.BytesIO(raw_f)),
-                0, 0,
+                0, MARGIN_B,
                 width=PAGE_W, height=self.footer_h,
                 preserveAspectRatio=False, mask="auto"
             )
