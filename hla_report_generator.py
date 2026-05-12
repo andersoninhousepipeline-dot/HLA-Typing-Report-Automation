@@ -1544,7 +1544,8 @@ class HLAReportGeneratorApp(QMainWindow):
         try:
             case = self._collect_manual_case()
             _rtype_preview = case.get("report_type", "single_hla")
-            if _rtype_preview not in ("cdc_crossmatch", "dsa_crossmatch") and _has_insufficient_data(case.get("patient", {})):
+            _NO_HLA_TYPES = ("cdc_crossmatch", "dsa_crossmatch", "flow_crossmatch", "sab_class1", "sab_class2")
+            if _rtype_preview not in _NO_HLA_TYPES and _has_insufficient_data(case.get("patient", {})):
                 return
             self._start_manual_preview(case)
         except Exception:

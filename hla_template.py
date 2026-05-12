@@ -1905,10 +1905,10 @@ def _build_cdc_report(case: dict, S: dict) -> list:
                                  spaceBefore=3, alignment=TA_JUSTIFY)
     for i, comment in enumerate(CDC_COMMENTS):
         style = _bull_just if i == len(CDC_COMMENTS) - 1 else _bull_left
-        elems.append(Paragraph(f"â€¢â€‚{comment}", style))
+        elems.append(Paragraph(f"&#x2022;â€‚{comment}", style))
     _cdc_user_comment = _clean_display(patient.get("comments", ""))
     if _cdc_user_comment and _cdc_user_comment != "â€”":
-        elems.append(Paragraph(f"â€¢â€‚{_cdc_user_comment}", _bull_just))
+        elems.append(Paragraph(f"&#x2022;â€‚{_cdc_user_comment}", _bull_just))
     elems.append(Spacer(1, 8 * mm))
 
     # â”€â”€ Signatures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -2186,11 +2186,11 @@ def _build_dsa_report(case: dict, S: dict) -> list:
                                  leading=15, leftIndent=18, firstLineIndent=-10,
                                  spaceBefore=3, alignment=TA_JUSTIFY)
     for comment in DSA_COMMENTS:
-        elems.append(Paragraph(f"â€¢ {comment}", _bull_just))
+        elems.append(Paragraph(f"&#x2022; {comment}", _bull_just))
     # User-supplied additional comment â€” appended as a new bullet, same style
     _dsa_user_comment = _clean_display(patient.get("comments", ""))
     if _dsa_user_comment and _dsa_user_comment != "â€”":
-        elems.append(Paragraph(f"â€¢ {_dsa_user_comment}", _bull_just))
+        elems.append(Paragraph(f"&#x2022; {_dsa_user_comment}", _bull_just))
     elems.append(Spacer(1, 8 * mm))
 
     # â”€â”€ Recommendations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -2198,7 +2198,7 @@ def _build_dsa_report(case: dict, S: dict) -> list:
     elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey,
                              spaceAfter=6))
     for rec in DSA_RECOMMENDATIONS:
-        elems.append(Paragraph(f"â€¢ {rec}", _bull_just))
+        elems.append(Paragraph(f"&#x2022; {rec}", _bull_just))
     elems.append(Spacer(1, 8 * mm))
 
     # â”€â”€ Signatures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -2426,7 +2426,7 @@ def _build_sab_report(case: dict, S: dict) -> list:
     elems.append(Paragraph("<b>Limitations &amp; Disclaimer</b>", _lim_sec_s))
     elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=4))
     for lim in SAB_LIMITATIONS:
-        elems.append(Paragraph(f"â€¢ {lim}", _disc_s))
+        elems.append(Paragraph(f"&#x2022; {lim}", _disc_s))
     elems.append(Spacer(1, 6*mm))
 
     sig_items = _signature_block(case.get("signatories", []), S)
