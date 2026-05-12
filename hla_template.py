@@ -2652,7 +2652,7 @@ def _build_flow_report(case: dict, S: dict) -> list:
     _body_s   = ParagraphStyle("_fbdy", fontName=F_REG,  fontSize=10,
                                 leading=14, alignment=TA_JUSTIFY)
     _num_s    = ParagraphStyle("_fnum", fontName=F_REG,  fontSize=10,
-                                leading=14, leftIndent=22, firstLineIndent=-18,
+                                leading=14, leftIndent=18, firstLineIndent=-10,
                                 alignment=TA_JUSTIFY, spaceBefore=3)
     _head_l_s = ParagraphStyle("_fhl", fontName=F_BOLD, fontSize=20,
                                 textColor=C_NGS_TITLE, leading=24, spaceAfter=2)
@@ -2684,8 +2684,8 @@ def _build_flow_report(case: dict, S: dict) -> list:
     # ── Comments ──────────────────────────────────────────────────────────────
     elems.append(Paragraph("<b>Comments</b>", _head_l_s))
     elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=6))
-    for i, c in enumerate(FLOW_COMMENTS, 1):
-        elems.append(Paragraph(f"{i}. {c}", _num_s))
+    for c in FLOW_COMMENTS:
+        elems.append(Paragraph(f"&#x2022; {c}", _num_s))
         _flow_user_comment = str(patient.get("comments", "") or "").strip()
     if _flow_user_comment and _flow_user_comment.lower() not in ("nan","none","na","-","--"):
         elems.append(Paragraph(f"\u2022 {_flow_user_comment}",
@@ -2696,8 +2696,8 @@ def _build_flow_report(case: dict, S: dict) -> list:
     # ── Disclaimer ────────────────────────────────────────────────────────────
     elems.append(Paragraph("<b>Disclaimer</b>", _head_l_s))
     elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=6))
-    for i, d in enumerate(FLOW_DISCLAIMER, 1):
-        elems.append(Paragraph(f"{i}. {d}", _num_s))
+    for d in FLOW_DISCLAIMER:
+        elems.append(Paragraph(f"&#x2022; {d}", _num_s))
     elems.append(Spacer(1, 8*mm))
 
     # ── Signatures ────────────────────────────────────────────────────────────
