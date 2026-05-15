@@ -17,7 +17,7 @@ import re
 from typing import Optional
 
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
@@ -32,8 +32,8 @@ from reportlab.pdfbase.pdfmetrics import registerFontFamily
 
 import hla_assets
 
-# ─── Page geometry (A4, matched to reference PDFs) ───────────────────────────
-PAGE_W, PAGE_H = A4            # 595.28 × 841.89 pts
+# ─── Page geometry (Letter, 21.59 cm × 27.94 cm) ────────────────────────────
+PAGE_W, PAGE_H = letter        # 612.0 × 792.0 pts
 MARGIN_L = 15 * mm            # ≈ 42.5 pts  → actual content starts ~43 pts
 MARGIN_R = 15 * mm
 MARGIN_T = 2  * mm
@@ -628,7 +628,7 @@ class _HFCanvas:
             _rtype = self.case.get("report_type", "")
             _nabl_in_header = nabl and _rtype in (
                 "cdc_crossmatch", "dsa_crossmatch", "flow_crossmatch",
-                "sab_class1", "sab_class2")
+                "sab_class1", "sab_class2", "luminex_typing")
             _hdr_raw = hla_assets.get_image_bytes(
                 hla_assets.HEADER_NABL_CDC_B64 if _nabl_in_header else hla_assets.HEADER_NONNABL_B64)
             canvas.drawImage(
@@ -950,7 +950,7 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
     if has_remarks:
         tail.append(Paragraph(f"<b>Remarks:</b> {_remarks_display}",
                               ParagraphStyle("remarks_j", parent=S["body_small"],
-                                             fontSize=9, leading=11,
+                                             fontSize=10, leading=12,
                                              alignment=TA_LEFT, spaceAfter=2)))
     if has_match:
         if has_remarks:
@@ -1407,12 +1407,21 @@ def _build_rpl_couple(case: dict, S: dict) -> list:
             )
 
         # Append patient/donor remarks into the same table cell as the comment.
-        remark_parts = [r for r in [
-            _remarks_markup(patient, "Remarks (Patient)"),
-            _remarks_markup(donor,   "Remarks (Donor)"),
-        ] if r]
-        if remark_parts:
-            suffix = "<br/>".join(remark_parts)
+        # Both share a single "Remarks:" label — collect text-only parts, then prefix once.
+        def _remarks_text(person: dict) -> str:
+            raw = person.get("remarks", "")
+            if not raw or not str(raw).strip():
+                return ""
+            disp = _normalize_hla_alleles(_clean_display(raw))
+            if not disp or disp == "—":
+                return ""
+            if len(disp) > 600:
+                disp = disp[:580] + "..."
+            return disp
+
+        remark_texts = [t for t in [_remarks_text(patient), _remarks_text(donor)] if t]
+        if remark_texts:
+            suffix = f"<b>Remarks:</b> " + "<br/>".join(remark_texts)
             _comment_text = (_comment_text + f"<br/>{suffix}") if _comment_text else suffix
 
         # Keep couple table (with embedded comment+remarks row) together.
@@ -1426,7 +1435,7 @@ def _build_rpl_couple(case: dict, S: dict) -> list:
         patient_block = _ngs_person_block(patient, is_donor=False, match_str="", S=S,
                                           nabl=case.get("nabl", True))
         elems.append(KeepTogether(patient_block))
-        _emit_remarks(patient, "Remarks (Patient)")
+        _emit_remarks(patient, "Remarks")
 
     # Add spacer to help with page flow
     elems.append(Spacer(1, 5 * mm))
@@ -1507,7 +1516,7 @@ CDC_COMMENTS = [
     "The test should be performed within one week before transplantation.",
     "The test is AHG augmented, which increases the sensitivity of the test.",
     "Test performed with incubation of 37°C.",
-    "The test is done with DTT and without DTT treatment of the recipient’s serum. "
+    "The test is done with DTT and without DTT treatment of the recipient's serum. "
     "This step differentiates the presence of IgM antibody from IgG antibody.",
 ]
 
@@ -1587,6 +1596,48 @@ FLOW_DISCLAIMER = [
     "given by the physicians/laboratory.",
 ]
 
+# ─── Luminex SSO static text ─────────────────────────────────────────────────
+LUMINEX_TEST_DETAILS = [
+    "HLA Typing by Luminex technology applies SSO DNA typing method. Target DNA is "
+    "PCR-amplified using a group-specific primer and the PCR product is biotinylated, "
+    "which allows it to be detected using R-Phycoerythrin conjugated Streptavidin (SAPE).",
+    "The PCR product is denatured and allowed to rehybridize complementary DNA probes "
+    "conjugated to fluorescently coded microspheres. A flow analyzer identifies the "
+    "fluorescent intensity of PE (phycoerythrin) on each microsphere. The assignment of "
+    "the HLA typing is based on the reaction pattern compared to patterns associated with "
+    "published HLA gene sequences.",
+    "The number of nucleotide mismatches with each allele is determined, as well as the "
+    "number of mismatches with the determined phasing data. Mismatches at exons are "
+    "treated separately. A list of alleles is selected with a limited number of mismatches.",
+]
+LUMINEX_DISCLAIMER = (
+    "The occurrence of HLA typing results and the number of different allele combinations "
+    "by a SSO method for an individual may change according to the version of the IMGT/HLA "
+    "database."
+)
+LUMINEX_REFERENCES = [
+    "Terasaki, PI, Bernoco, F, Park MS, Ozturk G, Iwaki Y. Microdroplet testing for "
+    "HLA-A, -B, -C, and –D antigens. American Journal of Clinical Pathology "
+    "69:103-120, 1978.",
+    "Slater RD, Parham P. Mutually exclusive public epitomes of HLA-A, B, C Molecules. "
+    "Human Immunology 26: 85-89, 1989.",
+    "The Luminex® 100 User's Manual, Luminex Corporation, PN 89-00002-00-005 Rev. B.",
+    "Luminex® FLEXMAP 3D® Hardware User Manual, Luminex Corporation "
+    "PN 89-00002-00-187.",
+    "Ng J, Hurley CK, Baxter-Lowe LA, et al. Large-scale oligonucleotide typing for "
+    "HLA-DRB1/3/4 and HLA-DQB1 is highly accurate, specific, and reliable. Tissue "
+    "Antigens. 1993; 42: 473-479.",
+    "Bodmer JG, Marsh SGE, Albert E, Bodmer WF, Bontrop RE, Dupont B, Erlich HA, "
+    "Hansen JA, Mach B, Mayr WR, Parham P, Petersdorf EW, Sasasuki T, Schreuder GMT, "
+    "Strominger JL, Svejgaard A, Terasaki PI. Nomenclature for factors of the HLA system, "
+    "1998. Tissue Antigens, 53, 407-446, 1999. Human Immunology, 60, 361-395, 1999. "
+    "European Journal of Immunogenetics, 26, 81-116, 1999.",
+    "Colinas RJ, Bellisario R et al. Multiplexed genotyping of beta-globin variants from "
+    "PCR-amplified newborn blood spot DNA by hybridization with allele-specific oligo "
+    "deoxynucleotides coupled to an array of fluorescent microspheres. Clinical Chemistry "
+    "46: 996-998, 2000.",
+]
+
 
 # ─── Flow Cytometry Cross match report builder ────────────────────────────────
 
@@ -1621,7 +1672,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
         return _title_case(_clean_display(val)) or "NA"
 
     def _raw(val):
-        """No case change â€” for PIN, sample numbers, dates."""
+        """No case change â€" for PIN, sample numbers, dates."""
         return _clean_display(val) or "NA"
 
     def _color_hex(c):
@@ -1637,7 +1688,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
 
     elems = []
 
-    # â”€â”€ Info table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Info table â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     info_lbl_style = ParagraphStyle("_cdc_lbl", fontName=F_BOLD, fontSize=10,
                                     textColor=BLACK, leading=12)
     info_val_style = ParagraphStyle("_cdc_val", fontName=F_BOLD, fontSize=10,
@@ -1656,12 +1707,12 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     # left-value column to accommodate long hospital/clinic names.
     cw = CONTENT_W
     if len(donor.get("name", "")) > 12:
-        # Long donor name â€” reduce gap, widen right value column
+        # Long donor name â€" reduce gap, widen right value column
         info_col_w = [cw * 0.173, cw * 0.016, cw * 0.340,   # left
                       cw * 0.008,                             # gap (minimal)
                       cw * 0.196, cw * 0.016, cw * 0.251]   # right
     else:
-        # Short donor name â€” original generous left-value column
+        # Short donor name â€" original generous left-value column
         info_col_w = [cw * 0.176, cw * 0.016, cw * 0.365,   # left
                       cw * 0.035,                             # gap
                       cw * 0.196, cw * 0.016, cw * 0.196]   # right
@@ -1690,19 +1741,19 @@ def _build_cdc_report(case: dict, S: dict) -> list:
         ("RIGHTPADDING",  (3, 0), (3, -1), 0),
         ("LEFTPADDING",   (5, 0), (5, -1), 0),
         ("RIGHTPADDING",  (5, 0), (5, -1), 2),
-        # no bottom border â€” demography table sits flush above the photo table
+        # no bottom border â€" demography table sits flush above the photo table
     ]))
     elems.append(info_t)
-    elems.append(Spacer(1, 6 * mm))
+    elems.append(Spacer(1, 1 * mm))
 
-    # â”€â”€ Photo / sample-type table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Photo / sample-type table â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     # Sized to fit "Sodium Heparin Whole Blood" (131pt) on one line so the
-    # Sample type row stays single-line â†’ less vertical height.
+    # Sample type row stays single-line â†' less vertical height.
     # Photo height reduced to 30mm to keep the table compact.
     _ph_w   = 28 * mm   # passport photo display width
-    _ph_h   = 30 * mm   # reduced height â€” keeps table short
-    _pc_w   = 54 * mm   # avail â‰ˆ 141pt â€” fits "Sodium Heparin Whole Blood" (131pt)
-    _lbl_w  = 38 * mm   # label column â€” fits "Date of Collection"
+    _ph_h   = 30 * mm   # reduced height â€" keeps table short
+    _pc_w   = 54 * mm   # avail â‰ˆ 141pt â€" fits "Sodium Heparin Whole Blood" (131pt)
+    _lbl_w  = 38 * mm   # label column â€" fits "Date of Collection"
     col_w_photo = [_lbl_w, _pc_w, _pc_w]
 
     def _photo_cell(photo_bytes):
@@ -1724,7 +1775,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     _GREY = colors.HexColor("#E8E8E8")
 
     photo_rows = [
-        # Row 1: header â€” empty | PATIENT DETAILS | DONOR DETAILS
+        # Row 1: header â€" empty | PATIENT DETAILS | DONOR DETAILS
         [Paragraph("", info_lbl_style),
          _P("PATIENT DETAILS", F_BOLD, 11, BLACK, TA_CENTER),
          _P("DONOR DETAILS",   F_BOLD, 11, BLACK, TA_CENTER)],
@@ -1741,7 +1792,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     ]
     photo_t = Table(photo_rows, colWidths=col_w_photo)
     photo_t.setStyle(TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, -1), _GREY),          # light grey â€” whole table
+        ("BACKGROUND",    (0, 0), (-1, -1), _GREY),          # light grey â€" whole table
         ("BOX",           (0, 0), (-1, -1), 1.0, colors.white),   # thin white outer border
         ("INNERGRID",     (0, 0), (-1, -1), 1.0, colors.white),   # thin white inner grid
         ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
@@ -1756,9 +1807,9 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     ]))
     photo_t.hAlign = 'CENTER'
     elems.append(photo_t)
-    elems.append(Spacer(1, 5 * mm))
+    elems.append(Spacer(1, 1 * mm))
 
-    # â”€â”€ Relationship box â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Relationship box â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     rel_text = _clean(donor.get("relationship", ""))
     rel_para = Paragraph(
         f"<b>Relationship Of The Donor With Recipient:</b> {rel_text}",
@@ -1775,9 +1826,9 @@ def _build_cdc_report(case: dict, S: dict) -> list:
         ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
     ]))
     elems.append(rel_t)
-    elems.append(Spacer(1, 6 * mm))
+    elems.append(Spacer(1, 2 * mm))
 
-    # â”€â”€ Result section â€” kept together so DTT table never splits from its header â”€
+    # â"€â"€ Result section â€" kept together so DTT table never splits from its header â"€
     _C_RES_HDR = C_NGS_TITLE
     t_result = cdc.get("t_cell", "Negative")
     b_result = cdc.get("b_cell", "Negative")
@@ -1792,7 +1843,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     t_dtt_label = _dtt_label("t_with_dtt")
     b_dtt_label = _dtt_label("b_with_dtt")
 
-    _res_style = ParagraphStyle("_rline", fontName=F_BOLD, fontSize=10, leading=18)
+    _res_style = ParagraphStyle("_rline", fontName=F_BOLD, fontSize=10, leading=14)
 
     _dtt_total  = CONTENT_W * 0.70
     _dtt_col_w  = [_dtt_total * 0.26, _dtt_total * 0.37, _dtt_total * 0.37]
@@ -1806,7 +1857,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
                                 textColor=BLACK, alignment=TA_CENTER, leading=13)
 
     _cdc_rmk = patient.get("remarks", "").strip()
-    _row_pad  = 4 if _cdc_rmk else 7
+    _row_pad  = 4 if _cdc_rmk else 3
 
     dtt_t = Table([
         [Paragraph("<b>Cells</b>",                dtt_hdr_s),
@@ -1842,7 +1893,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
         Paragraph("<b>Result</b>", ParagraphStyle("_cdc_sec",
             fontName=F_BOLD, fontSize=14, textColor=_C_RES_HDR, leading=18,
             spaceAfter=(2 if not _cdc_rmk else 2))),
-        HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=6),
+        HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=3),
         Paragraph(
             f"<b>T cell crossmatch : </b><font color='#{t_color_hex}'><b>{t_result}</b></font>"
             f" <font color='#000000'>({t_dtt_label})</font>", _res_style),
@@ -1850,14 +1901,14 @@ def _build_cdc_report(case: dict, S: dict) -> list:
             f"<b>B cell crossmatch : </b><font color='#{b_color_hex}'><b>{b_result}</b></font>"
             f" <font color='#000000'>({b_dtt_label})</font>", _res_style),
     ] + _cdc_rmk_items + [
-        Spacer(1, 3 * mm if _cdc_rmk else 5 * mm),
+        Spacer(1, 1 * mm),
         dtt_t,
     ]))
 
-    # â”€â”€ Page break â†’ page 2 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Page break â†' page 2 â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elems.append(PageBreak())
 
-    # â”€â”€ Interpretation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Interpretation â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     _sec_style = ParagraphStyle("_cdc_sec_hdr", fontName=F_BOLD, fontSize=14,
                                  textColor=C_NGS_TITLE, leading=18, spaceAfter=2)
 
@@ -1891,9 +1942,9 @@ def _build_cdc_report(case: dict, S: dict) -> list:
         ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
     ]))
     elems.append(interp_t)
-    elems.append(Spacer(1, 8 * mm))
+    elems.append(Spacer(1, 4 * mm))
 
-    # â”€â”€ Comments â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Comments â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elems.append(Paragraph("<b>Comments</b>", _sec_style))
     elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey,
                              spaceAfter=6))
@@ -1910,15 +1961,15 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     _cdc_user_comment = str(patient.get("comments", "") or "").strip()
     if _cdc_user_comment and _cdc_user_comment.lower() not in ("nan","none","na","-","--"):
         elems.append(Paragraph(f"&#x2022; {_cdc_user_comment}", _bull_just))
-    elems.append(Spacer(1, 8 * mm))
+    elems.append(Spacer(1, 4 * mm))
 
-    # â”€â”€ Signatures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Signatures â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elems.extend(_signature_block(case.get("signatories", []), S))
 
     return elems
 
 
-# â”€â”€â”€ DSA (Donor Specific Antibody) Cross match report builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€â"€ DSA (Donor Specific Antibody) Cross match report builder â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 def _build_dsa_report(case: dict, S: dict) -> list:
     """Return story flowables for DSA Cross match report (2 pages)."""
@@ -1944,7 +1995,7 @@ def _build_dsa_report(case: dict, S: dict) -> list:
         return _title_case(_clean_display(val)) or "NA"
 
     def _raw(val):
-        """No case change â€” for PIN, sample numbers, dates."""
+        """No case change â€" for PIN, sample numbers, dates."""
         return _clean_display(val) or "NA"
 
     def _color_hex(c):
@@ -1968,7 +2019,7 @@ def _build_dsa_report(case: dict, S: dict) -> list:
 
     elems = []
 
-    # â”€â”€ Info table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Info table â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     info_lbl_style = ParagraphStyle("_dsa_lbl", fontName=F_BOLD, fontSize=10,
                                     textColor=BLACK, leading=12)
     info_val_style = ParagraphStyle("_dsa_val", fontName=F_BOLD, fontSize=10,
@@ -2008,12 +2059,12 @@ def _build_dsa_report(case: dict, S: dict) -> list:
         ("RIGHTPADDING",  (3, 0), (3, -1), 0),
         ("LEFTPADDING",   (5, 0), (5, -1), 0),
         ("RIGHTPADDING",  (5, 0), (5, -1), 2),
-        # no bottom border â€” demography table sits flush above the photo table
+        # no bottom border â€" demography table sits flush above the photo table
     ]))
     elems.append(info_t)
-    elems.append(Spacer(1, 6 * mm))
+    elems.append(Spacer(1, 4 * mm))
 
-    # â”€â”€ Photo / sample-type table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Photo / sample-type table â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     _ph_w   = 28 * mm
     _ph_h   = 30 * mm
     _pc_w   = 54 * mm
@@ -2058,9 +2109,9 @@ def _build_dsa_report(case: dict, S: dict) -> list:
     ]))
     photo_t.hAlign = 'CENTER'
     elems.append(photo_t)
-    elems.append(Spacer(1, 5 * mm))
+    elems.append(Spacer(1, 3 * mm))
 
-    # â”€â”€ Relationship box â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Relationship box â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     rel_text = _clean(donor.get("relationship", ""))
     rel_para = Paragraph(
         f"<b>Relationship Of The Donor With Recipient:</b> {rel_text}",
@@ -2077,9 +2128,9 @@ def _build_dsa_report(case: dict, S: dict) -> list:
         ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
     ]))
     elems.append(rel_t)
-    elems.append(Spacer(1, 6 * mm))
+    elems.append(Spacer(1, 4 * mm))
 
-    # â”€â”€ Detection section heading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Detection section heading â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     # Compute remarks early so it can influence padding/spacing of elements below.
     _rmk = patient.get("remarks", "").strip()
 
@@ -2092,10 +2143,10 @@ def _build_dsa_report(case: dict, S: dict) -> list:
         f"<u><b>{_det_heading}</b></u>",
         ParagraphStyle("_dsa_det", fontName=F_BOLD, fontSize=11,
                        textColor=BLACK, alignment=TA_CENTER, leading=15,
-                       spaceAfter=4 if _rmk else 8)
+                       spaceAfter=4 if _rmk else 5)
     )
 
-    # â”€â”€ DSA Results table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ DSA Results table â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     _dsa_col_w = [
         CONTENT_W * 0.30,   # Test
         CONTENT_W * 0.20,   # Result
@@ -2123,7 +2174,7 @@ def _build_dsa_report(case: dict, S: dict) -> list:
     c2_hex = _color_hex(_cdc_result_color(c2_result))
 
     dsa_data = [
-        # Header row â€” white background, black bold text
+        # Header row â€" white background, black bold text
         [Paragraph("<b>Test</b>",                                 _dsa_hdr_lL),
          Paragraph("<b>Result</b>",                               _dsa_hdr_s),
          Paragraph("<b>Mean Fluorescent\nIntensity</b>",          _dsa_hdr_s),
@@ -2146,7 +2197,7 @@ def _build_dsa_report(case: dict, S: dict) -> list:
     ]
     _rmk = patient.get("remarks", "").strip()
     # Use tighter row padding when remarks is present so the whole block fits on page 1
-    _row_pad = 4 if _rmk else 7
+    _row_pad = 4 if _rmk else 5
 
     dsa_t = Table(dsa_data, colWidths=_dsa_col_w)
     dsa_t.setStyle(TableStyle([
@@ -2171,14 +2222,14 @@ def _build_dsa_report(case: dict, S: dict) -> list:
 
     elems.append(KeepTogether([_det_para, dsa_t] + _rmk_para))
 
-    # â”€â”€ Page break â†’ page 2 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Page break â†' page 2 â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elems.append(PageBreak())
 
-    # â”€â”€ Section heading style â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Section heading style â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     _sec_style = ParagraphStyle("_dsa_sec_hdr", fontName=F_BOLD, fontSize=14,
                                  textColor=C_NGS_TITLE, leading=18, spaceAfter=2)
 
-    # â”€â”€ Comments â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Comments â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elems.append(Paragraph("<b>Comments:</b>", _sec_style))
     elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey,
                              spaceAfter=6))
@@ -2188,28 +2239,246 @@ def _build_dsa_report(case: dict, S: dict) -> list:
                                  spaceBefore=3, alignment=TA_JUSTIFY)
     for comment in DSA_COMMENTS:
         elems.append(Paragraph(f"&#x2022; {comment}", _bull_just))
-    # User-supplied additional comment â€” appended as a new bullet, same style
+    # User-supplied additional comment â€" appended as a new bullet, same style
     _dsa_user_comment = str(patient.get("comments", "") or "").strip()
     if _dsa_user_comment and _dsa_user_comment.lower() not in ("nan","none","na","-","--"):
         elems.append(Paragraph(f"&#x2022; {_dsa_user_comment}", _bull_just))
-    elems.append(Spacer(1, 8 * mm))
+    elems.append(Spacer(1, 4 * mm))
 
-    # â”€â”€ Recommendations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Recommendations â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elems.append(Paragraph("<b>Recommendations</b>", _sec_style))
     elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey,
                              spaceAfter=6))
     for rec in DSA_RECOMMENDATIONS:
         elems.append(Paragraph(f"&#x2022; {rec}", _bull_just))
-    elems.append(Spacer(1, 8 * mm))
+    elems.append(Spacer(1, 4 * mm))
 
-    # â”€â”€ Signatures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Signatures â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elems.extend(_signature_block(case.get("signatories", []), S))
 
     return elems
 
 
+# ─── Luminex SSO HLA Typing report builder ───────────────────────────────────
 
-# â”€â”€â”€ SAB (Single Antigen Bead) Assay report builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+def _build_luminex_report(case: dict, S: dict) -> list:
+    """Return story flowables for HLA Typing (Luminex/SSO) report."""
+    patient  = case.get("patient", {})
+    donors   = case.get("donors", [])
+    donor    = donors[0] if donors else {}
+    interp   = case.get("luminex_interpretation", "")
+
+    F_BOLD = _f("SegoeUI-Bold", "Helvetica-Bold")
+    F_REG  = _f("SegoeUI",      "Helvetica")
+    cw = CONTENT_W
+
+    def _norm(v): return _title_case(_clean_display(v)) or "NA"
+    def _raw(v):  return _clean_display(v) or "NA"
+    def _IL(t):   return Paragraph(f"<b>{t}</b>",
+                    ParagraphStyle("_lil", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
+    def _IV(t):   return Paragraph(_norm(t),
+                    ParagraphStyle("_liv", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
+    def _IR(t):   return Paragraph(_raw(t),
+                    ParagraphStyle("_lir", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
+    def _IC():    return Paragraph("<b>:</b>",
+                    ParagraphStyle("_lic", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
+    def _E():     return Paragraph("",
+                    ParagraphStyle("_lie", fontName=F_REG,  fontSize=10, textColor=BLACK, leading=12))
+
+    elems = []
+
+    # ── Title ──────────────────────────────────────────────────────────────────
+    _ttl_s = ParagraphStyle("_lx_ttl", fontName=F_BOLD, fontSize=20,
+                             textColor=C_NGS_TITLE, alignment=TA_CENTER, leading=26)
+    elems.append(Spacer(1, 4*mm))
+    elems.append(Paragraph("<b>HLA Typing</b>", _ttl_s))
+    elems.append(Spacer(1, 5*mm))
+
+    # ── Info table (6-row, 7-col) ──────────────────────────────────────────────
+    info_col_w = [cw*0.155, cw*0.016, cw*0.310, cw*0.020, cw*0.215, cw*0.016, cw*0.268]
+    info_rows = [
+        [_IL("Patient name"),    _IC(), _IV(patient.get("name","")),
+         _E(), _IL("Donor name"),            _IC(), _IV(donor.get("name",""))],
+        [_IL("Gender/ Age"),     _IC(), _IR(_normalize_age(patient.get("gender_age",""))),
+         _E(), _IL("Gender/ Age"),           _IC(), _IR(_normalize_age(donor.get("gender_age","")))],
+        [_IL("PIN"),             _IC(), _IR(patient.get("pin","")),
+         _E(), _IL("PIN"),                   _IC(), _IR(donor.get("pin",""))],
+        [_IL("Sample Number"),   _IC(), _IR(patient.get("sample_number","")),
+         _E(), _IL("Sample Number"),         _IC(), _IR(donor.get("sample_number",""))],
+        [_IL("Diagnosis"),       _IC(), _IV(patient.get("diagnosis","") or "NA"),
+         _E(), _IL("Sample receipt date"),   _IC(), _IR(patient.get("receipt_date",""))],
+        [_IL("Hospital/Clinic"), _IC(), _IV(patient.get("hospital_clinic","")),
+         _E(), _IL("Report date"),           _IC(), _IR(patient.get("report_date",""))],
+    ]
+    info_t = Table(info_rows, colWidths=info_col_w)
+    info_t.setStyle(TableStyle([
+        ("BACKGROUND",    (0,0), (-1,-1), C_INFO_BG),
+        ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
+        ("TOPPADDING",    (0,0), (-1,-1), 5), ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+        ("LEFTPADDING",   (0,0), (-1,-1), 4), ("RIGHTPADDING",  (0,0), (-1,-1), 2),
+        ("LEFTPADDING",   (1,0), (1,-1), 0),  ("RIGHTPADDING",  (1,0), (1,-1), 2),
+        ("LEFTPADDING",   (3,0), (3,-1), 0),  ("RIGHTPADDING",  (3,0), (3,-1), 0),
+        ("LEFTPADDING",   (5,0), (5,-1), 0),  ("RIGHTPADDING",  (5,0), (5,-1), 2),
+    ]))
+    elems.append(info_t)
+    elems.append(Spacer(1, 5*mm))
+
+    # ── Patient / Donor details block with photos ──────────────────────────────
+    _hdr_s = ParagraphStyle("_lx_hdr", fontName=F_BOLD, fontSize=10,
+                             textColor=BLACK, alignment=TA_CENTER, leading=14)
+    _det_lbl_s = ParagraphStyle("_lx_dl", fontName=F_BOLD, fontSize=10,
+                                 textColor=BLACK, leading=13)
+    _det_val_s = ParagraphStyle("_lx_dv", fontName=F_REG, fontSize=10,
+                                 textColor=BLACK, alignment=TA_CENTER, leading=13)
+
+    def _photo_cell(img_bytes):
+        if img_bytes:
+            try:
+                img = Image(io.BytesIO(img_bytes))
+                tgt_w, tgt_h = 28*mm, 35*mm
+                iw, ih = img.imageWidth, img.imageHeight
+                scale = min(tgt_w / iw, tgt_h / ih)
+                img.drawWidth  = iw * scale
+                img.drawHeight = ih * scale
+                return img
+            except Exception:
+                pass
+        return Paragraph("", _det_val_s)
+
+    det_col_w = [cw*0.22, cw*0.39, cw*0.39]
+    det_data = [
+        [Paragraph("", _hdr_s),
+         Paragraph("<b>PATIENT DETAILS</b>", _hdr_s),
+         Paragraph("<b>DONOR DETAILS</b>",   _hdr_s)],
+        [Paragraph("", _det_val_s),
+         _photo_cell(case.get("luminex_pat_photo")),
+         _photo_cell(case.get("luminex_don_photo"))],
+        [Paragraph("<b>Relation:</b>",           _det_lbl_s),
+         Paragraph(_norm(patient.get("relation","Patient")), _det_val_s),
+         Paragraph(_norm(donor.get("relation","")),          _det_val_s)],
+        [Paragraph("<b>Sample Type:</b>",        _det_lbl_s),
+         Paragraph(_norm(patient.get("sample_type","EDTA Blood")), _det_val_s),
+         Paragraph(_norm(donor.get("sample_type","EDTA Blood")),   _det_val_s)],
+        [Paragraph("<b>Date of Collection:</b>", _det_lbl_s),
+         Paragraph(_raw(patient.get("collection_date","")), _det_val_s),
+         Paragraph(_raw(donor.get("collection_date","")),   _det_val_s)],
+    ]
+    det_t = Table(det_data, colWidths=det_col_w)
+    det_t.setStyle(TableStyle([
+        ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
+        ("ALIGN",         (1,0), (-1,-1), "CENTER"),
+        ("TOPPADDING",    (0,0), (-1,-1), 4), ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+        ("LEFTPADDING",   (0,0), (-1,-1), 4), ("RIGHTPADDING",  (0,0), (-1,-1), 4),
+        ("BOX",           (0,0), (-1,-1), 0.5, colors.HexColor("#C0C0C0")),
+        ("INNERGRID",     (0,0), (-1,-1), 0.3, colors.HexColor("#E0E0E0")),
+        ("BACKGROUND",    (0,0), (-1,0),  colors.HexColor("#F2F2F2")),
+    ]))
+    elems.append(det_t)
+    elems.append(Spacer(1, 5*mm))
+
+    # ── Typing Result table ────────────────────────────────────────────────────
+    _rslt_hdr_s = ParagraphStyle("_lx_rh", fontName=F_BOLD, fontSize=13,
+                                  textColor=C_NGS_TITLE, leading=16, spaceAfter=3)
+    elems.append(Paragraph("<b>Typing Result</b>", _rslt_hdr_s))
+    elems.append(Spacer(1, 2*mm))
+
+    LOCI = ["A", "B", "C", "DRB1", "DQB1"]
+    pat_hla = patient.get("hla", {})
+    don_hla = donor.get("hla", {})
+    _th_s  = ParagraphStyle("_lx_th", fontName=F_BOLD, fontSize=10,
+                             textColor=BLACK, alignment=TA_CENTER, leading=13)
+    _td_s  = ParagraphStyle("_lx_td", fontName=F_REG,  fontSize=10,
+                             textColor=BLACK, alignment=TA_CENTER, leading=13)
+    _tsp_s = ParagraphStyle("_lx_ts", fontName=F_BOLD, fontSize=10,
+                             textColor=BLACK, alignment=TA_CENTER, leading=13)
+
+    tbl_col_w = [cw*0.155, cw*0.169, cw*0.169, cw*0.169, cw*0.169, cw*0.169]
+    hdr_row = ([Paragraph("<b>LOCUS</b>", _th_s)]
+               + [Paragraph(f"<b>HLA-{l}*</b>", _th_s) for l in LOCI])
+
+    def _pair(hla_dict, locus):
+        a = hla_dict.get(locus, ["", ""])
+        v1 = _clean_display(a[0]) if a else ""
+        v2 = _clean_display(a[1]) if len(a) > 1 else ""
+        return (v1 or "—", v2 or "—")
+
+    pat_name_d = _title_case(_clean_display(patient.get("name", ""))) or "Patient"
+    don_name_d = _title_case(_clean_display(donor.get("name",  ""))) or "Donor"
+    pat_pairs  = [_pair(pat_hla, l) for l in LOCI]
+    don_pairs  = [_pair(don_hla, l) for l in LOCI]
+
+    pat_span_row = [Paragraph(f"<b>{pat_name_d} (Patient)</b>", _tsp_s)] + [""] * 5
+    don_span_row = [Paragraph(f"<b>{don_name_d} (Donor)</b>",   _tsp_s)] + [""] * 5
+    pat_row1 = ([Paragraph("<b>HLA-CLASS\nI &amp; II</b>", _th_s)]
+                + [Paragraph(p[0], _td_s) for p in pat_pairs])
+    pat_row2 = ([Paragraph("", _td_s)]
+                + [Paragraph(p[1], _td_s) for p in pat_pairs])
+    don_row1 = ([Paragraph("<b>HLA-CLASS\nI &amp; II</b>", _th_s)]
+                + [Paragraph(p[0], _td_s) for p in don_pairs])
+    don_row2 = ([Paragraph("", _td_s)]
+                + [Paragraph(p[1], _td_s) for p in don_pairs])
+
+    tbl_data = [hdr_row, pat_span_row, pat_row1, pat_row2, don_span_row, don_row1, don_row2]
+    typing_t = Table(tbl_data, colWidths=tbl_col_w)
+    typing_t.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1,  0), C_HLA_HDR),
+        ("BACKGROUND",    (0, 1), (-1,  1), C_HLA_HDR),
+        ("SPAN",          (0, 1), (-1,  1)),
+        ("BACKGROUND",    (0, 2), (-1,  3), C_HLA_ROW),
+        ("BACKGROUND",    (0, 4), (-1,  4), C_HLA_HDR),
+        ("SPAN",          (0, 4), (-1,  4)),
+        ("BACKGROUND",    (0, 5), (-1,  6), C_HLA_ROW),
+        ("INNERGRID",     (0, 0), (-1, -1), 0.5, colors.HexColor("#C0C0C0")),
+        ("BOX",           (0, 0), (-1, -1), 0.8, BLACK),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    elems.append(typing_t)
+
+    # ── Page 2: Interpretation · Test Details · Disclaimer · References · Sigs
+    elems.append(PageBreak())
+
+    _sec_s  = ParagraphStyle("_lx_sec", fontName=F_BOLD, fontSize=13,
+                              textColor=C_NGS_TITLE, leading=16, spaceAfter=2)
+    _body_s = ParagraphStyle("_lx_bdy", fontName=F_REG,  fontSize=10,
+                              leading=14, alignment=TA_JUSTIFY)
+    _ref_s  = ParagraphStyle("_lx_ref", fontName=F_REG,  fontSize=9,
+                              leading=13, leftIndent=14, firstLineIndent=-14, spaceBefore=2)
+
+    elems.append(Paragraph("<b>Interpretation</b>", _sec_s))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=4))
+    _interp_text = _clean_display(interp) or ""
+    if _interp_text:
+        elems.append(Paragraph(_interp_text, _body_s))
+    elems.append(Spacer(1, 4*mm))
+
+    elems.append(Paragraph("<b>Test Details</b>", _sec_s))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=4))
+    for _para in LUMINEX_TEST_DETAILS:
+        elems.append(Paragraph(_para, _body_s))
+    elems.append(Spacer(1, 4*mm))
+
+    elems.append(Paragraph("<b>Disclaimer</b>", _sec_s))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=4))
+    elems.append(Paragraph(LUMINEX_DISCLAIMER, _body_s))
+    elems.append(Spacer(1, 4*mm))
+
+    elems.append(Paragraph("<b>Reference</b>", _sec_s))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=4))
+    for _i, _ref in enumerate(LUMINEX_REFERENCES, 1):
+        elems.append(Paragraph(f"{_i}.{_ref}", _ref_s))
+    elems.append(Spacer(1, 6*mm))
+
+    sig_items = _signature_block(case.get("signatories", []), S)
+    if sig_items:
+        elems.append(KeepTogether(sig_items))
+
+    return elems
+
+
+# ─── SAB (Single Antigen Bead) Assay report builder ───────────────────────────
 
 def _build_sab_report(case: dict, S: dict) -> list:
     """Return story flowables for SAB Class I (or II) report."""
@@ -2236,7 +2505,7 @@ def _build_sab_report(case: dict, S: dict) -> list:
 
     elems = []
 
-    # â”€â”€ Info table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Info table â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     cw = CONTENT_W
     # col: [lbl_L, colon_L, val_L, GAP, lbl_R, colon_R, val_R]  sum=1.000
     info_col_w = [cw*0.167, cw*0.016, cw*0.340, cw*0.020, cw*0.225, cw*0.016, cw*0.216]
@@ -2267,7 +2536,7 @@ def _build_sab_report(case: dict, S: dict) -> list:
     elems.append(info_t)
     elems.append(Spacer(1, 5*mm))
 
-    # â”€â”€ "Test Report" title + bordered test name box â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ "Test Report" title + bordered test name box â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     _title_s = ParagraphStyle("_sab_ttl", fontName=F_BOLD, fontSize=14,
                                textColor=C_NGS_TITLE, alignment=TA_CENTER, leading=18)
     elems.append(Paragraph("<b>Test Report</b>", _title_s))
@@ -2287,7 +2556,7 @@ def _build_sab_report(case: dict, S: dict) -> list:
     elems.append(_name_box)
     elems.append(Spacer(1, 5*mm))
 
-    # â”€â”€ Section styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Section styles â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     _sec_s  = ParagraphStyle("_sab_sec",  fontName=F_BOLD, fontSize=13,
                               textColor=C_SAB_HEADING, leading=16, spaceAfter=2)
     _body_s = ParagraphStyle("_sab_bdy",  fontName=F_REG,  fontSize=10,
@@ -2295,35 +2564,35 @@ def _build_sab_report(case: dict, S: dict) -> list:
     _bull_s = ParagraphStyle("_sab_bul",  fontName=F_REG,  fontSize=10,
                               leading=14, spaceBefore=2)
 
-    # â”€â”€ Methodology â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Methodology â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elems.append(Paragraph("<b>Methodology</b>", _sec_s))
     elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=4))
     elems.append(Paragraph(SAB_METHODOLOGY, _body_s))
     elems.append(Spacer(1, 4*mm))
 
-    # â”€â”€ Interpretation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Interpretation â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elems.append(Paragraph("<b>Interpretation</b>", _sec_s))
     elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=4))
     elems.append(Paragraph(SAB_INTERPRETATION, _body_s))
     elems.append(Spacer(1, 4*mm))
 
-    # â”€â”€ Comments â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Comments â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elems.append(Paragraph("<b>Comments</b>", _sec_s))
     elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=4))
     for i, c in enumerate(SAB_COMMENTS_LIST, 1):
         elems.append(Paragraph(f"{i}. {c}", _bull_s))
 
-    # â”€â”€ Remarks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Remarks â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     _rmk = _clean_display(patient.get("remarks", ""))
-    if _rmk and _rmk != "â€”":
+    if _rmk and _rmk != "—":
         elems.append(Spacer(1, 4*mm))
         _rmk_s = ParagraphStyle("_sab_rmk", fontName=F_BOLD, fontSize=10, leading=14)
         elems.append(Paragraph(f"<b>Remarks:</b> {_rmk}", _rmk_s))
 
-    # â”€â”€ Page break -> allele result pages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Page break -> allele result pages â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elems.append(PageBreak())
 
-    # â”€â”€ Allele tables â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Allele tables â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     high_alleles = [(a, m) for a, m in alleles if int(m) >= 1000]
     low_alleles  = [(a, m) for a, m in alleles if int(m) <  1000]
 
@@ -2378,7 +2647,7 @@ def _build_sab_report(case: dict, S: dict) -> list:
     else:
         elems.append(Paragraph("No antibodies detected with MFI < 1000.", _td_s))
 
-    # â”€â”€ Chart page (optional) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Chart page (optional) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     if chart_b:
         elems.append(PageBreak())
         _ct_s = ParagraphStyle("_sab_ct", fontName=F_BOLD, fontSize=12,
@@ -2395,7 +2664,7 @@ def _build_sab_report(case: dict, S: dict) -> list:
         except Exception:
             pass
 
-    # â”€â”€ Last page: comments box + limitations + signatures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Last page: comments box + limitations + signatures â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elems.append(PageBreak())
 
     _cb_lbl_s  = ParagraphStyle("_sab_cbl", fontName=F_BOLD, fontSize=10, leading=14)
@@ -2437,7 +2706,7 @@ def _build_sab_report(case: dict, S: dict) -> list:
     return elems
 
 
-# â”€â”€â”€ Flow Cytometry Cross match report builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€â"€ Flow Cytometry Cross match report builder â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 def _build_flow_report(case: dict, S: dict) -> list:
     """Return story flowables for Flow Cytometry Crossmatch report (2 pages)."""
@@ -2550,7 +2819,7 @@ def _build_flow_report(case: dict, S: dict) -> list:
     ]))
     photo_t.hAlign = "CENTER"
     elems.append(photo_t)
-    elems.append(Spacer(1, 4*mm))
+    elems.append(Spacer(1, 2*mm))
 
     # ── Relationship box ──────────────────────────────────────────────────────
     _rel = _norm(donor.get("relationship", ""))
@@ -2565,14 +2834,14 @@ def _build_flow_report(case: dict, S: dict) -> list:
             ("BOTTOMPADDING", (0,0), (-1,-1), 5),
         ]))
         elems.append(_rel_t)
-        elems.append(Spacer(1, 5*mm))
+        elems.append(Spacer(1, 2*mm))
 
     # ── "Flowcytometry Cross match for T & B Lymphocytes" section title ───────
     _section_title_s = ParagraphStyle("_fst", fontName=F_BOLD, fontSize=16,
                                        textColor=C_NGS_TITLE, alignment=TA_CENTER, leading=20)
     elems.append(Paragraph("<b>Flowcytometry Cross match for T &amp; B Lymphocytes</b>",
                             _section_title_s))
-    elems.append(Spacer(1, 4*mm))
+    elems.append(Spacer(1, 2*mm))
 
     # ── 4-column results table ────────────────────────────────────────────────
     t_antibody    = flow.get("t_antibody", "T-CELLS (CD3)")
@@ -2679,7 +2948,7 @@ def _build_flow_report(case: dict, S: dict) -> list:
             f"<font color='#{t_col}'>{t_interp}</font> for T cells and "
             f"<font color='#{b_col}'>{b_interp}</font> for B cells.",
             _body_s))
-    elems.append(Spacer(1, 5*mm))
+    elems.append(Spacer(1, 3*mm))
 
     # ── Comments ──────────────────────────────────────────────────────────────
     elems.append(Paragraph("<b>Comments</b>", _head_l_s))
@@ -2691,14 +2960,14 @@ def _build_flow_report(case: dict, S: dict) -> list:
         elems.append(Paragraph(f"\u2022 {_flow_user_comment}",
             ParagraphStyle("_fuc", fontName=F_REG, fontSize=10, leading=14, spaceBefore=3,
                            leftIndent=18, firstLineIndent=-10, alignment=TA_JUSTIFY)))
-    elems.append(Spacer(1, 5*mm))
+    elems.append(Spacer(1, 3*mm))
 
     # ── Disclaimer ────────────────────────────────────────────────────────────
     elems.append(Paragraph("<b>Disclaimer</b>", _head_l_s))
     elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=6))
     for d in FLOW_DISCLAIMER:
         elems.append(Paragraph(f"&#x2022; {d}", _num_s))
-    elems.append(Spacer(1, 8*mm))
+    elems.append(Spacer(1, 4*mm))
 
     # ── Signatures ────────────────────────────────────────────────────────────
     elems.extend(_signature_block(case.get("signatories", []), S))
@@ -2731,6 +3000,7 @@ def generate_pdf(case: dict, output_path: str) -> str:
         "sab_class1":       "",
         "sab_class2":       "",
         "flow_crossmatch":  "Flow Cytometry Cross match",
+        "luminex_typing":   "",
     }
     title = TITLES.get(report_type, "HLA Typing Report")
 
@@ -2754,12 +3024,16 @@ def generate_pdf(case: dict, output_path: str) -> str:
 
     top_margin    = MARGIN_T + banner_h + 4 * mm
     _PAGE_NUM_AREA = 4 * mm
+    # CDC/DSA result tables sit at the very bottom of page 1; add extra clearance so
+    # the last table row doesn't land inside the ITdose QR overlay zone.
+    # Paired with -6 mm spacer trims inside the builders so the page still fits.
+    _cdc_dsa_extra = 6 * mm if report_type in ("cdc_crossmatch", "dsa_crossmatch") else 0
     # QR_ZONE: blank strip above footer+page-number reserved for external QR-code overlay
-    bottom_margin = MARGIN_B + footer_h + _PAGE_NUM_AREA + 2 * mm + QR_ZONE
+    bottom_margin = MARGIN_B + footer_h + _PAGE_NUM_AREA + 2 * mm + QR_ZONE + _cdc_dsa_extra
 
     doc = SimpleDocTemplate(
         output_path,
-        pagesize=A4,
+        pagesize=letter,
         leftMargin=MARGIN_L, rightMargin=MARGIN_R,
         topMargin=top_margin,
         bottomMargin=bottom_margin,
@@ -2780,6 +3054,8 @@ def generate_pdf(case: dict, output_path: str) -> str:
         body = _build_sab_report(case, S)
     elif report_type == "flow_crossmatch":
         body = _build_flow_report(case, S)
+    elif report_type == "luminex_typing":
+        body = _build_luminex_report(case, S)
     else:
         body = _build_ngs_single(case, S)
 
@@ -2807,7 +3083,8 @@ def make_filename(case: dict) -> str:
     )
     rtype = {"single_hla": "HLA_NGS", "transplant_donor": "HLA_NGS",
              "rpl_couple": "RPL", "cdc_crossmatch": "CDC",
-             "dsa_crossmatch": "DSA", "sab_class1": "SAB_C1", "sab_class2": "SAB_C2", "flow_crossmatch": "FLOW"}.get(case.get("report_type", ""), "HLA")
+             "dsa_crossmatch": "DSA", "sab_class1": "SAB_C1", "sab_class2": "SAB_C2",
+             "flow_crossmatch": "FLOW", "luminex_typing": "HLA_LUMINEX"}.get(case.get("report_type", ""), "HLA")
     logo  = "WITH_LOGO" if case.get("with_logo", True) else "WITHOUT_LOGO"
     parts = [p] + ([donors] if donors else []) + [rtype, logo]
     return "_".join(parts) + ".pdf"

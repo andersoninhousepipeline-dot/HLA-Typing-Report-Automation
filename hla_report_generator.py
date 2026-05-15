@@ -126,6 +126,11 @@ REPORT_TEMPLATES = [
         "report_type":  "flow_crossmatch",
         "default_path": os.path.join(_TEMPLATE_DIR, ""),
     },
+    {
+        "name":         "HLA Typing (Luminex)",
+        "report_type":  "luminex_typing",
+        "default_path": os.path.join(_TEMPLATE_DIR, ""),
+    },
 ]
 TEMPLATE_NAMES    = [t["name"]        for t in REPORT_TEMPLATES]
 TEMPLATE_TO_RTYPE = {t["name"]:        t["report_type"] for t in REPORT_TEMPLATES}
@@ -471,6 +476,7 @@ class HLAReportGeneratorApp(QMainWindow):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setMinimumHeight(0)   # allow shrinking so draft/gen buttons always show
         scroll_widget = QWidget()
         scroll_layout = QVBoxLayout()
         scroll_layout.setSpacing(2)
@@ -1021,6 +1027,136 @@ class HLAReportGeneratorApp(QMainWindow):
         scroll_layout.addWidget(_flow_res_group)
         _flow_res_group.setVisible(False)
 
+        # ── Luminex Patient Information ───────────────────────────────────────
+        self._lx_pat_f = {}
+        self._lx_pat_photo_bytes = None
+        _lx_pat_group = QGroupBox("Patient Information")
+        self._lx_pat_group = _lx_pat_group
+        _lpf = QFormLayout(); _lx_pat_group.setLayout(_lpf)
+        _lpf.setSpacing(1); _lpf.setContentsMargins(4, 2, 4, 2)
+        _LX_PAT_FIELDS = [
+            ("patient_name",    "Patient Name *",         ""),
+            ("gender_age",      "Gender / Age",           ""),
+            ("pin",             "PIN *",                  ""),
+            ("sample_number",   "Sample Number",          ""),
+            ("diagnosis",       "Diagnosis",              "NA"),
+            ("hospital_clinic", "Hospital / Clinic",      ""),
+            ("receipt_date",    "Sample Receipt Date",    ""),
+            ("report_date",     "Report Date",            ""),
+            ("relation",        "Relation",               "Patient"),
+            ("sample_type",     "Sample Type",            "EDTA Blood"),
+            ("collection_date", "Date of Collection",     ""),
+        ]
+        for _k, _l, _d in _LX_PAT_FIELDS:
+            _w = QLineEdit(_d); _w.setMaximumHeight(24)
+            if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
+            self._lx_pat_f[_k] = _w
+            _lpf.addRow(_l + ":", _w)
+            _w.textChanged.connect(self._on_manual_field_debounced)
+        _lx_pp_row = QHBoxLayout()
+        self._lx_pat_photo_lbl = QLabel("No photo selected")
+        self._lx_pat_photo_lbl.setStyleSheet("color:gray;font-style:italic;")
+        _lx_pp_btn = QPushButton("Upload Patient Photo"); _lx_pp_btn.setMaximumHeight(26)
+        def _upload_lx_pat_photo():
+            path, _ = QFileDialog.getOpenFileName(self, "Select Patient Photo",
+                str(Path.home()), "Images (*.png *.jpg *.jpeg *.bmp *.tiff)")
+            if path:
+                with open(path, "rb") as fh: self._lx_pat_photo_bytes = fh.read()
+                self._lx_pat_photo_lbl.setText(os.path.basename(path))
+                self._on_manual_field_debounced()
+        _lx_pp_btn.clicked.connect(_upload_lx_pat_photo)
+        _lx_pp_row.addWidget(self._lx_pat_photo_lbl, 1); _lx_pp_row.addWidget(_lx_pp_btn)
+        _lpf.addRow("Patient Photo:", _lx_pp_row)
+        self._lx_nabl_chk = QCheckBox("NABL Accreditation")
+        self._lx_nabl_chk.setChecked(self.qsettings.value("nabl_stamp", True, type=bool))
+        self._lx_nabl_chk.stateChanged.connect(self._on_manual_field_debounced)
+        self._lx_seal_chk = QCheckBox("Signature Seal")
+        self._lx_seal_chk.setChecked(self.qsettings.value("sig_stamp", True, type=bool))
+        self._lx_seal_chk.stateChanged.connect(self._on_manual_field_debounced)
+        _lpf.addRow(self._lx_nabl_chk)
+        _lpf.addRow(self._lx_seal_chk)
+        scroll_layout.addWidget(_lx_pat_group)
+        _lx_pat_group.setVisible(False)
+
+        # ── Luminex Donor Information ─────────────────────────────────────────
+        self._lx_don_f = {}
+        self._lx_don_photo_bytes = None
+        _lx_don_group = QGroupBox("Donor Information")
+        self._lx_don_group = _lx_don_group
+        _ldf = QFormLayout(); _lx_don_group.setLayout(_ldf)
+        _ldf.setSpacing(1); _ldf.setContentsMargins(4, 2, 4, 2)
+        _LX_DON_FIELDS = [
+            ("name",            "Donor Name *",           ""),
+            ("gender_age",      "Gender / Age",           ""),
+            ("pin",             "PIN",                    ""),
+            ("sample_number",   "Sample Number",          ""),
+            ("relation",        "Relation",               ""),
+            ("sample_type",     "Sample Type",            "EDTA Blood"),
+            ("collection_date", "Date of Collection",     ""),
+        ]
+        for _k, _l, _d in _LX_DON_FIELDS:
+            _w = QLineEdit(_d); _w.setMaximumHeight(24)
+            if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
+            self._lx_don_f[_k] = _w
+            _ldf.addRow(_l + ":", _w)
+            _w.textChanged.connect(self._on_manual_field_debounced)
+        _lx_dp_row = QHBoxLayout()
+        self._lx_don_photo_lbl = QLabel("No photo selected")
+        self._lx_don_photo_lbl.setStyleSheet("color:gray;font-style:italic;")
+        _lx_dp_btn = QPushButton("Upload Donor Photo"); _lx_dp_btn.setMaximumHeight(26)
+        def _upload_lx_don_photo():
+            path, _ = QFileDialog.getOpenFileName(self, "Select Donor Photo",
+                str(Path.home()), "Images (*.png *.jpg *.jpeg *.bmp *.tiff)")
+            if path:
+                with open(path, "rb") as fh: self._lx_don_photo_bytes = fh.read()
+                self._lx_don_photo_lbl.setText(os.path.basename(path))
+                self._on_manual_field_debounced()
+        _lx_dp_btn.clicked.connect(_upload_lx_don_photo)
+        _lx_dp_row.addWidget(self._lx_don_photo_lbl, 1); _lx_dp_row.addWidget(_lx_dp_btn)
+        _ldf.addRow("Donor Photo:", _lx_dp_row)
+        scroll_layout.addWidget(_lx_don_group)
+        _lx_don_group.setVisible(False)
+
+        # ── Luminex HLA Alleles ───────────────────────────────────────────────
+        _lx_hla_group = QGroupBox("HLA Alleles  (Patient left · Donor right per locus)")
+        self._lx_hla_group = _lx_hla_group
+        _lhf = QFormLayout(); _lx_hla_group.setLayout(_lhf)
+        _lhf.setSpacing(1); _lhf.setContentsMargins(4, 2, 4, 2)
+        self._lx_pat_hla = {}  # {locus: [w1, w2]}
+        self._lx_don_hla = {}
+        for _locus in HLA_LOCI:
+            _row_w = QWidget(); _row_l = QHBoxLayout(_row_w)
+            _row_l.setContentsMargins(0,0,0,0); _row_l.setSpacing(4)
+            _pa1 = QLineEdit(); _pa1.setFixedWidth(72); _pa1.setFixedHeight(22)
+            _pa2 = QLineEdit(); _pa2.setFixedWidth(72); _pa2.setFixedHeight(22)
+            _sep = QLabel("|"); _sep.setStyleSheet("color:gray;")
+            _da1 = QLineEdit(); _da1.setFixedWidth(72); _da1.setFixedHeight(22)
+            _da2 = QLineEdit(); _da2.setFixedWidth(72); _da2.setFixedHeight(22)
+            _row_l.addWidget(_pa1); _row_l.addWidget(_pa2)
+            _row_l.addWidget(_sep)
+            _row_l.addWidget(_da1); _row_l.addWidget(_da2); _row_l.addStretch()
+            for _ew in (_pa1, _pa2, _da1, _da2):
+                _ew.textChanged.connect(self._on_manual_field_debounced)
+            self._lx_pat_hla[_locus] = [_pa1, _pa2]
+            self._lx_don_hla[_locus] = [_da1, _da2]
+            _lhf.addRow(f"{_locus}:", _row_w)
+        scroll_layout.addWidget(_lx_hla_group)
+        _lx_hla_group.setVisible(False)
+
+        # ── Luminex Interpretation ────────────────────────────────────────────
+        _lx_interp_group = QGroupBox("Interpretation")
+        self._lx_interp_group = _lx_interp_group
+        _lif = QVBoxLayout(); _lx_interp_group.setLayout(_lif)
+        _lif.setContentsMargins(4, 2, 4, 2)
+        self._lx_interp_edit = QTextEdit()
+        self._lx_interp_edit.setPlaceholderText(
+            "e.g. The HLA typing shows 5/10 match with the donor.")
+        self._lx_interp_edit.setFixedHeight(72)
+        self._lx_interp_edit.textChanged.connect(self._on_manual_field_debounced)
+        _lif.addWidget(self._lx_interp_edit)
+        scroll_layout.addWidget(_lx_interp_group)
+        _lx_interp_group.setVisible(False)
+
         # ── Patient HLA Results ────────────────────────────────────────────────
         hla_group = QGroupBox("HLA Results — Patient")
         self._std_hla_group = hla_group   # ref for show/hide
@@ -1463,6 +1599,48 @@ class HLAReportGeneratorApp(QMainWindow):
                 "interpretation":   rf["interpretation"].text().strip()   if "interpretation"   in rf else "",
             }
 
+        # Attach Luminex-specific fields
+        if rtype == "luminex_typing":
+            pf = getattr(self, "_lx_pat_f", {})
+            df = getattr(self, "_lx_don_f", {})
+            def _tv(d, k, default=""): return d[k].text().strip() if k in d else default
+            patient = {
+                "name":            _tv(pf, "patient_name"),
+                "gender_age":      _tv(pf, "gender_age"),
+                "pin":             _tv(pf, "pin"),
+                "sample_number":   _tv(pf, "sample_number"),
+                "diagnosis":       _tv(pf, "diagnosis") or "NA",
+                "hospital_clinic": _tv(pf, "hospital_clinic"),
+                "receipt_date":    _tv(pf, "receipt_date"),
+                "report_date":     _tv(pf, "report_date"),
+                "relation":        _tv(pf, "relation") or "Patient",
+                "sample_type":     _tv(pf, "sample_type") or "EDTA Blood",
+                "collection_date": _tv(pf, "collection_date"),
+                "hla": {locus: [w.text().strip() for w in ws]
+                        for locus, ws in getattr(self, "_lx_pat_hla", {}).items()},
+                "hla_c_type": "", "_join_key": _tv(pf, "pin"),
+                "_has_insufficient_hla": False,
+            }
+            lx_donor = {
+                "name":            _tv(df, "name"),
+                "gender_age":      _tv(df, "gender_age"),
+                "pin":             _tv(df, "pin"),
+                "sample_number":   _tv(df, "sample_number"),
+                "relation":        _tv(df, "relation"),
+                "sample_type":     _tv(df, "sample_type") or "EDTA Blood",
+                "collection_date": _tv(df, "collection_date"),
+                "hla": {locus: [w.text().strip() for w in ws]
+                        for locus, ws in getattr(self, "_lx_don_hla", {}).items()},
+                "hla_c_type": "", "_join_key": "", "_has_insufficient_hla": False,
+            }
+            nabl      = self._lx_nabl_chk.isChecked() if hasattr(self, "_lx_nabl_chk") else nabl
+            sig_stamp = self._lx_seal_chk.isChecked() if hasattr(self, "_lx_seal_chk") else sig_stamp
+            case = self._build_case(rtype, nabl, with_logo, sig_stamp, patient, [lx_donor])
+            _lx_ie = getattr(self, "_lx_interp_edit", None)
+            case["luminex_interpretation"] = _lx_ie.toPlainText().strip() if _lx_ie else ""
+            case["luminex_pat_photo"] = getattr(self, "_lx_pat_photo_bytes", None)
+            case["luminex_don_photo"] = getattr(self, "_lx_don_photo_bytes", None)
+
         self._apply_sig_name_overrides(case, self._manual_sig_name_overrides)
         return case
 
@@ -1476,13 +1654,22 @@ class HLAReportGeneratorApp(QMainWindow):
         elif rtype == "dsa_crossmatch":
             name = self._dsa_pat_f.get("patient_name", QLineEdit()).text().strip() if hasattr(self, "_dsa_pat_f") else ""
             pin  = self._dsa_pat_f.get("pin",           QLineEdit()).text().strip() if hasattr(self, "_dsa_pat_f") else ""
+        elif rtype in ("sab_class1", "sab_class2"):
+            name = self._sab_pat_f.get("patient_name", QLineEdit()).text().strip() if hasattr(self, "_sab_pat_f") else ""
+            pin  = self._sab_pat_f.get("pin",           QLineEdit()).text().strip() if hasattr(self, "_sab_pat_f") else ""
+        elif rtype == "flow_crossmatch":
+            name = self._flow_pat_f.get("patient_name", QLineEdit()).text().strip() if hasattr(self, "_flow_pat_f") else ""
+            pin  = self._flow_pat_f.get("pin",           QLineEdit()).text().strip() if hasattr(self, "_flow_pat_f") else ""
+        elif rtype == "luminex_typing":
+            name = self._lx_pat_f.get("patient_name", QLineEdit()).text().strip() if hasattr(self, "_lx_pat_f") else ""
+            pin  = self._lx_pat_f.get("pin",           QLineEdit()).text().strip() if hasattr(self, "_lx_pat_f") else ""
         else:
             name = self.f["patient_name"].text().strip()
             pin  = self.f["pin"].text().strip()
         if not name:
             QMessageBox.warning(self, "Missing Fields", "Patient Name is required.")
             return
-        if not pin and rtype not in ("cdc_crossmatch", "dsa_crossmatch"):
+        if not pin and rtype not in ("cdc_crossmatch", "dsa_crossmatch", "sab_class1", "sab_class2", "flow_crossmatch", "luminex_typing"):
             QMessageBox.warning(self, "Missing Fields", "PIN is required.")
             return
         out_dir = self.manual_output_label.text()
@@ -1551,7 +1738,7 @@ class HLAReportGeneratorApp(QMainWindow):
         try:
             case = self._collect_manual_case()
             _rtype_preview = case.get("report_type", "single_hla")
-            _NO_HLA_TYPES = ("cdc_crossmatch", "dsa_crossmatch", "flow_crossmatch", "sab_class1", "sab_class2")
+            _NO_HLA_TYPES = ("cdc_crossmatch", "dsa_crossmatch", "flow_crossmatch", "sab_class1", "sab_class2", "luminex_typing")
             if _rtype_preview not in _NO_HLA_TYPES and _has_insufficient_data(case.get("patient", {})):
                 return
             self._start_manual_preview(case)
@@ -1582,12 +1769,15 @@ class HLAReportGeneratorApp(QMainWindow):
         rtype = TEMPLATE_TO_RTYPE.get(self._manual_rtype_combo.currentText(), "single_hla")
         is_cdc = rtype == "cdc_crossmatch"
         is_dsa = rtype == "dsa_crossmatch"
-        # Standard form groups — hidden for CDC, DSA and SAB
+        # Standard form groups — hidden for CDC, DSA, SAB, and Luminex
         is_sab_check  = rtype in ("sab_class1", "sab_class2")
         is_flow_check = rtype == "flow_crossmatch"
+        is_lx_check   = rtype == "luminex_typing"
         for _grp in ("_std_pat_group", "_std_hla_group", "_std_donors_outer"):
             if hasattr(self, _grp):
-                getattr(self, _grp).setVisible(not is_cdc and not is_dsa and not is_sab_check and not is_flow_check)
+                getattr(self, _grp).setVisible(
+                    not is_cdc and not is_dsa and not is_sab_check
+                    and not is_flow_check and not is_lx_check)
         # RPL reference — only for rpl_couple, only within standard form
         self._manual_rpl_group.setVisible(rtype == "rpl_couple")
         # CDC form groups — only for CDC
@@ -1603,11 +1793,21 @@ class HLAReportGeneratorApp(QMainWindow):
         for _grp in ("_sab_pat_group", "_sab_allele_group"):
             if hasattr(self, _grp):
                 getattr(self, _grp).setVisible(is_sab)
+        if is_sab and hasattr(self, "_sab_class_combo"):
+            _auto_cls = "II" if rtype == "sab_class2" else "I"
+            self._sab_class_combo.blockSignals(True)
+            self._sab_class_combo.setCurrentText(_auto_cls)
+            self._sab_class_combo.blockSignals(False)
         # Flow form groups — only for Flow
         is_flow = rtype == "flow_crossmatch"
         for _grp in ("_flow_pat_group", "_flow_don_group", "_flow_res_group"):
             if hasattr(self, _grp):
                 getattr(self, _grp).setVisible(is_flow)
+        # Luminex form groups — only for Luminex
+        is_lx = rtype == "luminex_typing"
+        for _grp in ("_lx_pat_group", "_lx_don_group", "_lx_hla_group", "_lx_interp_group"):
+            if hasattr(self, _grp):
+                getattr(self, _grp).setVisible(is_lx)
 
     def _upload_cdc_photo(self, who: str):
         """Open file dialog for CDC patient/donor photo upload."""
@@ -2451,6 +2651,11 @@ class HLAReportGeneratorApp(QMainWindow):
             self._rebuild_bulk_flow_editor(idx, case, pat_group, meta_group)
             return
 
+        # ── Luminex branch ───────────────────────────────────────────────────
+        if case.get("report_type") == "luminex_typing":
+            self._rebuild_bulk_luminex_editor(idx, case, pat_group, meta_group)
+            return
+
         # ── CDC Cross match branch — separate form for CDC reports ───────────
         if case.get("report_type") == "cdc_crossmatch":
             self._rebuild_bulk_cdc_editor(idx, case, pat_group, meta_group)
@@ -3164,6 +3369,145 @@ class HLAReportGeneratorApp(QMainWindow):
 
         QTimer.singleShot(200, self._refresh_bulk_preview)
 
+    # ── Bulk Luminex editor builder ───────────────────────────────────────────
+    def _rebuild_bulk_luminex_editor(self, idx, case, _old_pat_group, meta_group):
+        """Build Luminex-specific editor form inside the bulk editor scroll area."""
+        p   = case["patient"]
+        don = case["donors"][0] if case.get("donors") else {}
+        self._bulk_lx_pat_f       = {}
+        self._bulk_lx_don_f       = {}
+        self._bulk_lx_pat_hla     = {}
+        self._bulk_lx_don_hla     = {}
+        self._bulk_lx_pat_photo   = case.get("luminex_pat_photo")
+        self._bulk_lx_don_photo   = case.get("luminex_don_photo")
+
+        lx_pat_grp = QGroupBox("Patient Information")
+        lpf = QFormLayout(); lx_pat_grp.setLayout(lpf)
+        lpf.setSpacing(1); lpf.setContentsMargins(4, 2, 4, 2)
+        for key, lbl, dflt in [
+            ("patient_name",    "Patient Name *",      ""),
+            ("gender_age",      "Gender / Age",        ""),
+            ("pin",             "PIN",                 ""),
+            ("sample_number",   "Sample Number",       ""),
+            ("diagnosis",       "Diagnosis",           "NA"),
+            ("hospital_clinic", "Hospital / Clinic",   ""),
+            ("receipt_date",    "Sample Receipt Date", ""),
+            ("report_date",     "Report Date",         ""),
+            ("relation",        "Relation",            "Patient"),
+            ("sample_type",     "Sample Type",         "EDTA Blood"),
+            ("collection_date", "Date of Collection",  ""),
+        ]:
+            src_key = "name" if key == "patient_name" else key
+            w = QLineEdit(str(p.get(src_key, dflt) or dflt))
+            w.setFixedHeight(24)
+            if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
+            w.textChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_lx_pat_f[key] = w
+            lpf.addRow(lbl + ":", w)
+        _nabl_default = case.get("nabl", self.qsettings.value("nabl_stamp", True, type=bool))
+        self._bulk_lx_nabl_chk = QCheckBox("NABL Accreditation")
+        self._bulk_lx_nabl_chk.setChecked(_nabl_default)
+        self._bulk_lx_nabl_chk.stateChanged.connect(self._on_bulk_field_debounced)
+        lpf.addRow(self._bulk_lx_nabl_chk)
+        _pp_row = QHBoxLayout()
+        _pp_lbl = QLabel("No photo" if not self._bulk_lx_pat_photo else "Photo loaded")
+        _pp_lbl.setStyleSheet("color:gray;font-style:italic;")
+        _pp_btn = QPushButton("Patient Photo"); _pp_btn.setMaximumHeight(24)
+        def _load_pp():
+            path, _ = QFileDialog.getOpenFileName(self, "Patient Photo", str(Path.home()),
+                                                  "Images (*.png *.jpg *.jpeg *.bmp *.tiff)")
+            if path:
+                with open(path, "rb") as fh: self._bulk_lx_pat_photo = fh.read()
+                _pp_lbl.setText(os.path.basename(path)); self._on_bulk_field_debounced()
+        _pp_btn.clicked.connect(_load_pp)
+        _pp_row.addWidget(_pp_lbl, 1); _pp_row.addWidget(_pp_btn)
+        lpf.addRow("Patient Photo:", _pp_row)
+
+        lx_don_grp = QGroupBox("Donor Information")
+        ldf = QFormLayout(); lx_don_grp.setLayout(ldf)
+        ldf.setSpacing(1); ldf.setContentsMargins(4, 2, 4, 2)
+        for key, lbl, dflt in [
+            ("name",            "Donor Name *",        ""),
+            ("gender_age",      "Gender / Age",        ""),
+            ("pin",             "PIN",                 ""),
+            ("sample_number",   "Sample Number",       ""),
+            ("relation",        "Relation",            ""),
+            ("sample_type",     "Sample Type",         "EDTA Blood"),
+            ("collection_date", "Date of Collection",  ""),
+        ]:
+            w = QLineEdit(str(don.get(key, dflt) or dflt))
+            w.setFixedHeight(24)
+            if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
+            w.textChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_lx_don_f[key] = w
+            ldf.addRow(lbl + ":", w)
+        _dp_row = QHBoxLayout()
+        _dp_lbl = QLabel("No photo" if not self._bulk_lx_don_photo else "Photo loaded")
+        _dp_lbl.setStyleSheet("color:gray;font-style:italic;")
+        _dp_btn = QPushButton("Donor Photo"); _dp_btn.setMaximumHeight(24)
+        def _load_dp():
+            path, _ = QFileDialog.getOpenFileName(self, "Donor Photo", str(Path.home()),
+                                                  "Images (*.png *.jpg *.jpeg *.bmp *.tiff)")
+            if path:
+                with open(path, "rb") as fh: self._bulk_lx_don_photo = fh.read()
+                _dp_lbl.setText(os.path.basename(path)); self._on_bulk_field_debounced()
+        _dp_btn.clicked.connect(_load_dp)
+        _dp_row.addWidget(_dp_lbl, 1); _dp_row.addWidget(_dp_btn)
+        ldf.addRow("Donor Photo:", _dp_row)
+
+        pat_hla = p.get("hla", {})
+        don_hla = don.get("hla", {})
+        lx_hla_grp = QGroupBox("HLA Alleles  (Patient | Donor per locus)")
+        lhf = QFormLayout(); lx_hla_grp.setLayout(lhf)
+        lhf.setSpacing(1); lhf.setContentsMargins(4, 2, 4, 2)
+        for locus in HLA_LOCI:
+            row_w = QWidget(); row_l = QHBoxLayout(row_w)
+            row_l.setContentsMargins(0,0,0,0); row_l.setSpacing(4)
+            pa = pat_hla.get(locus, ["",""])
+            da = don_hla.get(locus, ["",""])
+            pa1 = QLineEdit(pa[0] if pa else ""); pa1.setFixedWidth(72); pa1.setFixedHeight(22)
+            pa2 = QLineEdit(pa[1] if len(pa)>1 else ""); pa2.setFixedWidth(72); pa2.setFixedHeight(22)
+            sep = QLabel("|"); sep.setStyleSheet("color:gray;")
+            da1 = QLineEdit(da[0] if da else ""); da1.setFixedWidth(72); da1.setFixedHeight(22)
+            da2 = QLineEdit(da[1] if len(da)>1 else ""); da2.setFixedWidth(72); da2.setFixedHeight(22)
+            row_l.addWidget(pa1); row_l.addWidget(pa2); row_l.addWidget(sep)
+            row_l.addWidget(da1); row_l.addWidget(da2); row_l.addStretch()
+            for ew in (pa1, pa2, da1, da2): ew.textChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_lx_pat_hla[locus] = [pa1, pa2]
+            self._bulk_lx_don_hla[locus] = [da1, da2]
+            lhf.addRow(f"{locus}:", row_w)
+
+        lx_interp_grp = QGroupBox("Interpretation")
+        lif = QVBoxLayout(); lx_interp_grp.setLayout(lif)
+        lif.setContentsMargins(4, 2, 4, 2)
+        self._bulk_lx_interp_edit = QTextEdit()
+        self._bulk_lx_interp_edit.setPlaceholderText("Interpretation text…")
+        self._bulk_lx_interp_edit.setFixedHeight(60)
+        self._bulk_lx_interp_edit.setPlainText(case.get("luminex_interpretation", ""))
+        self._bulk_lx_interp_edit.textChanged.connect(self._on_bulk_field_debounced)
+        lif.addWidget(self._bulk_lx_interp_edit)
+
+        for grp in (lx_pat_grp, meta_group, lx_don_grp, lx_hla_grp, lx_interp_grp):
+            self._bulk_editor_layout.addWidget(grp)
+
+        self._bulk_sig_combos = {}
+        name_overrides = case.get("sig_name_overrides", {})
+        sig_group = QGroupBox("Signature Override")
+        sig_form  = QFormLayout(); sig_group.setLayout(sig_form)
+        sig_form.setSpacing(2); sig_form.setContentsMargins(4, 2, 4, 2)
+        _sig_opts = ["(Use Default)"] + list(hla_assets.SIGN_BY_NAME.keys())
+        for i in range(3):
+            cmb = ClickOnlyComboBox(); cmb.addItems(_sig_opts); cmb.setFixedHeight(24)
+            saved = name_overrides.get(i, name_overrides.get(str(i), ""))
+            if saved:
+                pos = cmb.findText(saved)
+                if pos >= 0: cmb.setCurrentIndex(pos)
+            cmb.currentIndexChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_sig_combos[i] = cmb
+            sig_form.addRow(f"Signatory {i+1}:", cmb)
+        self._bulk_editor_layout.addWidget(sig_group)
+        QTimer.singleShot(200, self._refresh_bulk_preview)
+
     def _flush_bulk_edits(self, idx):
         """Read current form field values and write back to cases[idx]."""
         if idx < 0 or idx >= len(self.cases): return
@@ -3260,6 +3604,34 @@ class HLAReportGeneratorApp(QMainWindow):
             case["with_logo"] = self.logo_combo.currentText() == "With Logo"
             if hasattr(self, "_bulk_nabl_chk") and self._bulk_nabl_chk is not None:
                 case["nabl"] = self._bulk_nabl_chk.isChecked()
+            return
+
+        # ── Luminex path ─────────────────────────────────────────────────────
+        if case.get("report_type") == "luminex_typing":
+            if hasattr(self, "_bulk_lx_pat_f"):
+                for key, w in self._bulk_lx_pat_f.items():
+                    dest = "name" if key == "patient_name" else key
+                    p[dest] = w.text().strip()
+                p["hla"] = {locus: [w.text().strip() for w in ws]
+                            for locus, ws in self._bulk_lx_pat_hla.items()
+                            if hasattr(self, "_bulk_lx_pat_hla")}
+                case["luminex_pat_photo"] = getattr(self, "_bulk_lx_pat_photo", None)
+            if hasattr(self, "_bulk_lx_don_f") and case.get("donors"):
+                d = case["donors"][0]
+                for key, w in self._bulk_lx_don_f.items():
+                    d[key] = w.text().strip()
+                d["hla"] = {locus: [w.text().strip() for w in ws]
+                            for locus, ws in self._bulk_lx_don_hla.items()
+                            if hasattr(self, "_bulk_lx_don_hla")}
+                case["luminex_don_photo"] = getattr(self, "_bulk_lx_don_photo", None)
+            if hasattr(self, "_bulk_lx_interp_edit"):
+                case["luminex_interpretation"] = self._bulk_lx_interp_edit.toPlainText().strip()
+            if hasattr(self, "_bulk_rtype_combo") and self._bulk_rtype_combo is not None:
+                case["report_type"] = TEMPLATE_TO_RTYPE.get(
+                    self._bulk_rtype_combo.currentText(), "luminex_typing")
+            case["with_logo"] = self.logo_combo.currentText() == "With Logo"
+            if hasattr(self, "_bulk_lx_nabl_chk") and self._bulk_lx_nabl_chk is not None:
+                case["nabl"] = self._bulk_lx_nabl_chk.isChecked()
             return
 
         if not self._bulk_fields: return
