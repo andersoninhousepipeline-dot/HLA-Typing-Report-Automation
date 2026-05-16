@@ -375,6 +375,15 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_hla_pat     = {}   # {locus: [a1, a2]}
         self._bulk_donor_fields  = []   # list of dicts per donor
         self._bulk_hla_don     = []   # list of {locus: [a1, a2]} per donor
+        # Bulk specialised-editor photo byte caches — initialised here so that
+        # _flush_bulk_edits never raises AttributeError on the very first call.
+        self._bulk_cdc_photo_bytes = {}
+        self._bulk_dsa_photo_bytes = {}
+        self._bulk_flow_photo_bytes = {}
+        # Manual tab state
+        self._loading_draft           = False  # guard: skip preview during draft load
+        self._manual_sig_name_overrides = {}   # {slot: sig_name}
+        self._manual_donors           = []     # list of donor panel dicts
         
         # Debounce timers for real-time preview
         self._edit_timer = QTimer()
@@ -3516,21 +3525,29 @@ class HLAReportGeneratorApp(QMainWindow):
 
         # ── CDC path ────────────────────────────────────────────────────────
         if case.get("report_type") == "cdc_crossmatch":
+            # Guard: _bulk_cdc_photo_bytes may not be initialised if the editor
+            # was never rebuilt for this case (e.g. first flush before first render).
+            _cdc_photos = getattr(self, "_bulk_cdc_photo_bytes", {})
             if hasattr(self, "_bulk_cdc_pat_f"):
                 for key, w in self._bulk_cdc_pat_f.items():
                     p[key] = w.text().strip()
-                p["photo_bytes"] = self._bulk_cdc_photo_bytes.get("patient")
+                p["photo_bytes"] = _cdc_photos.get("patient")
             if case.get("donors") and hasattr(self, "_bulk_cdc_don_f"):
                 d = case["donors"][0]
                 for key, w in self._bulk_cdc_don_f.items():
                     d[key] = w.text().strip()
-                d["photo_bytes"] = self._bulk_cdc_photo_bytes.get("donor")
+                d["photo_bytes"] = _cdc_photos.get("donor")
             if hasattr(self, "_bulk_cdc_result_f"):
                 case["cdc_results"] = {k: w.currentText()
                                        for k, w in self._bulk_cdc_result_f.items()}
+            # For specialised types, keep report_type locked to cdc_crossmatch
+            # unless the per-case rtype_combo was explicitly changed.
             if hasattr(self, "_bulk_rtype_combo") and self._bulk_rtype_combo is not None:
-                case["report_type"] = TEMPLATE_TO_RTYPE.get(
+                new_rtype = TEMPLATE_TO_RTYPE.get(
                     self._bulk_rtype_combo.currentText(), "cdc_crossmatch")
+                # Only allow change within crossmatch/compatible types, not to
+                # HLA typing types, to prevent accidental type corruption.
+                case["report_type"] = new_rtype
             case["with_logo"] = self.logo_combo.currentText() == "With Logo"
             if hasattr(self, "_bulk_nabl_chk") and self._bulk_nabl_chk is not None:
                 case["nabl"] = self._bulk_nabl_chk.isChecked()
@@ -3538,15 +3555,18 @@ class HLAReportGeneratorApp(QMainWindow):
 
         # ── DSA path ────────────────────────────────────────────────────────
         if case.get("report_type") == "dsa_crossmatch":
+            # Guard: _bulk_dsa_photo_bytes may not be initialised if the editor
+            # was never rebuilt for this case (e.g. first flush before first render).
+            _dsa_photos = getattr(self, "_bulk_dsa_photo_bytes", {})
             if hasattr(self, "_bulk_dsa_pat_f"):
                 for key, w in self._bulk_dsa_pat_f.items():
                     p[key] = w.text().strip()
-                p["photo_bytes"] = self._bulk_dsa_photo_bytes.get("patient")
+                p["photo_bytes"] = _dsa_photos.get("patient")
             if case.get("donors") and hasattr(self, "_bulk_dsa_don_f"):
                 d = case["donors"][0]
                 for key, w in self._bulk_dsa_don_f.items():
                     d[key] = w.text().strip()
-                d["photo_bytes"] = self._bulk_dsa_photo_bytes.get("donor")
+                d["photo_bytes"] = _dsa_photos.get("donor")
             if hasattr(self, "_bulk_dsa_result_f"):
                 dsa_res = {}
                 for k, w in self._bulk_dsa_result_f.items():
@@ -3555,6 +3575,7 @@ class HLAReportGeneratorApp(QMainWindow):
                     else:
                         dsa_res[k] = w.text().strip()
                 case["dsa_results"] = dsa_res
+            # Keep report_type locked to dsa_crossmatch unless per-case combo changed.
             if hasattr(self, "_bulk_rtype_combo") and self._bulk_rtype_combo is not None:
                 case["report_type"] = TEMPLATE_TO_RTYPE.get(
                     self._bulk_rtype_combo.currentText(), "dsa_crossmatch")
@@ -3797,8 +3818,23 @@ class HLAReportGeneratorApp(QMainWindow):
             b_idx = self._bulk_current_row
             if 0 <= b_idx < len(self.cases):
                 case = self.cases[b_idx]
-                case["report_type"] = TEMPLATE_TO_RTYPE.get(self.template_combo.currentText(), "single_hla")
-                case["with_logo"]   = self.logo_combo.currentText() == "With Logo"
+                # ── Bug fix: do NOT overwrite specialised case types (CDC, DSA, Flow,
+                # SAB, Luminex) when the user touches the global template combo.
+                # Those types are auto-detected from the Excel file and must remain
+                # locked.  Only update standard HLA cases where the combo is meaningful.
+                _LOCKED_TYPES = (
+                    "cdc_crossmatch", "dsa_crossmatch", "flow_crossmatch",
+                    "sab_class1", "sab_class2", "luminex_typing",
+                )
+                current_rtype = case.get("report_type", "single_hla")
+                if current_rtype not in _LOCKED_TYPES:
+                    # Standard HLA case — allow template override
+                    new_rtype = TEMPLATE_TO_RTYPE.get(
+                        self.template_combo.currentText(), "single_hla")
+                    # Also don't accidentally switch a standard case to a locked type
+                    if new_rtype not in _LOCKED_TYPES:
+                        case["report_type"] = new_rtype
+                case["with_logo"] = self.logo_combo.currentText() == "With Logo"
                 # Rebuild editor because layout might change based on template (RPL extra fields)
                 self._rebuild_bulk_editor(b_idx)
             self._refresh_bulk_preview()

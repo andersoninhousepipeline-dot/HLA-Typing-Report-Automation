@@ -2864,8 +2864,10 @@ def _build_flow_report(case: dict, S: dict) -> list:
     _ref_s  = ParagraphStyle("_frf", fontName=F_BOLD, fontSize=9,
                                alignment=TA_LEFT, leading=13, leftIndent=4)
 
-    def _mcs_para(val):
-        return Paragraph(f"<b>{val}</b>", _mcs_s)
+    def _mcs_para(val, interp_val):
+        """Render MCS value colored to match the interpretation result."""
+        col = _color_hex(_flow_color(interp_val))
+        return Paragraph(f"<font color='#{col}'><b>{val}</b></font>", _mcs_s)
 
     def _interp_para(val):
         col = _color_hex(_flow_color(val))
@@ -2891,11 +2893,11 @@ def _build_flow_report(case: dict, S: dict) -> list:
          Paragraph("<b>INTERPRETATION</b>", _hdr_s),
          Paragraph("<b>REFERENCES</b>", _hdr_s)],
         [Paragraph(f"<b>{t_antibody}</b>", _ab_s),
-         _mcs_para(t_mcs),
+         _mcs_para(t_mcs, t_interp),
          _interp_para(t_interp),
          _ref_para(t_ref_lines)],
         [Paragraph(f"<b>{b_antibody}</b>", _ab_s),
-         _mcs_para(b_mcs),
+         _mcs_para(b_mcs, b_interp),
          _interp_para(b_interp),
          _ref_para(b_ref_lines)],
     ]
@@ -2913,9 +2915,10 @@ def _build_flow_report(case: dict, S: dict) -> list:
     ]))
     elems.append(res_t)
 
-    # ── Page break → page 2 ───────────────────────────────────────────────────
-    elems.append(Spacer(1, 6*mm))
-    # ── Interpretation ────────────────────────────────────────────────────────
+    # ── Page break → page 2 (Interpretation / Comments / Disclaimer / Signatures)
+    # Without this the signature block overflows to a third page.
+    elems.append(PageBreak())
+
     _sec_s    = ParagraphStyle("_fsh", fontName=F_BOLD, fontSize=14,
                                 textColor=C_NGS_TITLE, leading=18, spaceAfter=2)
     _body_s   = ParagraphStyle("_fbdy", fontName=F_REG,  fontSize=10,
@@ -2969,8 +2972,10 @@ def _build_flow_report(case: dict, S: dict) -> list:
         elems.append(Paragraph(f"&#x2022; {d}", _num_s))
     elems.append(Spacer(1, 4*mm))
 
-    # ── Signatures ────────────────────────────────────────────────────────────
-    elems.extend(_signature_block(case.get("signatories", []), S))
+    # ── Signatures ─ wrapped in KeepTogether so they never split across pages ─
+    sig_items = _signature_block(case.get("signatories", []), S)
+    if sig_items:
+        elems.append(KeepTogether(sig_items))
     return elems
 
 
