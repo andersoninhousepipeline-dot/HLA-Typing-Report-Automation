@@ -2513,8 +2513,11 @@ class HLAReportGeneratorApp(QMainWindow):
     # ── Bulk editor — PGTA-style dynamic form rebuild ─────────────────────────
     def _on_bulk_item_changed(self, current, previous):
         """Flush edits from previous then rebuild the editor for the new selection."""
-        # Flush previous case edits first
-        if previous is not None:
+        # Only flush if we have a tracked row — guards against stale flushes that
+        # fire when bulk_list.clear() is called during a new Excel/draft load.
+        # At that point _bulk_current_row == -1 (reset by _reset_bulk_session) so
+        # a stale _bulk_rtype_combo from a prior session cannot corrupt the new cases.
+        if previous is not None and self._bulk_current_row >= 0:
             prev_idx = previous.data(Qt.ItemDataRole.UserRole)
             if prev_idx is not None:
                 self._flush_bulk_edits(prev_idx)
@@ -2529,6 +2532,16 @@ class HLAReportGeneratorApp(QMainWindow):
     def _on_bulk_field_debounced(self):
         """Triggered by any field change; restarts debounce timer."""
         self._edit_timer.start(400) # 400ms debounce
+
+    def _on_bulk_rtype_combo_changed(self):
+        """Per-case Report Type combo changed — flush edits then rebuild form immediately."""
+        idx = self._bulk_current_row
+        if idx < 0 or idx >= len(self.cases):
+            return
+        # Flush saves the new report_type from the combo into the case dict.
+        self._flush_bulk_edits(idx)
+        # Rebuild so the form layout switches to match the new type right away.
+        self._rebuild_bulk_editor(idx)
 
     def _rebuild_bulk_editor(self, idx):
         """Clear and rebuild form fields for cases[idx]. Same pattern as PGTA."""
@@ -2604,7 +2617,7 @@ class HLAReportGeneratorApp(QMainWindow):
         _cur_tmpl = RTYPE_TO_TEMPLATE.get(case.get("report_type", "single_hla"), TEMPLATE_NAMES[0])
         ri = rtype_combo.findText(_cur_tmpl)
         if ri >= 0: rtype_combo.setCurrentIndex(ri)
-        rtype_combo.currentIndexChanged.connect(self._on_bulk_field_debounced)
+        rtype_combo.currentIndexChanged.connect(self._on_bulk_rtype_combo_changed)
         self._bulk_rtype_combo = rtype_combo
         meta_form.addRow("Report Type:", rtype_combo)
 
@@ -3818,24 +3831,13 @@ class HLAReportGeneratorApp(QMainWindow):
             b_idx = self._bulk_current_row
             if 0 <= b_idx < len(self.cases):
                 case = self.cases[b_idx]
-                # ── Bug fix: do NOT overwrite specialised case types (CDC, DSA, Flow,
-                # SAB, Luminex) when the user touches the global template combo.
-                # Those types are auto-detected from the Excel file and must remain
-                # locked.  Only update standard HLA cases where the combo is meaningful.
-                _LOCKED_TYPES = (
-                    "cdc_crossmatch", "dsa_crossmatch", "flow_crossmatch",
-                    "sab_class1", "sab_class2", "luminex_typing",
-                )
-                current_rtype = case.get("report_type", "single_hla")
-                if current_rtype not in _LOCKED_TYPES:
-                    # Standard HLA case — allow template override
-                    new_rtype = TEMPLATE_TO_RTYPE.get(
-                        self.template_combo.currentText(), "single_hla")
-                    # Also don't accidentally switch a standard case to a locked type
-                    if new_rtype not in _LOCKED_TYPES:
-                        case["report_type"] = new_rtype
+                # Allow full manual override — auto-detection sets the initial type
+                # but the user can switch to any template at any time.
+                new_rtype = TEMPLATE_TO_RTYPE.get(
+                    self.template_combo.currentText(), "single_hla")
+                case["report_type"] = new_rtype
                 case["with_logo"] = self.logo_combo.currentText() == "With Logo"
-                # Rebuild editor because layout might change based on template (RPL extra fields)
+                # Rebuild editor so form layout matches the newly selected type.
                 self._rebuild_bulk_editor(b_idx)
             self._refresh_bulk_preview()
 

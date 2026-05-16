@@ -4,6 +4,7 @@ Parses MINISEQ and SURFSEQ Excel files into structured case dictionaries
 ready for PDF report generation.
 """
 
+import os
 import re
 import pandas as pd
 from datetime import datetime
@@ -935,15 +936,32 @@ def parse_excel(filepath: str, nabl: bool = True) -> list:
     # ── Auto-detect specialised formats ──────────────────────────────────────
     xl_sheets = pd.ExcelFile(filepath).sheet_names
     if "patient-donor detail" not in xl_sheets:
-        # Read title cell to distinguish DSA from CDC
-        try:
-            df_peek = pd.read_excel(filepath, sheet_name="Sheet2", header=None)
-            title_cell = str(df_peek.iloc[3, 2]).lower()
-        except Exception:
-            title_cell = ""
-        if "donor specific" in title_cell or "dsa" in title_cell:
+        fname_upper = os.path.basename(filepath).upper()
+
+        # ── 1. Filename is the most reliable signal — check it first ──────────
+        # DSA must win over Flow when both keywords appear in the name.
+        if "DSA" in fname_upper:
             return parse_dsa_excel(filepath, nabl)
-        if "flow cytometry" in title_cell or "flow cross" in title_cell:
+        if "FLOW" in fname_upper and "CDC" not in fname_upper:
+            return parse_flow_excel(filepath, nabl)
+        if "CDC" in fname_upper:
+            return parse_cdc_excel(filepath, nabl)
+
+        # ── 2. Fall back to scanning the sheet content ────────────────────────
+        try:
+            df_peek = pd.read_excel(filepath, sheet_name="Sheet2", header=None,
+                                    nrows=20)
+            sheet_text = " ".join(
+                str(v).lower()
+                for v in df_peek.values.flatten()
+                if v is not None and str(v) != "nan"
+            )
+        except Exception:
+            sheet_text = ""
+
+        if "donor specific" in sheet_text or " dsa " in sheet_text:
+            return parse_dsa_excel(filepath, nabl)
+        if "flow cytometry" in sheet_text or "flow cross" in sheet_text:
             return parse_flow_excel(filepath, nabl)
         return parse_cdc_excel(filepath, nabl)
     # ── Determine lab type from filename ──────────────────────────────────────
