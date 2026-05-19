@@ -951,6 +951,7 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
         tail.append(Paragraph(f"<b>Remarks:</b> {_remarks_display}",
                               ParagraphStyle("remarks_j", parent=S["body_small"],
                                              fontSize=10, leading=12,
+                                             wordWrap='CJK',
                                              alignment=TA_LEFT, spaceAfter=2)))
     if has_match:
         if has_remarks:
@@ -1326,16 +1327,23 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
     signatories = case.get("signatories") or hla_assets.get_default_signatories(
         "transplant_donor", case.get("nabl", True))
 
+    # When any person has remarks or a match string, tighten inter-block spacing so
+    # the remarks fit on the same page rather than spilling to the next one.
+    def _person_has_content(p):
+        return bool((p.get("remarks") or "").strip()) or bool((p.get("match") or "").strip())
+    any_remarks = _person_has_content(patient) or any(_person_has_content(d) for d in donors)
+    _scale, _extra = (1.0, 0.0) if any_remarks else (2.0, 4.0)
+
     elems = []
     elems.extend(_ngs_person_block(patient, is_donor=False, match_str="", S=S,
-                                   spacing_scale=2.0, extra_inner_gap=4.0, no_compact=True,
+                                   spacing_scale=_scale, extra_inner_gap=_extra, no_compact=True,
                                    nabl=case.get("nabl", True)))
 
     _p_name = patient.get("name", "")
     for d in donors:
         elems.extend(_ngs_person_block(d, is_donor=True, match_str=d.get("match", ""), S=S,
                                        patient_name=_p_name,
-                                       spacing_scale=2.0, extra_inner_gap=4.0, no_compact=True,
+                                       spacing_scale=_scale, extra_inner_gap=_extra, no_compact=True,
                                        nabl=case.get("nabl", True)))
 
     elems.extend(_methodology_block(case, S))

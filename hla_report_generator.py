@@ -2071,10 +2071,10 @@ class HLAReportGeneratorApp(QMainWindow):
             name_val = getattr(self, "_flow_pat_f", {}).get("patient_name", QLineEdit()).text().strip()
         else:
             name_val = self.f.get("patient_name", QLineEdit()).text().strip()
-        today     = datetime.date.today().strftime("%Y%m%d")
-        safe_name = _re.sub(r"[^\w\-]", "_", name_val) if name_val else "Unknown"
-        filename  = f"{safe_name}_draft_{today}.json"
-        path      = os.path.join(DRAFTS_DIR, filename)
+        safe_name      = _re.sub(r"[^\w\-]", "_", name_val) if name_val else "Unknown"
+        template_label = _re.sub(r"[^\w\-]", "_", RTYPE_TO_TEMPLATE.get(rtype, rtype))
+        filename       = f"{safe_name}_{template_label}_draft.json"
+        path           = os.path.join(DRAFTS_DIR, filename)
 
         saved_donors = []
         for entry in self._manual_donors:
@@ -4010,9 +4010,11 @@ class HLAReportGeneratorApp(QMainWindow):
 
         # ── Individual files ──────────────────────────────────────────────────
         for case in cases:
-            name_val  = case.get("patient", {}).get("name", "Unknown")
-            safe_name = _re.sub(r"[^\w\-]", "_", name_val)
-            filename  = f"{safe_name}_draft_{today}.json"
+            name_val       = case.get("patient", {}).get("name", "Unknown")
+            safe_name      = _re.sub(r"[^\w\-]", "_", name_val)
+            rtype          = case.get("report_type", "single_hla")
+            template_label = _re.sub(r"[^\w\-]", "_", RTYPE_TO_TEMPLATE.get(rtype, rtype))
+            filename       = f"{safe_name}_{template_label}_draft.json"
             path      = os.path.join(DRAFTS_DIR, filename)
             draft     = {k: v for k, v in case.items() if k != "signatories"}
             try:
@@ -4228,11 +4230,12 @@ class HLAReportGeneratorApp(QMainWindow):
         case = self.cases[idx]
 
         os.makedirs(DRAFTS_DIR, exist_ok=True)
-        p         = case.get("patient", {})
-        name_val  = p.get("name", "Unknown")
-        today     = datetime.date.today().strftime("%Y%m%d")
-        safe_name = _re.sub(r"[^\w\-]", "_", name_val)
-        filename  = f"{safe_name}_draft_{today}.json"
+        p              = case.get("patient", {})
+        name_val       = p.get("name", "Unknown")
+        rtype          = case.get("report_type", "single_hla")
+        safe_name      = _re.sub(r"[^\w\-]", "_", name_val)
+        template_label = _re.sub(r"[^\w\-]", "_", RTYPE_TO_TEMPLATE.get(rtype, rtype))
+        filename       = f"{safe_name}_{template_label}_draft.json"
         path      = os.path.join(DRAFTS_DIR, filename)
 
         draft = {k: v for k, v in case.items() if k != "signatories"}
