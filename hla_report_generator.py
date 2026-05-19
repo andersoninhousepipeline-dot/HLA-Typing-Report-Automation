@@ -2058,7 +2058,19 @@ class HLAReportGeneratorApp(QMainWindow):
 
     def save_manual_draft(self):
         os.makedirs(DRAFTS_DIR, exist_ok=True)
-        name_val  = self.f.get("patient_name", QLineEdit()).text().strip()
+        rtype = TEMPLATE_TO_RTYPE.get(
+            self._manual_rtype_combo.currentText()
+            if hasattr(self, "_manual_rtype_combo") else self.template_combo.currentText(),
+            "single_hla")
+        # Read patient name from the active form for the current report type
+        if rtype == "cdc_crossmatch":
+            name_val = getattr(self, "_cdc_pat_f", {}).get("patient_name", QLineEdit()).text().strip()
+        elif rtype == "dsa_crossmatch":
+            name_val = getattr(self, "_dsa_pat_f", {}).get("patient_name", QLineEdit()).text().strip()
+        elif rtype == "flow_crossmatch":
+            name_val = getattr(self, "_flow_pat_f", {}).get("patient_name", QLineEdit()).text().strip()
+        else:
+            name_val = self.f.get("patient_name", QLineEdit()).text().strip()
         today     = datetime.date.today().strftime("%Y%m%d")
         safe_name = _re.sub(r"[^\w\-]", "_", name_val) if name_val else "Unknown"
         filename  = f"{safe_name}_draft_{today}.json"
@@ -2071,10 +2083,6 @@ class HLAReportGeneratorApp(QMainWindow):
                 "hla":    {locus: [a[0].text().strip(), a[1].text().strip()]
                            for locus, a in entry["hla"].items()},
             })
-        rtype = TEMPLATE_TO_RTYPE.get(
-            self._manual_rtype_combo.currentText()
-            if hasattr(self, "_manual_rtype_combo") else self.template_combo.currentText(),
-            "single_hla")
         data = {
             "patient_fields": {k: w.text().strip() for k, w in self.f.items()},
             "report_type": rtype,
@@ -2087,6 +2095,25 @@ class HLAReportGeneratorApp(QMainWindow):
             "report_settings": {k: w.text().strip() for k, w in self._manual_report_settings.items()},
             "rpl_reference":   {k: w.text().strip() for k, w in self._manual_rpl_fields.items()},
         }
+        # Save CDC/DSA/Flow-specific form data so it can be fully restored on load
+        if rtype == "cdc_crossmatch" and hasattr(self, "_cdc_pat_f"):
+            data["cdc_patient_fields"] = {k: w.text().strip() for k, w in self._cdc_pat_f.items()}
+            data["cdc_donor_fields"]   = {k: w.text().strip() for k, w in self._cdc_don_f.items()}
+            data["cdc_results"]        = {k: w.currentText() for k, w in self._manual_cdc_fields.items()}
+        elif rtype == "dsa_crossmatch" and hasattr(self, "_dsa_pat_f"):
+            data["dsa_patient_fields"] = {k: w.text().strip() for k, w in self._dsa_pat_f.items()}
+            data["dsa_donor_fields"]   = {k: w.text().strip() for k, w in self._dsa_don_f.items()}
+            data["dsa_results"]        = {
+                k: (w.currentText() if isinstance(w, QComboBox) else w.text().strip())
+                for k, w in self._dsa_result_f.items()
+            }
+        elif rtype == "flow_crossmatch" and hasattr(self, "_flow_pat_f"):
+            data["flow_patient_fields"] = {k: w.text().strip() for k, w in self._flow_pat_f.items()}
+            data["flow_donor_fields"]   = {k: w.text().strip() for k, w in self._flow_don_f.items()}
+            data["flow_results"]        = {
+                k: (w.currentText() if isinstance(w, QComboBox) else w.text().strip())
+                for k, w in self._flow_result_f.items()
+            }
         try:
             with open(path, "w") as fh: json.dump(data, fh, indent=2)
             self.manual_status_label.setText(
@@ -2197,6 +2224,42 @@ class HLAReportGeneratorApp(QMainWindow):
             for k, v in data.get("rpl_reference", {}).items():
                 if k in self._manual_rpl_fields:
                     self._manual_rpl_fields[k].setText(str(v))
+            # Restore CDC/DSA/Flow-specific form fields
+            _rtype = data.get("report_type", "single_hla")
+            if _rtype == "cdc_crossmatch":
+                for k, v in data.get("cdc_patient_fields", {}).items():
+                    if hasattr(self, "_cdc_pat_f") and k in self._cdc_pat_f:
+                        self._cdc_pat_f[k].setText(str(v))
+                for k, v in data.get("cdc_donor_fields", {}).items():
+                    if hasattr(self, "_cdc_don_f") and k in self._cdc_don_f:
+                        self._cdc_don_f[k].setText(str(v))
+                for k, v in data.get("cdc_results", {}).items():
+                    if hasattr(self, "_manual_cdc_fields") and k in self._manual_cdc_fields:
+                        self._manual_cdc_fields[k].setCurrentText(str(v))
+            elif _rtype == "dsa_crossmatch":
+                for k, v in data.get("dsa_patient_fields", {}).items():
+                    if hasattr(self, "_dsa_pat_f") and k in self._dsa_pat_f:
+                        self._dsa_pat_f[k].setText(str(v))
+                for k, v in data.get("dsa_donor_fields", {}).items():
+                    if hasattr(self, "_dsa_don_f") and k in self._dsa_don_f:
+                        self._dsa_don_f[k].setText(str(v))
+                for k, v in data.get("dsa_results", {}).items():
+                    if hasattr(self, "_dsa_result_f") and k in self._dsa_result_f:
+                        w = self._dsa_result_f[k]
+                        if isinstance(w, QComboBox): w.setCurrentText(str(v))
+                        else: w.setText(str(v))
+            elif _rtype == "flow_crossmatch":
+                for k, v in data.get("flow_patient_fields", {}).items():
+                    if hasattr(self, "_flow_pat_f") and k in self._flow_pat_f:
+                        self._flow_pat_f[k].setText(str(v))
+                for k, v in data.get("flow_donor_fields", {}).items():
+                    if hasattr(self, "_flow_don_f") and k in self._flow_don_f:
+                        self._flow_don_f[k].setText(str(v))
+                for k, v in data.get("flow_results", {}).items():
+                    if hasattr(self, "_flow_result_f") and k in self._flow_result_f:
+                        w = self._flow_result_f[k]
+                        if isinstance(w, QComboBox): w.setCurrentText(str(v))
+                        else: w.setText(str(v))
             self._update_manual_rpl_visibility()
             self.manual_status_label.setText(f"Draft loaded: {os.path.basename(path)}")
         except Exception as e:
@@ -4058,6 +4121,72 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_log(msg)
         QMessageBox.information(self, "Drafts Saved", msg)
 
+    @staticmethod
+    def _normalize_manual_draft_to_bulk(data: dict) -> dict:
+        """Convert a manual-tab draft (patient_fields key) to the bulk case dict format."""
+        rtype = data.get("report_type", "single_hla")
+        pf    = data.get("patient_fields", {})
+
+        # For CDC/DSA/Flow: prefer the type-specific fields saved by the fixed save_manual_draft
+        if rtype == "cdc_crossmatch" and "cdc_patient_fields" in data:
+            cpf = data["cdc_patient_fields"]
+            patient = dict(cpf)
+            patient["name"] = patient.pop("patient_name", cpf.get("patient_name", ""))
+        elif rtype == "dsa_crossmatch" and "dsa_patient_fields" in data:
+            dpf = data["dsa_patient_fields"]
+            patient = dict(dpf)
+            patient["name"] = patient.pop("patient_name", dpf.get("patient_name", ""))
+        elif rtype == "flow_crossmatch" and "flow_patient_fields" in data:
+            fpf = data["flow_patient_fields"]
+            patient = dict(fpf)
+            patient["name"] = patient.pop("patient_name", fpf.get("patient_name", ""))
+        else:
+            patient = {k: v for k, v in pf.items() if k != "patient_name"}
+            patient["name"] = pf.get("patient_name", "")
+
+        patient.setdefault("hla", {})
+        patient.setdefault("hla_c_type", "")
+        patient.setdefault("_join_key", patient.get("pin", ""))
+        patient.setdefault("_has_insufficient_hla", False)
+
+        # Build donors list
+        if rtype == "cdc_crossmatch" and "cdc_donor_fields" in data:
+            raw_don = data["cdc_donor_fields"]
+            raw_don.setdefault("hla", {}); raw_don.setdefault("hla_c_type", "")
+            donors = [raw_don]
+        elif rtype == "dsa_crossmatch" and "dsa_donor_fields" in data:
+            raw_don = data["dsa_donor_fields"]
+            raw_don.setdefault("hla", {}); raw_don.setdefault("hla_c_type", "")
+            donors = [raw_don]
+        elif rtype == "flow_crossmatch" and "flow_donor_fields" in data:
+            raw_don = data["flow_donor_fields"]
+            raw_don.setdefault("hla", {}); raw_don.setdefault("hla_c_type", "")
+            donors = [raw_don]
+        else:
+            donors = []
+            for d in data.get("donors", []):
+                df = d.get("fields", d)
+                entry = dict(df)
+                entry.setdefault("name", "")
+                entry.setdefault("hla", d.get("hla", {}))
+                entry.setdefault("hla_c_type", "")
+                donors.append(entry)
+
+        case = {
+            "report_type": rtype,
+            "patient":     patient,
+            "donors":      donors,
+            "nabl":        data.get("nabl", True),
+            "with_logo":   data.get("with_logo", True) if isinstance(data.get("with_logo"), bool)
+                           else data.get("with_logo", "With Logo") == "With Logo",
+            "sig_name_overrides": data.get("sig_name_overrides", {}),
+            "rpl_reference": data.get("rpl_reference", {}),
+        }
+        for key in ("cdc_results", "dsa_results", "flow_results"):
+            if key in data:
+                case[key] = data[key]
+        return case
+
     def load_bulk_draft(self):
         start_dir = DRAFTS_DIR if os.path.isdir(DRAFTS_DIR) else os.path.dirname(BULK_DRAFT_FILE)
         path, _ = QFileDialog.getOpenFileName(
@@ -4072,6 +4201,13 @@ class HLAReportGeneratorApp(QMainWindow):
             # Support both list-of-cases (Save All Draft) and single-case dict (Save Draft)
             if isinstance(draft, dict):
                 draft = [draft]
+            # Normalize manual-tab drafts (have "patient_fields" instead of "patient")
+            normalized = []
+            for item in draft:
+                if "patient_fields" in item and "patient" not in item:
+                    item = self._normalize_manual_draft_to_bulk(item)
+                normalized.append(item)
+            draft = normalized
             self.cases = _filter_valid_cases(draft)
             skipped    = len(draft) - len(self.cases)
             self._populate_bulk_list()
