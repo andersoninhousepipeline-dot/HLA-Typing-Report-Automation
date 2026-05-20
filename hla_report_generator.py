@@ -1819,8 +1819,12 @@ class HLAReportGeneratorApp(QMainWindow):
         """Generate preview PDF in background thread — PGTA PreviewWorker pattern."""
         if hasattr(self, '_manual_preview_worker') and self._manual_preview_worker \
                 and self._manual_preview_worker.isRunning():
-            self._manual_preview_worker.finished.disconnect()
-            self._manual_preview_worker.terminate()
+            try:
+                self._manual_preview_worker.finished.disconnect()
+            except Exception:
+                pass
+            self._manual_preview_worker.quit()
+            self._manual_preview_worker.wait(500)
         tmp = copy.deepcopy(case)
         self._manual_preview_worker = PreviewWorker(tmp, TEMP_PREVIEW_PATH)
         self._manual_preview_worker.finished.connect(self._on_manual_preview_generated)
@@ -4244,8 +4248,12 @@ class HLAReportGeneratorApp(QMainWindow):
         self.bulk_preview_status.setText("Generating preview…")
         if hasattr(self, "_bulk_preview_worker") and self._bulk_preview_worker \
                 and self._bulk_preview_worker.isRunning():
-            self._bulk_preview_worker.finished.disconnect()
-            self._bulk_preview_worker.terminate()
+            try:
+                self._bulk_preview_worker.finished.disconnect()
+            except Exception:
+                pass
+            self._bulk_preview_worker.quit()
+            self._bulk_preview_worker.wait(500)
         self._bulk_preview_worker = PreviewWorker(c, tmp)
         self._bulk_preview_worker.finished.connect(self._load_bulk_preview)
         self._bulk_preview_worker.error.connect(
@@ -4837,9 +4845,34 @@ case — edits are flushed automatically).</p>
             self.manual_output_label.setText(last_out)
             self.bulk_output_label.setText(last_out)
 
+    def closeEvent(self, event):
+        for attr in ("_manual_preview_worker", "_bulk_preview_worker", "worker"):
+            w = getattr(self, attr, None)
+            if w and w.isRunning():
+                w.quit()
+                w.wait(1000)
+        event.accept()
+
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
+def _global_exception_handler(exc_type, exc_value, exc_tb):
+    import traceback
+    msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    print(msg, file=sys.stderr)
+    try:
+        from PyQt6.QtWidgets import QMessageBox
+        box = QMessageBox()
+        box.setWindowTitle("Unexpected Error")
+        box.setText("An unexpected error occurred. The application will continue running.")
+        box.setDetailedText(msg)
+        box.setIcon(QMessageBox.Icon.Critical)
+        box.exec()
+    except Exception:
+        pass
+
+
 def main():
+    sys.excepthook = _global_exception_handler
     app = QApplication(sys.argv)
     app.setApplicationName("HLA Typing Report Generator")
     app.setOrganizationName("AndersonDiagnostics")
