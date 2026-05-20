@@ -1294,7 +1294,9 @@ def _build_ngs_single(case: dict, S: dict) -> list:
 
     Strategy:
     - Patient block: wrapped in KeepTogether to prevent splitting
-    - Methodology + Signatures: allowed to flow naturally across pages if needed
+    - Signatures: NOT wrapped in KeepTogether — single_hla must always be 1 page,
+      and KeepTogether was pushing signatures to page 2 even when space was available.
+      The signature outer table is a single row so it won't split mid-row.
     """
     patient     = case["patient"]
     signatories = case.get("signatories") or hla_assets.get_default_signatories(
@@ -1308,7 +1310,7 @@ def _build_ngs_single(case: dict, S: dict) -> list:
     elems.extend(_methodology_block(case, S))
     sig_items = _signature_block(signatories, S)
     if sig_items:
-        elems.append(KeepTogether(sig_items))
+        elems.extend(sig_items)
 
     return elems
 
