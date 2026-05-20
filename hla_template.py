@@ -1573,6 +1573,50 @@ SAB_LIMITATIONS = [
     "findings are meant to aid the clinician in taking a vital healthcare decision "
     "and serve as a guide for providing the appropriate treatment.",
 ]
+
+# ── KIR Genotyping constants ──────────────────────────────────────────────────
+KIR_GENES = [
+    "2DL1", "2DL2", "2DL3", "2DL4", "2DL5",
+    "2DS1", "2DS2", "2DS3", "2DS4", "2DS5",
+    "3DL1", "3DL2", "3DL3", "3DS1", "2DP1", "3DP1",
+]
+# Genes whose presence indicates a B haplotype
+KIR_B_GENES = {"2DL2", "2DL5", "2DS1", "2DS2", "2DS3", "2DS5", "3DS1"}
+
+KIR_METHOD = (
+    "KIR genotyping is a genetic test that allows the <b>maternal killer immune-globulin-like "
+    "receptor (KIR)</b> gene repertoire of a patient to be determined. Through a PCR-SSP analysis "
+    "of 16 KIR genes (2DL1, 2DL2, 2DL3, 2DL4, 2DL5, 2DS1, 2DS2, 2DS3, 2DS4, 2DS5, 3DL1, 3DL2, "
+    "3DL3, 3DS1, 2DP1 and 3DP1) it is possible to establish KIR genotype for a particular patient "
+    "and hence the risks of an altered maternal immune response to the embryo."
+)
+KIR_TEST_DETAILS = (
+    "KIR Typing by Luminex technology applies SSO DNA typing method. Target DNA is PCR-amplified "
+    "using a group-specific primer and the PCR product is biotinylated, which allows it to be "
+    "detected using R-Phycoerythrin conjugated Streptavidin (SAPE).\n"
+    "The PCR product is denatured and allowed to rehybridize complementary DNA probes conjugated "
+    "to fluorescently coded microspheres. A flow analyzer identifies the fluorescent intensity of "
+    "PE (phycoerythrin) on each microsphere."
+)
+KIR_FOOTNOTE = (
+    "*If any gene 2DL2, 2DL5, 2DS1, 2DS2, 2DS3, 2DS5, and 3DS1 is present, genotype is taken "
+    "as having B."
+)
+C_KIR_HEADING = colors.HexColor("#1F3864")   # dark navy for KIR section headings
+
+
+def _kir_calc_genotype(genes: dict) -> str:
+    """Return 'AA' or 'AB' based on presence of B-specific KIR genes."""
+    return "AB" if any(genes.get(g, "-") == "+" for g in KIR_B_GENES) else "AA"
+
+
+def _kir_auto_interp(genotype: str) -> str:
+    return (
+        f"KIR {genotype} was detected in the sample analysed.\n\n"
+        "KIR AB or BB genotypes have not been associated with implantation failure or pregnancy "
+        "complications due to an altered maternal immune response."
+    )
+
 SAB_NOTE = (
     "List of allele specificities included in the panel tested are given in the table attached."
 )
@@ -2987,6 +3031,140 @@ def _build_flow_report(case: dict, S: dict) -> list:
     return elems
 
 
+# ─── KIR Genotyping report ────────────────────────────────────────────────────
+
+def _build_kir_report(case: dict, S: dict) -> list:
+    """Return story flowables for KIR Genotyping report."""
+    patient = case.get("patient", {})
+
+    F_BOLD = _f("SegoeUI-Bold", "Helvetica-Bold")
+    F_REG  = _f("SegoeUI",      "Helvetica")
+    cw = CONTENT_W
+
+    def _raw(v):  return _clean_display(v) or "NA"
+    def _norm(v): return _title_case(_clean_display(v)) or "NA"
+    def _IL(t):   return Paragraph(f"<b>{t}</b>",
+                    ParagraphStyle("_kil", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
+    def _IV(t):   return Paragraph(_norm(t),
+                    ParagraphStyle("_kiv", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
+    def _IR(t):   return Paragraph(_raw(t),
+                    ParagraphStyle("_kir", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
+    def _IC():    return Paragraph("<b>:</b>",
+                    ParagraphStyle("_kic", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
+    def _E():     return Paragraph("",
+                    ParagraphStyle("_kie", fontName=F_REG,  fontSize=10, textColor=BLACK, leading=12))
+
+    elems = []
+
+    # ── Info table ─────────────────────────────────────────────────────────────
+    info_col_w = [cw*0.167, cw*0.016, cw*0.340, cw*0.020, cw*0.225, cw*0.016, cw*0.216]
+    info_rows = [
+        [_IL("Patient name"),    _IC(), _IV(patient.get("name","")),
+         _E(), _IL("PIN"),                    _IC(), _IR(patient.get("pin",""))],
+        [_IL("Gender/ Age"),     _IC(), _IR(_normalize_age(patient.get("gender_age",""))),
+         _E(), _IL("Sample Number"),          _IC(), _IR(patient.get("sample_number",""))],
+        [_IL("Hospital MR No"),  _IC(), _IR(patient.get("hospital_mr_no","") or "NA"),
+         _E(), _IL("Sample collection date"), _IC(), _IR(patient.get("collection_date",""))],
+        [_IL("Specimen"),        _IC(), _IV(patient.get("specimen","") or "Blood EDTA"),
+         _E(), _IL("Sample receipt date"),    _IC(), _IR(patient.get("receipt_date",""))],
+        [_IL("Hospital/Clinic"), _IC(), _IV(patient.get("hospital_clinic","")),
+         _E(), _IL("Report date"),            _IC(), _IR(patient.get("report_date",""))],
+    ]
+    info_t = Table(info_rows, colWidths=info_col_w)
+    info_t.setStyle(TableStyle([
+        ("BACKGROUND",    (0,0), (-1,-1), colors.HexColor("#E8E8E8")),
+        ("VALIGN",        (0,0), (-1,-1), "TOP"),
+        ("TOPPADDING",    (0,0), (-1,-1), 5), ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+        ("LEFTPADDING",   (0,0), (-1,-1), 4), ("RIGHTPADDING",  (0,0), (-1,-1), 2),
+        ("LEFTPADDING",   (1,0), (1,-1), 0),  ("RIGHTPADDING",  (1,0), (1,-1), 2),
+        ("LEFTPADDING",   (3,0), (3,-1), 0),  ("RIGHTPADDING",  (3,0), (3,-1), 0),
+        ("LEFTPADDING",   (5,0), (5,-1), 0),  ("RIGHTPADDING",  (5,0), (5,-1), 2),
+    ]))
+    elems.append(info_t)
+    elems.append(Spacer(1, 5*mm))
+
+    # ── Section styles ─────────────────────────────────────────────────────────
+    _sec_s  = ParagraphStyle("_kir_sec",  fontName=F_BOLD, fontSize=13,
+                              textColor=C_KIR_HEADING, leading=16, spaceAfter=2)
+    _body_s = ParagraphStyle("_kir_bdy",  fontName=F_REG,  fontSize=10,
+                              leading=14, alignment=TA_JUSTIFY)
+    _note_s = ParagraphStyle("_kir_note", fontName=F_REG,  fontSize=9,
+                              leading=12, fontStyle="italic" if False else "normal")
+
+    # ── Method ─────────────────────────────────────────────────────────────────
+    elems.append(Paragraph("<b>Method</b>", _sec_s))
+    elems.append(HRFlowable(width=cw, thickness=0.8, color=colors.grey, spaceAfter=4))
+    elems.append(Paragraph(KIR_METHOD, _body_s))
+    elems.append(Spacer(1, 5*mm))
+
+    # ── Result ─────────────────────────────────────────────────────────────────
+    elems.append(Paragraph("<b>Result</b>", _sec_s))
+    elems.append(HRFlowable(width=cw, thickness=0.8, color=colors.grey, spaceAfter=4))
+
+    # Determine genotype
+    genes = case.get("kir_genes", {})
+    override = case.get("kir_genotype_override", "Auto")
+    genotype = override if override and override != "Auto" else _kir_calc_genotype(genes)
+
+    _genotype_s = ParagraphStyle("_kir_gt", fontName=F_REG, fontSize=10, leading=14)
+    elems.append(Paragraph(f"The KIR genotype of the Sample - <b>{genotype}</b>", _genotype_s))
+    elems.append(Spacer(1, 3*mm))
+
+    # Gene results table — 17 columns: Gene | 16 gene names
+    _th_s = ParagraphStyle("_kir_th", fontName=F_BOLD, fontSize=8.5,
+                            textColor=BLACK, alignment=TA_CENTER, leading=11)
+    _td_s = ParagraphStyle("_kir_td", fontName=F_BOLD, fontSize=10,
+                            textColor=BLACK, alignment=TA_CENTER, leading=13)
+
+    gene_col_w = [cw * 0.072] + [cw * (0.928 / 16)] * 16
+    hdr_row  = [Paragraph("<b>Gene</b>", _th_s)] + [Paragraph(f"<b>{g}</b>", _th_s) for g in KIR_GENES]
+    val_row  = [Paragraph("<b>Result</b>", _th_s)] + [
+        Paragraph(f"<b>{genes.get(g, '–')}</b>", _td_s) for g in KIR_GENES
+    ]
+    gene_tbl = Table([hdr_row, val_row], colWidths=gene_col_w)
+    gene_tbl.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0), colors.HexColor("#2C3E50")),
+        ("TEXTCOLOR",     (0, 0), (-1, 0), colors.white),
+        ("BACKGROUND",    (0, 1), (-1, 1), colors.HexColor("#F2F2F2")),
+        ("BOX",           (0, 0), (-1, -1), 0.8, BLACK),
+        ("INNERGRID",     (0, 0), (-1, -1), 0.5, colors.HexColor("#C0C0C0")),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    elems.append(gene_tbl)
+    elems.append(Spacer(1, 2*mm))
+    elems.append(Paragraph(KIR_FOOTNOTE, _note_s))
+    elems.append(Spacer(1, 5*mm))
+
+    # ── Interpretation ─────────────────────────────────────────────────────────
+    elems.append(Paragraph("<b>Interpretation of the result</b>", _sec_s))
+    elems.append(HRFlowable(width=cw, thickness=0.8, color=colors.grey, spaceAfter=4))
+    custom_interp = case.get("kir_interpretation", "").strip()
+    interp_text   = custom_interp if custom_interp else _kir_auto_interp(genotype)
+    for para in interp_text.split("\n\n"):
+        para = para.strip()
+        if para:
+            elems.append(Paragraph(para, _body_s))
+            elems.append(Spacer(1, 3*mm))
+
+    # ── Page 2: Test Details + Signatures ──────────────────────────────────────
+    elems.append(PageBreak())
+    elems.append(Paragraph("<b>Test details</b>", _sec_s))
+    elems.append(HRFlowable(width=cw, thickness=0.8, color=colors.grey, spaceAfter=4))
+    for para in KIR_TEST_DETAILS.split("\n"):
+        para = para.strip()
+        if para:
+            elems.append(Paragraph(para, _body_s))
+            elems.append(Spacer(1, 3*mm))
+    elems.append(Spacer(1, 6*mm))
+
+    sig_items = _signature_block(case.get("signatories", []), S)
+    if sig_items:
+        elems.append(KeepTogether(sig_items))
+    return elems
+
+
 # ─── Top-level entry point ────────────────────────────────────────────────────
 
 def generate_pdf(case: dict, output_path: str) -> str:
@@ -3014,6 +3192,7 @@ def generate_pdf(case: dict, output_path: str) -> str:
         "sab_class2":       "",
         "flow_crossmatch":  "Flow Cytometry Cross match",
         "luminex_typing":   "",
+        "kir_genotyping":   "KIR Genotyping",
     }
     title = TITLES.get(report_type, "HLA Typing Report")
 
@@ -3069,6 +3248,8 @@ def generate_pdf(case: dict, output_path: str) -> str:
         body = _build_flow_report(case, S)
     elif report_type == "luminex_typing":
         body = _build_luminex_report(case, S)
+    elif report_type == "kir_genotyping":
+        body = _build_kir_report(case, S)
     else:
         body = _build_ngs_single(case, S)
 
@@ -3097,7 +3278,8 @@ def make_filename(case: dict) -> str:
     rtype = {"single_hla": "HLA_NGS", "transplant_donor": "HLA_NGS",
              "rpl_couple": "RPL", "cdc_crossmatch": "CDC",
              "dsa_crossmatch": "DSA", "sab_class1": "SAB_C1", "sab_class2": "SAB_C2",
-             "flow_crossmatch": "FLOW", "luminex_typing": "HLA_LUMINEX"}.get(case.get("report_type", ""), "HLA")
+             "flow_crossmatch": "FLOW", "luminex_typing": "HLA_LUMINEX",
+             "kir_genotyping": "KIR"}.get(case.get("report_type", ""), "HLA")
     logo  = "WITH_LOGO" if case.get("with_logo", True) else "WITHOUT_LOGO"
     parts = [p] + ([donors] if donors else []) + [rtype, logo]
     return "_".join(parts) + ".pdf"

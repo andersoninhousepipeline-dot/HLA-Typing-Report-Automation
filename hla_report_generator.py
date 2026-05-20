@@ -131,6 +131,11 @@ REPORT_TEMPLATES = [
         "report_type":  "luminex_typing",
         "default_path": os.path.join(_TEMPLATE_DIR, ""),
     },
+    {
+        "name":         "KIR Genotyping",
+        "report_type":  "kir_genotyping",
+        "default_path": os.path.join(_TEMPLATE_DIR, ""),
+    },
 ]
 TEMPLATE_NAMES    = [t["name"]        for t in REPORT_TEMPLATES]
 TEMPLATE_TO_RTYPE = {t["name"]:        t["report_type"] for t in REPORT_TEMPLATES}
@@ -1166,6 +1171,80 @@ class HLAReportGeneratorApp(QMainWindow):
         scroll_layout.addWidget(_lx_interp_group)
         _lx_interp_group.setVisible(False)
 
+        # ── KIR Patient Information ────────────────────────────────────────────
+        self._kir_pat_f = {}
+        _kir_pat_group = QGroupBox("Patient Information")
+        self._kir_pat_group = _kir_pat_group
+        _kpf = QFormLayout(); _kir_pat_group.setLayout(_kpf)
+        _kpf.setSpacing(1); _kpf.setContentsMargins(4, 2, 4, 2)
+        _KIR_PAT_FIELDS = [
+            ("patient_name",    "Patient Name *",         ""),
+            ("gender_age",      "Gender / Age",           ""),
+            ("pin",             "PIN",                    ""),
+            ("sample_number",   "Sample Number",          ""),
+            ("hospital_mr_no",  "Hospital MR No",         "NA"),
+            ("specimen",        "Specimen",               "Blood EDTA"),
+            ("collection_date", "Sample Collection Date", ""),
+            ("receipt_date",    "Sample Receipt Date",    ""),
+            ("hospital_clinic", "Hospital / Clinic",      ""),
+            ("report_date",     "Report Date",            ""),
+        ]
+        for _k, _l, _d in _KIR_PAT_FIELDS:
+            _w = QLineEdit(_d); _w.setMaximumHeight(24)
+            if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
+            self._kir_pat_f[_k] = _w
+            _kpf.addRow(_l + ":", _w)
+            _w.textChanged.connect(self._on_manual_field_debounced)
+        self._kir_nabl_chk = QCheckBox("NABL Accreditation")
+        self._kir_nabl_chk.setChecked(self.qsettings.value("nabl_stamp", True, type=bool))
+        self._kir_nabl_chk.stateChanged.connect(self._on_manual_field_debounced)
+        self._kir_seal_chk = QCheckBox("Signature Seal")
+        self._kir_seal_chk.setChecked(self.qsettings.value("sig_stamp", True, type=bool))
+        self._kir_seal_chk.stateChanged.connect(self._on_manual_field_debounced)
+        _kpf.addRow(self._kir_nabl_chk)
+        _kpf.addRow(self._kir_seal_chk)
+        scroll_layout.addWidget(_kir_pat_group)
+        _kir_pat_group.setVisible(False)
+
+        # ── KIR Gene Results ───────────────────────────────────────────────────
+        _KIR_GENES_LIST = [
+            "2DL1", "2DL2", "2DL3", "2DL4", "2DL5",
+            "2DS1", "2DS2", "2DS3", "2DS4", "2DS5",
+            "3DL1", "3DL2", "3DL3", "3DS1", "2DP1", "3DP1",
+        ]
+        _kir_genes_group = QGroupBox("KIR Gene Results  (+ = Present  ·  – = Absent)")
+        self._kir_genes_group = _kir_genes_group
+        _kgf = QFormLayout(); _kir_genes_group.setLayout(_kgf)
+        _kgf.setSpacing(1); _kgf.setContentsMargins(4, 2, 4, 2)
+        self._kir_gene_combos = {}
+        for _gene in _KIR_GENES_LIST:
+            _cb = ClickOnlyComboBox()
+            _cb.addItems(["-", "+"])
+            _cb.setFixedHeight(24)
+            _cb.currentIndexChanged.connect(self._on_manual_field_debounced)
+            self._kir_gene_combos[_gene] = _cb
+            _kgf.addRow(f"{_gene}:", _cb)
+        scroll_layout.addWidget(_kir_genes_group)
+        _kir_genes_group.setVisible(False)
+
+        # ── KIR Genotype & Interpretation ─────────────────────────────────────
+        _kir_result_group = QGroupBox("Genotype & Interpretation")
+        self._kir_result_group = _kir_result_group
+        _krf = QFormLayout(); _kir_result_group.setLayout(_krf)
+        _krf.setSpacing(1); _krf.setContentsMargins(4, 2, 4, 2)
+        self._kir_genotype_combo = ClickOnlyComboBox()
+        self._kir_genotype_combo.addItems(["Auto", "AA", "AB", "BB"])
+        self._kir_genotype_combo.setFixedHeight(24)
+        self._kir_genotype_combo.currentIndexChanged.connect(self._on_manual_field_debounced)
+        _krf.addRow("Genotype:", self._kir_genotype_combo)
+        self._kir_interp_edit = QTextEdit()
+        self._kir_interp_edit.setPlaceholderText("Auto-generated from genotype if left blank")
+        self._kir_interp_edit.setFixedHeight(72)
+        self._kir_interp_edit.textChanged.connect(self._on_manual_field_debounced)
+        _krf.addRow("Interpretation Override:", self._kir_interp_edit)
+        scroll_layout.addWidget(_kir_result_group)
+        _kir_result_group.setVisible(False)
+
         # ── Patient HLA Results ────────────────────────────────────────────────
         hla_group = QGroupBox("HLA Results — Patient")
         self._std_hla_group = hla_group   # ref for show/hide
@@ -1650,6 +1729,34 @@ class HLAReportGeneratorApp(QMainWindow):
             case["luminex_pat_photo"] = getattr(self, "_lx_pat_photo_bytes", None)
             case["luminex_don_photo"] = getattr(self, "_lx_don_photo_bytes", None)
 
+        # Attach KIR-specific fields
+        if rtype == "kir_genotyping":
+            pf = getattr(self, "_kir_pat_f", {})
+            def _tv(d, k, default=""): return d[k].text().strip() if k in d else default
+            patient = {
+                "name":            _tv(pf, "patient_name"),
+                "gender_age":      _tv(pf, "gender_age"),
+                "pin":             _tv(pf, "pin"),
+                "sample_number":   _tv(pf, "sample_number"),
+                "hospital_mr_no":  _tv(pf, "hospital_mr_no") or "NA",
+                "specimen":        _tv(pf, "specimen") or "Blood EDTA",
+                "collection_date": _tv(pf, "collection_date"),
+                "receipt_date":    _tv(pf, "receipt_date"),
+                "hospital_clinic": _tv(pf, "hospital_clinic"),
+                "report_date":     _tv(pf, "report_date"),
+                "hla": {}, "hla_c_type": "", "_join_key": _tv(pf, "pin"),
+                "_has_insufficient_hla": False,
+            }
+            nabl      = self._kir_nabl_chk.isChecked() if hasattr(self, "_kir_nabl_chk") else nabl
+            sig_stamp = self._kir_seal_chk.isChecked() if hasattr(self, "_kir_seal_chk") else sig_stamp
+            case = self._build_case(rtype, nabl, with_logo, sig_stamp, patient, [])
+            case["kir_genes"] = {g: cb.currentText()
+                                 for g, cb in getattr(self, "_kir_gene_combos", {}).items()}
+            _gt_combo = getattr(self, "_kir_genotype_combo", None)
+            case["kir_genotype_override"] = _gt_combo.currentText() if _gt_combo else "Auto"
+            _kir_ie = getattr(self, "_kir_interp_edit", None)
+            case["kir_interpretation"] = _kir_ie.toPlainText().strip() if _kir_ie else ""
+
         self._apply_sig_name_overrides(case, self._manual_sig_name_overrides)
         return case
 
@@ -1672,6 +1779,9 @@ class HLAReportGeneratorApp(QMainWindow):
         elif rtype == "luminex_typing":
             name = self._lx_pat_f.get("patient_name", QLineEdit()).text().strip() if hasattr(self, "_lx_pat_f") else ""
             pin  = self._lx_pat_f.get("pin",           QLineEdit()).text().strip() if hasattr(self, "_lx_pat_f") else ""
+        elif rtype == "kir_genotyping":
+            name = self._kir_pat_f.get("patient_name", QLineEdit()).text().strip() if hasattr(self, "_kir_pat_f") else ""
+            pin  = self._kir_pat_f.get("pin",           QLineEdit()).text().strip() if hasattr(self, "_kir_pat_f") else ""
         else:
             name = self.f["patient_name"].text().strip()
             pin  = self.f["pin"].text().strip()
@@ -1782,11 +1892,12 @@ class HLAReportGeneratorApp(QMainWindow):
         is_sab_check  = rtype in ("sab_class1", "sab_class2")
         is_flow_check = rtype == "flow_crossmatch"
         is_lx_check   = rtype == "luminex_typing"
+        is_kir_check  = rtype == "kir_genotyping"
         for _grp in ("_std_pat_group", "_std_hla_group", "_std_donors_outer"):
             if hasattr(self, _grp):
                 getattr(self, _grp).setVisible(
                     not is_cdc and not is_dsa and not is_sab_check
-                    and not is_flow_check and not is_lx_check)
+                    and not is_flow_check and not is_lx_check and not is_kir_check)
         # RPL reference — only for rpl_couple, only within standard form
         self._manual_rpl_group.setVisible(rtype == "rpl_couple")
         # CDC form groups — only for CDC
@@ -1817,6 +1928,11 @@ class HLAReportGeneratorApp(QMainWindow):
         for _grp in ("_lx_pat_group", "_lx_don_group", "_lx_hla_group", "_lx_interp_group"):
             if hasattr(self, _grp):
                 getattr(self, _grp).setVisible(is_lx)
+        # KIR form groups — only for KIR Genotyping
+        is_kir = rtype == "kir_genotyping"
+        for _grp in ("_kir_pat_group", "_kir_genes_group", "_kir_result_group"):
+            if hasattr(self, _grp):
+                getattr(self, _grp).setVisible(is_kir)
 
     def _upload_cdc_photo(self, who: str):
         """Open file dialog for CDC patient/donor photo upload."""
@@ -1915,6 +2031,15 @@ class HLAReportGeneratorApp(QMainWindow):
             self._manual_dsa_patient_photo_lbl.setText("No photo selected")
         if hasattr(self, "_manual_dsa_donor_photo_lbl"):
             self._manual_dsa_donor_photo_lbl.setText("No photo selected")
+        # KIR form fields
+        for _w in getattr(self, "_kir_pat_f", {}).values():
+            if isinstance(_w, QLineEdit): _w.clear()
+        for _cb in getattr(self, "_kir_gene_combos", {}).values():
+            _cb.setCurrentIndex(0)
+        if hasattr(self, "_kir_genotype_combo"):
+            self._kir_genotype_combo.setCurrentIndex(0)
+        if hasattr(self, "_kir_interp_edit"):
+            self._kir_interp_edit.clear()
         self.manual_status_label.setText("Form cleared.")
 
     # ── Multi-donor helpers ────────────────────────────────────────────────────
@@ -2069,6 +2194,10 @@ class HLAReportGeneratorApp(QMainWindow):
             name_val = getattr(self, "_dsa_pat_f", {}).get("patient_name", QLineEdit()).text().strip()
         elif rtype == "flow_crossmatch":
             name_val = getattr(self, "_flow_pat_f", {}).get("patient_name", QLineEdit()).text().strip()
+        elif rtype == "luminex_typing":
+            name_val = getattr(self, "_lx_pat_f", {}).get("patient_name", QLineEdit()).text().strip()
+        elif rtype == "kir_genotyping":
+            name_val = getattr(self, "_kir_pat_f", {}).get("patient_name", QLineEdit()).text().strip()
         else:
             name_val = self.f.get("patient_name", QLineEdit()).text().strip()
         safe_name      = _re.sub(r"[^\w\-]", "_", name_val) if name_val else "Unknown"
@@ -2100,6 +2229,8 @@ class HLAReportGeneratorApp(QMainWindow):
             data["cdc_patient_fields"] = {k: w.text().strip() for k, w in self._cdc_pat_f.items()}
             data["cdc_donor_fields"]   = {k: w.text().strip() for k, w in self._cdc_don_f.items()}
             data["cdc_results"]        = {k: w.currentText() for k, w in self._manual_cdc_fields.items()}
+            if hasattr(self, "_cdc_nabl_chk"):
+                data["nabl"] = self._cdc_nabl_chk.isChecked()
         elif rtype == "dsa_crossmatch" and hasattr(self, "_dsa_pat_f"):
             data["dsa_patient_fields"] = {k: w.text().strip() for k, w in self._dsa_pat_f.items()}
             data["dsa_donor_fields"]   = {k: w.text().strip() for k, w in self._dsa_don_f.items()}
@@ -2107,6 +2238,8 @@ class HLAReportGeneratorApp(QMainWindow):
                 k: (w.currentText() if isinstance(w, QComboBox) else w.text().strip())
                 for k, w in self._dsa_result_f.items()
             }
+            if hasattr(self, "_dsa_nabl_chk"):
+                data["nabl"] = self._dsa_nabl_chk.isChecked()
         elif rtype == "flow_crossmatch" and hasattr(self, "_flow_pat_f"):
             data["flow_patient_fields"] = {k: w.text().strip() for k, w in self._flow_pat_f.items()}
             data["flow_donor_fields"]   = {k: w.text().strip() for k, w in self._flow_don_f.items()}
@@ -2114,6 +2247,17 @@ class HLAReportGeneratorApp(QMainWindow):
                 k: (w.currentText() if isinstance(w, QComboBox) else w.text().strip())
                 for k, w in self._flow_result_f.items()
             }
+        elif rtype == "kir_genotyping" and hasattr(self, "_kir_pat_f"):
+            data["kir_patient_fields"] = {k: w.text().strip() for k, w in self._kir_pat_f.items()}
+            data["kir_genes"]          = {g: cb.currentText()
+                                          for g, cb in getattr(self, "_kir_gene_combos", {}).items()}
+            _gt = getattr(self, "_kir_genotype_combo", None)
+            data["kir_genotype_override"] = _gt.currentText() if _gt else "Auto"
+            _ie = getattr(self, "_kir_interp_edit", None)
+            data["kir_interpretation"]    = _ie.toPlainText().strip() if _ie else ""
+            _nabl_w = getattr(self, "_kir_nabl_chk", None)
+            if _nabl_w is not None:
+                data["nabl"] = _nabl_w.isChecked()
         try:
             with open(path, "w") as fh: json.dump(data, fh, indent=2)
             self.manual_status_label.setText(
@@ -2236,6 +2380,8 @@ class HLAReportGeneratorApp(QMainWindow):
                 for k, v in data.get("cdc_results", {}).items():
                     if hasattr(self, "_manual_cdc_fields") and k in self._manual_cdc_fields:
                         self._manual_cdc_fields[k].setCurrentText(str(v))
+                if hasattr(self, "_cdc_nabl_chk"):
+                    self._cdc_nabl_chk.setChecked(data.get("nabl", True))
             elif _rtype == "dsa_crossmatch":
                 for k, v in data.get("dsa_patient_fields", {}).items():
                     if hasattr(self, "_dsa_pat_f") and k in self._dsa_pat_f:
@@ -2248,6 +2394,8 @@ class HLAReportGeneratorApp(QMainWindow):
                         w = self._dsa_result_f[k]
                         if isinstance(w, QComboBox): w.setCurrentText(str(v))
                         else: w.setText(str(v))
+                if hasattr(self, "_dsa_nabl_chk"):
+                    self._dsa_nabl_chk.setChecked(data.get("nabl", True))
             elif _rtype == "flow_crossmatch":
                 for k, v in data.get("flow_patient_fields", {}).items():
                     if hasattr(self, "_flow_pat_f") and k in self._flow_pat_f:
@@ -2260,6 +2408,24 @@ class HLAReportGeneratorApp(QMainWindow):
                         w = self._flow_result_f[k]
                         if isinstance(w, QComboBox): w.setCurrentText(str(v))
                         else: w.setText(str(v))
+            elif _rtype == "kir_genotyping":
+                for k, v in data.get("kir_patient_fields", {}).items():
+                    if hasattr(self, "_kir_pat_f") and k in self._kir_pat_f:
+                        self._kir_pat_f[k].setText(str(v))
+                for g, val in data.get("kir_genes", {}).items():
+                    combos = getattr(self, "_kir_gene_combos", {})
+                    if g in combos:
+                        combos[g].setCurrentText(val if val in ("+", "-") else "-")
+                saved_gt = data.get("kir_genotype_override", "Auto")
+                _gt = getattr(self, "_kir_genotype_combo", None)
+                if _gt and saved_gt in ("Auto", "AA", "AB", "BB"):
+                    _gt.setCurrentText(saved_gt)
+                _ie = getattr(self, "_kir_interp_edit", None)
+                if _ie is not None:
+                    _ie.setPlainText(data.get("kir_interpretation", ""))
+                _nabl_w = getattr(self, "_kir_nabl_chk", None)
+                if _nabl_w is not None:
+                    _nabl_w.setChecked(data.get("nabl", True))
             self._update_manual_rpl_visibility()
             self.manual_status_label.setText(f"Draft loaded: {os.path.basename(path)}")
         except Exception as e:
@@ -2739,6 +2905,11 @@ class HLAReportGeneratorApp(QMainWindow):
         # ── Luminex branch ───────────────────────────────────────────────────
         if case.get("report_type") == "luminex_typing":
             self._rebuild_bulk_luminex_editor(idx, case, pat_group, meta_group)
+            return
+
+        # ── KIR Genotyping branch ────────────────────────────────────────────
+        if case.get("report_type") == "kir_genotyping":
+            self._rebuild_bulk_kir_editor(idx, case, pat_group, meta_group)
             return
 
         # ── CDC Cross match branch — separate form for CDC reports ───────────
@@ -3593,6 +3764,99 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_editor_layout.addWidget(sig_group)
         QTimer.singleShot(200, self._refresh_bulk_preview)
 
+    def _rebuild_bulk_kir_editor(self, idx, case, _old_pat_group, meta_group):
+        """Build KIR Genotyping editor form inside the bulk editor scroll area."""
+        p = case["patient"]
+        self._bulk_kir_pat_f        = {}
+        self._bulk_kir_gene_combos  = {}
+
+        _KIR_GENES_LIST = [
+            "2DL1", "2DL2", "2DL3", "2DL4", "2DL5",
+            "2DS1", "2DS2", "2DS3", "2DS4", "2DS5",
+            "3DL1", "3DL2", "3DL3", "3DS1", "2DP1", "3DP1",
+        ]
+
+        kir_pat_grp = QGroupBox("Patient Information")
+        kpf = QFormLayout(); kir_pat_grp.setLayout(kpf)
+        kpf.setSpacing(1); kpf.setContentsMargins(4, 2, 4, 2)
+        for key, lbl, dflt in [
+            ("patient_name",    "Patient Name *",         ""),
+            ("gender_age",      "Gender / Age",           ""),
+            ("pin",             "PIN",                    ""),
+            ("sample_number",   "Sample Number",          ""),
+            ("hospital_mr_no",  "Hospital MR No",         "NA"),
+            ("specimen",        "Specimen",               "Blood EDTA"),
+            ("collection_date", "Sample Collection Date", ""),
+            ("receipt_date",    "Sample Receipt Date",    ""),
+            ("hospital_clinic", "Hospital / Clinic",      ""),
+            ("report_date",     "Report Date",            ""),
+        ]:
+            src_key = "name" if key == "patient_name" else key
+            w = QLineEdit(str(p.get(src_key, dflt) or dflt))
+            w.setFixedHeight(24)
+            if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
+            w.textChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_kir_pat_f[key] = w
+            kpf.addRow(lbl + ":", w)
+        _nabl_default = case.get("nabl", self.qsettings.value("nabl_stamp", True, type=bool))
+        self._bulk_kir_nabl_chk = QCheckBox("NABL Accreditation")
+        self._bulk_kir_nabl_chk.setChecked(_nabl_default)
+        self._bulk_kir_nabl_chk.stateChanged.connect(self._on_bulk_field_debounced)
+        kpf.addRow(self._bulk_kir_nabl_chk)
+
+        kir_genes_grp = QGroupBox("KIR Gene Results  (+ = Present  ·  – = Absent)")
+        kgf = QFormLayout(); kir_genes_grp.setLayout(kgf)
+        kgf.setSpacing(1); kgf.setContentsMargins(4, 2, 4, 2)
+        saved_genes = case.get("kir_genes", {})
+        for gene in _KIR_GENES_LIST:
+            cb = ClickOnlyComboBox()
+            cb.addItems(["-", "+"])
+            cb.setFixedHeight(24)
+            saved_val = saved_genes.get(gene, "-")
+            cb.setCurrentText(saved_val if saved_val in ("+", "-") else "-")
+            cb.currentIndexChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_kir_gene_combos[gene] = cb
+            kgf.addRow(f"{gene}:", cb)
+
+        kir_result_grp = QGroupBox("Genotype & Interpretation")
+        krf = QFormLayout(); kir_result_grp.setLayout(krf)
+        krf.setSpacing(1); krf.setContentsMargins(4, 2, 4, 2)
+        self._bulk_kir_genotype_combo = ClickOnlyComboBox()
+        self._bulk_kir_genotype_combo.addItems(["Auto", "AA", "AB", "BB"])
+        self._bulk_kir_genotype_combo.setFixedHeight(24)
+        saved_gt = case.get("kir_genotype_override", "Auto")
+        if saved_gt in ("Auto", "AA", "AB", "BB"):
+            self._bulk_kir_genotype_combo.setCurrentText(saved_gt)
+        self._bulk_kir_genotype_combo.currentIndexChanged.connect(self._on_bulk_field_debounced)
+        krf.addRow("Genotype:", self._bulk_kir_genotype_combo)
+        self._bulk_kir_interp_edit = QTextEdit()
+        self._bulk_kir_interp_edit.setPlaceholderText("Auto-generated from genotype if left blank")
+        self._bulk_kir_interp_edit.setFixedHeight(72)
+        self._bulk_kir_interp_edit.setPlainText(case.get("kir_interpretation", ""))
+        self._bulk_kir_interp_edit.textChanged.connect(self._on_bulk_field_debounced)
+        krf.addRow("Interpretation Override:", self._bulk_kir_interp_edit)
+
+        for grp in (kir_pat_grp, meta_group, kir_genes_grp, kir_result_grp):
+            self._bulk_editor_layout.addWidget(grp)
+
+        self._bulk_sig_combos = {}
+        name_overrides = case.get("sig_name_overrides", {})
+        sig_group = QGroupBox("Signature Override")
+        sig_form  = QFormLayout(); sig_group.setLayout(sig_form)
+        sig_form.setSpacing(2); sig_form.setContentsMargins(4, 2, 4, 2)
+        _sig_opts = ["(Use Default)"] + list(hla_assets.SIGN_BY_NAME.keys())
+        for i in range(3):
+            cmb = ClickOnlyComboBox(); cmb.addItems(_sig_opts); cmb.setFixedHeight(24)
+            saved = name_overrides.get(i, name_overrides.get(str(i), ""))
+            if saved:
+                pos = cmb.findText(saved)
+                if pos >= 0: cmb.setCurrentIndex(pos)
+            cmb.currentIndexChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_sig_combos[i] = cmb
+            sig_form.addRow(f"Signatory {i+1}:", cmb)
+        self._bulk_editor_layout.addWidget(sig_group)
+        QTimer.singleShot(200, self._refresh_bulk_preview)
+
     def _flush_bulk_edits(self, idx):
         """Read current form field values and write back to cases[idx]."""
         if idx < 0 or idx >= len(self.cases): return
@@ -3729,6 +3993,27 @@ class HLAReportGeneratorApp(QMainWindow):
             case["with_logo"] = self.logo_combo.currentText() == "With Logo"
             if hasattr(self, "_bulk_lx_nabl_chk") and self._bulk_lx_nabl_chk is not None:
                 case["nabl"] = self._bulk_lx_nabl_chk.isChecked()
+            return
+
+        # ── KIR path ─────────────────────────────────────────────────────────
+        if case.get("report_type") == "kir_genotyping":
+            if hasattr(self, "_bulk_kir_pat_f"):
+                for key, w in self._bulk_kir_pat_f.items():
+                    dest = "name" if key == "patient_name" else key
+                    p[dest] = w.text().strip()
+            if hasattr(self, "_bulk_kir_gene_combos"):
+                case["kir_genes"] = {g: cb.currentText()
+                                     for g, cb in self._bulk_kir_gene_combos.items()}
+            if hasattr(self, "_bulk_kir_genotype_combo"):
+                case["kir_genotype_override"] = self._bulk_kir_genotype_combo.currentText()
+            if hasattr(self, "_bulk_kir_interp_edit"):
+                case["kir_interpretation"] = self._bulk_kir_interp_edit.toPlainText().strip()
+            if hasattr(self, "_bulk_rtype_combo") and self._bulk_rtype_combo is not None:
+                case["report_type"] = TEMPLATE_TO_RTYPE.get(
+                    self._bulk_rtype_combo.currentText(), "kir_genotyping")
+            case["with_logo"] = self.logo_combo.currentText() == "With Logo"
+            if hasattr(self, "_bulk_kir_nabl_chk") and self._bulk_kir_nabl_chk is not None:
+                case["nabl"] = self._bulk_kir_nabl_chk.isChecked()
             return
 
         if not self._bulk_fields: return
@@ -4142,6 +4427,10 @@ class HLAReportGeneratorApp(QMainWindow):
             fpf = data["flow_patient_fields"]
             patient = dict(fpf)
             patient["name"] = patient.pop("patient_name", fpf.get("patient_name", ""))
+        elif rtype == "kir_genotyping" and "kir_patient_fields" in data:
+            kpf = data["kir_patient_fields"]
+            patient = dict(kpf)
+            patient["name"] = patient.pop("patient_name", kpf.get("patient_name", ""))
         else:
             patient = {k: v for k, v in pf.items() if k != "patient_name"}
             patient["name"] = pf.get("patient_name", "")
@@ -4184,7 +4473,8 @@ class HLAReportGeneratorApp(QMainWindow):
             "sig_name_overrides": data.get("sig_name_overrides", {}),
             "rpl_reference": data.get("rpl_reference", {}),
         }
-        for key in ("cdc_results", "dsa_results", "flow_results"):
+        for key in ("cdc_results", "dsa_results", "flow_results",
+                    "kir_genes", "kir_genotype_override", "kir_interpretation"):
             if key in data:
                 case[key] = data[key]
         return case
