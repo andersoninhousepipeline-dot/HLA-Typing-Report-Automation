@@ -3408,11 +3408,11 @@ def _build_kir_report(case: dict, S: dict) -> list:
     ]
     gene_tbl = Table([hdr_row, val_row], colWidths=gene_col_w)
     gene_tbl.setStyle(TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, 0), colors.HexColor("#2C3E50")),
-        ("TEXTCOLOR",     (0, 0), (-1, 0), colors.white),
-        ("BACKGROUND",    (0, 1), (-1, 1), colors.HexColor("#F2F2F2")),
-        ("BOX",           (0, 0), (-1, -1), 0.8, BLACK),
-        ("INNERGRID",     (0, 0), (-1, -1), 0.5, colors.HexColor("#C0C0C0")),
+        # White cells with black text and thin black gridlines (matches reference).
+        ("BACKGROUND",    (0, 0), (-1, -1), colors.white),
+        ("TEXTCOLOR",     (0, 0), (-1, -1), BLACK),
+        ("BOX",           (0, 0), (-1, -1), 0.25, BLACK),
+        ("INNERGRID",     (0, 0), (-1, -1), 0.13, BLACK),
         ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
         ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
         ("TOPPADDING",    (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
