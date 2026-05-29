@@ -136,6 +136,11 @@ REPORT_TEMPLATES = [
         "report_type":  "kir_genotyping",
         "default_path": os.path.join(_TEMPLATE_DIR, ""),
     },
+    {
+        "name":         "PRA Class I",
+        "report_type":  "pra_class1",
+        "default_path": os.path.join(_TEMPLATE_DIR, ""),
+    },
 ]
 TEMPLATE_NAMES    = [t["name"]        for t in REPORT_TEMPLATES]
 TEMPLATE_TO_RTYPE = {t["name"]:        t["report_type"] for t in REPORT_TEMPLATES}
@@ -1245,6 +1250,59 @@ class HLAReportGeneratorApp(QMainWindow):
         scroll_layout.addWidget(_kir_result_group)
         _kir_result_group.setVisible(False)
 
+        # ── PRA Class I — Patient Information ──────────────────────────────────
+        self._pra_pat_f = {}
+        _pra_pat_group = QGroupBox("Patient Information")
+        self._pra_pat_group = _pra_pat_group
+        _ppf = QFormLayout(); _pra_pat_group.setLayout(_ppf)
+        _ppf.setSpacing(1); _ppf.setContentsMargins(4, 2, 4, 2)
+        _PRA_PAT_FIELDS = [
+            ("patient_name",    "Patient Name *",         ""),
+            ("gender",          "Gender",                 ""),
+            ("age",             "Age",                    ""),
+            ("specimen",        "Specimen",               "Serum"),
+            ("hospital_clinic", "Hospital / Clinic",      ""),
+            ("pin",             "PIN",                    ""),
+            ("sample_number",   "Sample Number",          ""),
+            ("collection_date", "Sample Collection Date", ""),
+            ("receipt_date",    "Sample Receipt Date",    ""),
+            ("report_date",     "Report Date",            ""),
+        ]
+        for _k, _l, _dflt in _PRA_PAT_FIELDS:
+            _w = QLineEdit(_dflt); _w.setFixedHeight(24)
+            if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
+            _w.textChanged.connect(self._on_manual_field_debounced)
+            self._pra_pat_f[_k] = _w
+            _ppf.addRow(_l + ":", _w)
+        self._pra_nabl_chk = QCheckBox("NABL Accreditation")
+        self._pra_nabl_chk.setChecked(self.qsettings.value("nabl_stamp", True, type=bool))
+        self._pra_nabl_chk.stateChanged.connect(self._on_manual_field_debounced)
+        _ppf.addRow(self._pra_nabl_chk)
+        self._pra_seal_chk = QCheckBox("Signature Seal")
+        self._pra_seal_chk.setChecked(self.qsettings.value("sig_stamp", True, type=bool))
+        self._pra_seal_chk.stateChanged.connect(self._on_manual_field_debounced)
+        _ppf.addRow(self._pra_seal_chk)
+        scroll_layout.addWidget(_pra_pat_group)
+        _pra_pat_group.setVisible(False)
+
+        # ── PRA Class I — Result ───────────────────────────────────────────────
+        self._pra_result_f = {}
+        _pra_res_group = QGroupBox("PRA Result")
+        self._pra_res_group = _pra_res_group
+        _prf = QFormLayout(); _pra_res_group.setLayout(_prf)
+        _prf.setSpacing(1); _prf.setContentsMargins(4, 2, 4, 2)
+        _w_pct = QLineEdit(); _w_pct.setFixedHeight(24); _w_pct.setPlaceholderText("e.g. 14  (% sign optional)")
+        _w_pct.textChanged.connect(self._on_manual_field_debounced)
+        self._pra_result_f["pra_percentage"] = _w_pct
+        _prf.addRow("PRA Percentage:", _w_pct)
+        _w_res = QLineEdit(); _w_res.setFixedHeight(24)
+        _w_res.setPlaceholderText("Leave blank to auto-classify from percentage")
+        _w_res.textChanged.connect(self._on_manual_field_debounced)
+        self._pra_result_f["pra_result"] = _w_res
+        _prf.addRow("Result:", _w_res)
+        scroll_layout.addWidget(_pra_res_group)
+        _pra_res_group.setVisible(False)
+
         # ── Patient HLA Results ────────────────────────────────────────────────
         hla_group = QGroupBox("HLA Results — Patient")
         self._std_hla_group = hla_group   # ref for show/hide
@@ -1757,6 +1815,32 @@ class HLAReportGeneratorApp(QMainWindow):
             _kir_ie = getattr(self, "_kir_interp_edit", None)
             case["kir_interpretation"] = _kir_ie.toPlainText().strip() if _kir_ie else ""
 
+        # Attach PRA-specific fields
+        if rtype == "pra_class1":
+            pf = getattr(self, "_pra_pat_f", {})
+            rf = getattr(self, "_pra_result_f", {})
+            def _tv(d, k, default=""): return d[k].text().strip() if k in d else default
+            patient = {
+                "name":            _tv(pf, "patient_name"),
+                "gender":          _tv(pf, "gender"),
+                "age":             _tv(pf, "age"),
+                "specimen":        _tv(pf, "specimen") or "Serum",
+                "hospital_clinic": _tv(pf, "hospital_clinic"),
+                "pin":             _tv(pf, "pin"),
+                "sample_number":   _tv(pf, "sample_number"),
+                "collection_date": _tv(pf, "collection_date"),
+                "receipt_date":    _tv(pf, "receipt_date"),
+                "report_date":     _tv(pf, "report_date"),
+                "hla": {}, "hla_c_type": "", "_join_key": _tv(pf, "pin"),
+                "_has_insufficient_hla": False,
+            }
+            nabl      = self._pra_nabl_chk.isChecked() if hasattr(self, "_pra_nabl_chk") else nabl
+            sig_stamp = self._pra_seal_chk.isChecked() if hasattr(self, "_pra_seal_chk") else sig_stamp
+            case = self._build_case(rtype, nabl, with_logo, sig_stamp, patient, [])
+            case["pra_percentage"] = _tv(rf, "pra_percentage")
+            case["pra_result"]     = _tv(rf, "pra_result")
+            case["pra_class"]      = "I"
+
         self._apply_sig_name_overrides(case, self._manual_sig_name_overrides)
         return case
 
@@ -1782,13 +1866,16 @@ class HLAReportGeneratorApp(QMainWindow):
         elif rtype == "kir_genotyping":
             name = self._kir_pat_f.get("patient_name", QLineEdit()).text().strip() if hasattr(self, "_kir_pat_f") else ""
             pin  = self._kir_pat_f.get("pin",           QLineEdit()).text().strip() if hasattr(self, "_kir_pat_f") else ""
+        elif rtype == "pra_class1":
+            name = self._pra_pat_f.get("patient_name", QLineEdit()).text().strip() if hasattr(self, "_pra_pat_f") else ""
+            pin  = self._pra_pat_f.get("pin",           QLineEdit()).text().strip() if hasattr(self, "_pra_pat_f") else ""
         else:
             name = self.f["patient_name"].text().strip()
             pin  = self.f["pin"].text().strip()
         if not name:
             QMessageBox.warning(self, "Missing Fields", "Patient Name is required.")
             return
-        if not pin and rtype not in ("cdc_crossmatch", "dsa_crossmatch", "sab_class1", "sab_class2", "flow_crossmatch", "luminex_typing"):
+        if not pin and rtype not in ("cdc_crossmatch", "dsa_crossmatch", "sab_class1", "sab_class2", "flow_crossmatch", "luminex_typing", "pra_class1"):
             QMessageBox.warning(self, "Missing Fields", "PIN is required.")
             return
         out_dir = self.manual_output_label.text()
@@ -1861,7 +1948,7 @@ class HLAReportGeneratorApp(QMainWindow):
         try:
             case = self._collect_manual_case()
             _rtype_preview = case.get("report_type", "single_hla")
-            _NO_HLA_TYPES = ("cdc_crossmatch", "dsa_crossmatch", "flow_crossmatch", "sab_class1", "sab_class2", "luminex_typing")
+            _NO_HLA_TYPES = ("cdc_crossmatch", "dsa_crossmatch", "flow_crossmatch", "sab_class1", "sab_class2", "luminex_typing", "pra_class1")
             if _rtype_preview not in _NO_HLA_TYPES and _has_insufficient_data(case.get("patient", {})):
                 return
             self._start_manual_preview(case)
@@ -1897,11 +1984,13 @@ class HLAReportGeneratorApp(QMainWindow):
         is_flow_check = rtype == "flow_crossmatch"
         is_lx_check   = rtype == "luminex_typing"
         is_kir_check  = rtype == "kir_genotyping"
+        is_pra_check  = rtype == "pra_class1"
         for _grp in ("_std_pat_group", "_std_hla_group", "_std_donors_outer"):
             if hasattr(self, _grp):
                 getattr(self, _grp).setVisible(
                     not is_cdc and not is_dsa and not is_sab_check
-                    and not is_flow_check and not is_lx_check and not is_kir_check)
+                    and not is_flow_check and not is_lx_check and not is_kir_check
+                    and not is_pra_check)
         # RPL reference — only for rpl_couple, only within standard form
         self._manual_rpl_group.setVisible(rtype == "rpl_couple")
         # CDC form groups — only for CDC
@@ -1937,6 +2026,11 @@ class HLAReportGeneratorApp(QMainWindow):
         for _grp in ("_kir_pat_group", "_kir_genes_group", "_kir_result_group"):
             if hasattr(self, _grp):
                 getattr(self, _grp).setVisible(is_kir)
+        # PRA form groups — only for PRA Class I
+        is_pra = rtype == "pra_class1"
+        for _grp in ("_pra_pat_group", "_pra_res_group"):
+            if hasattr(self, _grp):
+                getattr(self, _grp).setVisible(is_pra)
 
     def _upload_cdc_photo(self, who: str):
         """Open file dialog for CDC patient/donor photo upload."""
@@ -2262,6 +2356,11 @@ class HLAReportGeneratorApp(QMainWindow):
             _nabl_w = getattr(self, "_kir_nabl_chk", None)
             if _nabl_w is not None:
                 data["nabl"] = _nabl_w.isChecked()
+        elif rtype == "pra_class1" and hasattr(self, "_pra_pat_f"):
+            data["pra_patient_fields"] = {k: w.text().strip() for k, w in self._pra_pat_f.items()}
+            data["pra_result_fields"]  = {k: w.text().strip() for k, w in self._pra_result_f.items()}
+            if hasattr(self, "_pra_nabl_chk"):
+                data["nabl"] = self._pra_nabl_chk.isChecked()
         try:
             with open(path, "w") as fh: json.dump(data, fh, indent=2)
             self.manual_status_label.setText(
@@ -2430,6 +2529,15 @@ class HLAReportGeneratorApp(QMainWindow):
                 _nabl_w = getattr(self, "_kir_nabl_chk", None)
                 if _nabl_w is not None:
                     _nabl_w.setChecked(data.get("nabl", True))
+            elif _rtype == "pra_class1":
+                for k, v in data.get("pra_patient_fields", {}).items():
+                    if hasattr(self, "_pra_pat_f") and k in self._pra_pat_f:
+                        self._pra_pat_f[k].setText(str(v))
+                for k, v in data.get("pra_result_fields", {}).items():
+                    if hasattr(self, "_pra_result_f") and k in self._pra_result_f:
+                        self._pra_result_f[k].setText(str(v))
+                if hasattr(self, "_pra_nabl_chk"):
+                    self._pra_nabl_chk.setChecked(data.get("nabl", True))
             self._update_manual_rpl_visibility()
             self.manual_status_label.setText(f"Draft loaded: {os.path.basename(path)}")
         except Exception as e:
@@ -3680,7 +3788,9 @@ class HLAReportGeneratorApp(QMainWindow):
                 with open(path, "rb") as fh: self._bulk_lx_pat_photo = fh.read()
                 _pp_lbl.setText(os.path.basename(path)); self._on_bulk_field_debounced()
         _pp_btn.clicked.connect(_load_pp)
-        _pp_row.addWidget(_pp_lbl, 1); _pp_row.addWidget(_pp_btn)
+        # Button first (right beside the "Patient Photo:" label); status text fills
+        # the rest so the button isn't pushed to the far-right edge.
+        _pp_row.addWidget(_pp_btn); _pp_row.addWidget(_pp_lbl, 1)
         lpf.addRow("Patient Photo:", _pp_row)
 
         lx_don_grp = QGroupBox("Donor Information")
@@ -3712,7 +3822,9 @@ class HLAReportGeneratorApp(QMainWindow):
                 with open(path, "rb") as fh: self._bulk_lx_don_photo = fh.read()
                 _dp_lbl.setText(os.path.basename(path)); self._on_bulk_field_debounced()
         _dp_btn.clicked.connect(_load_dp)
-        _dp_row.addWidget(_dp_lbl, 1); _dp_row.addWidget(_dp_btn)
+        # Button first (right beside the "Donor Photo:" label); status text fills
+        # the rest so the button isn't pushed to the far-right edge.
+        _dp_row.addWidget(_dp_btn); _dp_row.addWidget(_dp_lbl, 1)
         ldf.addRow("Donor Photo:", _dp_row)
 
         pat_hla = p.get("hla", {})
@@ -4236,7 +4348,9 @@ class HLAReportGeneratorApp(QMainWindow):
         # Copy case-level overrides including all result types
         for key in ("imgt_release", "methodology", "typing_status", "coverage",
                     "rpl_reference", "cdc_results", "dsa_results",
-                    "flow_results", "sab_alleles", "sab_chart_bytes", "sab_class"):
+                    "flow_results", "sab_alleles", "sab_chart_bytes", "sab_class",
+                    "luminex_interpretation", "luminex_pat_photo", "luminex_don_photo",
+                    "pra_percentage", "pra_result", "pra_class"):
             if case.get(key):
                 c[key] = case[key]
         # Carry photo bytes into the preview case patient/donor dicts
@@ -4439,6 +4553,10 @@ class HLAReportGeneratorApp(QMainWindow):
             kpf = data["kir_patient_fields"]
             patient = dict(kpf)
             patient["name"] = patient.pop("patient_name", kpf.get("patient_name", ""))
+        elif rtype == "pra_class1" and "pra_patient_fields" in data:
+            ppf = data["pra_patient_fields"]
+            patient = dict(ppf)
+            patient["name"] = patient.pop("patient_name", ppf.get("patient_name", ""))
         else:
             patient = {k: v for k, v in pf.items() if k != "patient_name"}
             patient["name"] = pf.get("patient_name", "")
@@ -4485,6 +4603,12 @@ class HLAReportGeneratorApp(QMainWindow):
                     "kir_genes", "kir_genotype_override", "kir_interpretation"):
             if key in data:
                 case[key] = data[key]
+        # PRA result fields (manual draft → bulk case)
+        if rtype == "pra_class1":
+            prf = data.get("pra_result_fields", {})
+            case["pra_percentage"] = prf.get("pra_percentage", "")
+            case["pra_result"]     = prf.get("pra_result", "")
+            case["pra_class"]      = "I"
         return case
 
     def load_bulk_draft(self):

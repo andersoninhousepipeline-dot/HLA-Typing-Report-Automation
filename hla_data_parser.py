@@ -540,6 +540,30 @@ def _parse_dtt_val(val: str) -> str:
     return "<10% Dead cells"
 
 
+def _read_crossmatch_sheet(filepath: str):
+    """Return the demographics DataFrame for a CDC / DSA / Flow crossmatch file.
+
+    These templates historically shipped the demographics on a sheet literally
+    named 'Sheet2', but real exports may name it anything.  Locate it by content
+    — the sheet whose column 2 header reads 'Patient name' — and fall back to a
+    sheet named 'Sheet2' only if no match is found.  Returns None when neither
+    is present so callers degrade gracefully instead of raising on a missing
+    'Sheet2' worksheet.
+    """
+    with pd.ExcelFile(filepath) as xls:
+        sheet_names = list(xls.sheet_names)
+    for sh in sheet_names:
+        try:
+            df = pd.read_excel(filepath, sheet_name=sh, header=None)
+        except Exception:
+            continue
+        if not df.empty and _lx_find_header(df, 2, "patient name") is not None:
+            return df
+    if "Sheet2" in sheet_names:
+        return pd.read_excel(filepath, sheet_name="Sheet2", header=None)
+    return None
+
+
 def parse_cdc_excel(filepath: str, nabl: bool = True) -> list:
     """
     Parse a CDC Cross match Excel file (Sheet2 format) into case dicts.
@@ -553,7 +577,9 @@ def parse_cdc_excel(filepath: str, nabl: bool = True) -> list:
         col 14=Report date, col 17=T cell crossmatch, col 18=B cell crossmatch
       Rows 6+: one patient row followed by one donor row per case.
     """
-    df = pd.read_excel(filepath, sheet_name="Sheet2", header=None)
+    df = _read_crossmatch_sheet(filepath)
+    if df is None:
+        return []
 
     # Find header row — first row where col 2 == "Patient name" (case-insensitive)
     header_row = None
@@ -683,7 +709,9 @@ def parse_flow_excel(filepath: str, nabl: bool = True) -> list:
       Patient row: T-CELLS data in col 17 (antibody), 18 (MCS), 19 (interpretation)
       Donor  row:  B-CELLS data in same columns.
     """
-    df = pd.read_excel(filepath, sheet_name="Sheet2", header=None)
+    df = _read_crossmatch_sheet(filepath)
+    if df is None:
+        return []
 
     header_row = None
     for i, row in df.iterrows():
@@ -796,7 +824,9 @@ def parse_dsa_excel(filepath: str, nabl: bool = True) -> list:
       col 17 = Test name, col 18 = Result, col 19 = MFI, col 20 = Positive cutoff
     Patient row → Class I data; Donor row → Class II data.
     """
-    df = pd.read_excel(filepath, sheet_name="Sheet2", header=None)
+    df = _read_crossmatch_sheet(filepath)
+    if df is None:
+        return []
 
     header_row = None
     for i, row in df.iterrows():
@@ -915,6 +945,190 @@ def parse_dsa_excel(filepath: str, nabl: bool = True) -> list:
     return cases
 
 
+# ─── Luminex (HLA Typing / SSO) parser ───────────────────────────────────────
+
+def _lx_find_header(df, col, text):
+    """Return the index of the first row whose `col` cell equals `text`
+    (case- and space-insensitive), scanning the first 30 rows.  None if absent."""
+    target = text.lower().replace(" ", "")
+    for i in range(min(len(df), 30)):
+        if col < df.shape[1]:
+            cell = _clean_str(df.iloc[i, col]).lower().replace(" ", "")
+            if cell == target:
+                return i
+    return None
+
+
+def _lx_result_lookup(df) -> dict:
+    """Build {SampleName: {locus: [allele1, allele2]}} from a result sheet,
+    auto-detecting the two supported layouts:
+
+      Format 1 (locus-wise):  SampleName | LOCUS | HLA-A* | HLA-B* | …
+                              allele-1 on the SampleName row, allele-2 on the next.
+      Format 2 (column-wise): SampleName | A/1 | A/2 | B/1 | B/2 | …  (one row/sample)
+    """
+    hdr = _lx_find_header(df, 0, "samplename")
+    if hdr is None:
+        return {}
+    headers = [_clean_str(df.iloc[hdr, c]) for c in range(df.shape[1])]
+
+    # Format 2 if any header looks like "A/1", "DRB1/2", … ; else Format 1.
+    is_format2 = any(re.match(r"^[A-Za-z0-9]+\s*/\s*[12]$", h) for h in headers)
+
+    lookup: dict = {}
+    if is_format2:
+        col_map = {}  # col idx -> (locus, slot 0/1)
+        for c, h in enumerate(headers):
+            m = re.match(r"^([A-Za-z0-9]+)\s*/\s*([12])$", h)
+            if m:
+                col_map[c] = (m.group(1).upper(), int(m.group(2)) - 1)
+        for i in range(hdr + 1, len(df)):
+            sn = _clean_str(df.iloc[i, 0])
+            if not sn:
+                continue
+            person = {}
+            for c, (locus, slot) in col_map.items():
+                person.setdefault(locus, ["", ""])[slot] = _clean_str(df.iloc[i, c])
+            lookup[sn] = person
+    else:
+        # Locus columns start after SampleName + LOCUS; map header → locus key.
+        loci_cols = {}
+        for c in range(2, df.shape[1]):
+            key = headers[c].upper().replace("HLA-", "").replace("*", "").strip()
+            if key:
+                loci_cols[c] = key
+        cur = None
+        for i in range(hdr + 1, len(df)):
+            sn = _clean_str(df.iloc[i, 0])
+            if sn:
+                cur = sn
+                lookup.setdefault(cur, {})
+            if cur is None:
+                continue
+            for c, key in loci_cols.items():
+                val = _clean_str(df.iloc[i, c])
+                if val:
+                    lookup[cur].setdefault(key, []).append(val)
+    return lookup
+
+
+def parse_luminex_excel(filepath: str, nabl: bool = True) -> list:
+    """
+    Parse an HLA Typing (Luminex / SSO) Excel file into case dicts.
+
+    The Luminex template uses its own sheet names (e.g. 'PATIENTDONOR DETAILS',
+    'RESULT DATA FORMAT 1', 'RESULT DATA FORMAT 2'), so sheets are located by
+    *content* rather than by fixed names — robust to per-template sheet naming:
+
+      • Demographics — the sheet whose header row has 'Patient name' in column 3.
+                       Columns match the CDC/DSA layout (name, role, relationship,
+                       age, gender, PIN, sample no, diagnosis, sample type,
+                       hospital, collection/receipt/report dates).
+      • HLA results  — any sheet whose first column header is 'SampleName'; both
+                       result layouts are auto-detected and merged.
+
+    People are joined to their HLA results by PIN (= SampleName).
+    """
+    xl_sheets = pd.ExcelFile(filepath).sheet_names
+
+    demo_df    = None
+    hla_lookup: dict = {}
+    for sh in xl_sheets:
+        df = pd.read_excel(filepath, sheet_name=sh, header=None)
+        if df.empty:
+            continue
+        if demo_df is None and _lx_find_header(df, 2, "patient name") is not None:
+            demo_df = df
+        elif _lx_find_header(df, 0, "samplename") is not None:
+            hla_lookup.update(_lx_result_lookup(df))
+
+    if demo_df is None:
+        return []
+
+    df = demo_df
+    header_row = _lx_find_header(df, 2, "patient name")
+
+    def _rv(row, col):
+        if row is None or col >= len(row): return ""
+        return _clean_str(row.iloc[col])
+
+    def _rd(row, col):
+        if row is None or col >= len(row): return ""
+        return _fmt_date(row.iloc[col])
+
+    def _ga(row):
+        gender = _sentence_case(_rv(row, 6))
+        raw_age = row.iloc[5] if 5 < len(row) else ""
+        if isinstance(raw_age, (int, float)) and not pd.isna(raw_age):
+            age = str(int(raw_age))
+        else:
+            age = _clean_str(raw_age)
+        return " / ".join(p for p in (gender, age) if p)
+
+    def _person(row):
+        pin = _rv(row, 7)
+        return {
+            "name":            _sentence_case(_rv(row, 2)),
+            "gender_age":      _ga(row),
+            "pin":             pin or "NA",
+            "sample_number":   _rv(row, 8) or "NA",
+            "relation":        _sentence_case(_rv(row, 4)),
+            "diagnosis":       _sentence_case(_rv(row, 9)) or "NA",
+            "hospital_clinic": _sentence_case(_rv(row, 11)),
+            "sample_type":     _rv(row, 10) or "EDTA Blood",
+            "collection_date": _rd(row, 12),
+            "receipt_date":    _rd(row, 13),
+            "report_date":     _rd(row, 14),
+            "photo_bytes":     None,
+            "hla":             hla_lookup.get(pin, {}),
+            "hla_c_type":      "",
+            "_join_key":       pin,
+            "_has_insufficient_hla": False,
+        }
+
+    cases = []
+    current_patient = None
+    current_donors  = []
+
+    def _flush():
+        nonlocal current_patient, current_donors
+        if current_patient is None:
+            return
+        cases.append({
+            "report_type":     "luminex_typing",
+            "nabl":            nabl,
+            "with_logo":       True,
+            "signature_stamp": False,
+            "methodology":     "", "imgt_release": "",
+            "coverage":        "", "typing_status": "Complete",
+            "reviewer":        "",
+            "patient":         _person(current_patient),
+            "donors":          [_person(d) for d in current_donors],
+            "rpl_reference":   {},
+            "luminex_interpretation": "",
+            "luminex_pat_photo": None,
+            "luminex_don_photo": None,
+        })
+        current_patient = None
+        current_donors  = []
+
+    for i in range(header_row + 1, len(df)):
+        row  = df.iloc[i]
+        name = _clean_str(row.iloc[2]) if 2 < len(row) else ""
+        role = (_clean_str(row.iloc[3]) if 3 < len(row) else "").lower().strip()
+        if not name:
+            continue
+        if role.startswith("pati"):
+            _flush()
+            current_patient = row
+            current_donors  = []
+        elif "donor" in role and current_patient is not None:
+            current_donors.append(row)
+
+    _flush()
+    return cases
+
+
 # ─── Main parser ─────────────────────────────────────────────────────────────
 
 def parse_excel(filepath: str, nabl: bool = True) -> list:
@@ -939,7 +1153,11 @@ def parse_excel(filepath: str, nabl: bool = True) -> list:
         fname_upper = os.path.basename(filepath).upper()
 
         # ── 1. Filename is the most reliable signal — check it first ──────────
+        # Each template type ships its own sheet names, so route by filename and
+        # let each parser locate its sheets by content.
         # DSA must win over Flow when both keywords appear in the name.
+        if "LUMINEX" in fname_upper:
+            return parse_luminex_excel(filepath, nabl)
         if "DSA" in fname_upper:
             return parse_dsa_excel(filepath, nabl)
         if "FLOW" in fname_upper and "CDC" not in fname_upper:
@@ -947,17 +1165,30 @@ def parse_excel(filepath: str, nabl: bool = True) -> list:
         if "CDC" in fname_upper:
             return parse_cdc_excel(filepath, nabl)
 
-        # ── 2. Fall back to scanning the sheet content ────────────────────────
-        try:
-            df_peek = pd.read_excel(filepath, sheet_name="Sheet2", header=None,
-                                    nrows=20)
+        # ── 2. No filename keyword — detect by sheet *content* ────────────────
+        # Never assume a 'Sheet2' exists (the Luminex template, for one, has none).
+        # Luminex ships dedicated result sheet(s) headed 'SampleName'; the
+        # crossmatch templates keep their results inline, so a 'SampleName'
+        # header uniquely identifies Luminex here (MINISEQ also uses it but is
+        # caught by the 'patient-donor detail' check above).
+        for sh in xl_sheets:
+            try:
+                df_sh = pd.read_excel(filepath, sheet_name=sh, header=None, nrows=30)
+            except Exception:
+                continue
+            if not df_sh.empty and _lx_find_header(df_sh, 0, "samplename") is not None:
+                return parse_luminex_excel(filepath, nabl)
+
+        # Otherwise it is a CDC/DSA/Flow crossmatch — read the demographics sheet
+        # text (located by content, not by name) to tell the three apart.
+        demo_df = _read_crossmatch_sheet(filepath)
+        sheet_text = ""
+        if demo_df is not None:
             sheet_text = " ".join(
                 str(v).lower()
-                for v in df_peek.values.flatten()
+                for v in demo_df.head(20).values.flatten()
                 if v is not None and str(v) != "nan"
             )
-        except Exception:
-            sheet_text = ""
 
         if "donor specific" in sheet_text or " dsa " in sheet_text:
             return parse_dsa_excel(filepath, nabl)
