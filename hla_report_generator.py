@@ -376,6 +376,8 @@ class HLAReportGeneratorApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        # track last auto-generated interpretation to avoid overwriting user edits
+        self._lx_last_auto_interp = None
         self.qsettings         = QSettings("AndersonDiagnostics", "HLAReportGenerator")
         self.cases             = []
         self._bulk_current_row = -1
@@ -1067,11 +1069,31 @@ class HLAReportGeneratorApp(QMainWindow):
             ("collection_date", "Date of Collection",     ""),
         ]
         for _k, _l, _d in _LX_PAT_FIELDS:
-            _w = QLineEdit(_d); _w.setMaximumHeight(24)
-            if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
+            if _k == "sample_type":
+                _w = ClickOnlyComboBox()
+                _w.addItems(["ACD Tube", "Sodium Heparin Whole Blood"])
+                # try to set incoming default if it matches one of the options
+                if _d in ("ACD Tube", "Sodium Heparin Whole Blood"):
+                    _w.setCurrentText(_d)
+                else:
+                    _w.setCurrentText("ACD Tube")
+                _w.setFixedHeight(24)
+            else:
+                _w = QLineEdit(_d); _w.setMaximumHeight(24)
+                if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
             self._lx_pat_f[_k] = _w
             _lpf.addRow(_l + ":", _w)
-            _w.textChanged.connect(self._on_manual_field_debounced)
+            if hasattr(_w, "text"):
+                _w.textChanged.connect(self._on_manual_field_debounced)
+            else:
+                _w.currentIndexChanged.connect(self._on_manual_field_debounced)
+        # auto-fill interpretation when patient name changes
+        try:
+            pn_w = self._lx_pat_f.get("patient_name")
+            if pn_w is not None and hasattr(pn_w, "text"):
+                pn_w.textChanged.connect(self._auto_fill_manual_lx_interpretation)
+        except Exception:
+            pass
         _lx_pp_row = QHBoxLayout()
         self._lx_pat_photo_lbl = QLabel("No photo selected")
         self._lx_pat_photo_lbl.setStyleSheet("color:gray;font-style:italic;")
@@ -1114,11 +1136,23 @@ class HLAReportGeneratorApp(QMainWindow):
             ("collection_date", "Date of Collection",     ""),
         ]
         for _k, _l, _d in _LX_DON_FIELDS:
-            _w = QLineEdit(_d); _w.setMaximumHeight(24)
-            if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
+            if _k == "sample_type":
+                _w = ClickOnlyComboBox()
+                _w.addItems(["ACD Tube", "Sodium Heparin Whole Blood"])
+                if _d in ("ACD Tube", "Sodium Heparin Whole Blood"):
+                    _w.setCurrentText(_d)
+                else:
+                    _w.setCurrentText("ACD Tube")
+                _w.setFixedHeight(24)
+            else:
+                _w = QLineEdit(_d); _w.setMaximumHeight(24)
+                if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
             self._lx_don_f[_k] = _w
             _ldf.addRow(_l + ":", _w)
-            _w.textChanged.connect(self._on_manual_field_debounced)
+            if hasattr(_w, "text"):
+                _w.textChanged.connect(self._on_manual_field_debounced)
+            else:
+                _w.currentIndexChanged.connect(self._on_manual_field_debounced)
         _lx_dp_row = QHBoxLayout()
         self._lx_don_photo_lbl = QLabel("No photo selected")
         self._lx_don_photo_lbl.setStyleSheet("color:gray;font-style:italic;")
@@ -1749,7 +1783,15 @@ class HLAReportGeneratorApp(QMainWindow):
         if rtype == "luminex_typing":
             pf = getattr(self, "_lx_pat_f", {})
             df = getattr(self, "_lx_don_f", {})
-            def _tv(d, k, default=""): return d[k].text().strip() if k in d else default
+            def _tv(d, k, default=""):
+                if k not in d:
+                    return default
+                w = d[k]
+                if hasattr(w, "text"):
+                    return w.text().strip()
+                if hasattr(w, "currentText"):
+                    return w.currentText()
+                return default
             patient = {
                 "name":            _tv(pf, "patient_name"),
                 "gender_age":      _tv(pf, "gender_age"),
@@ -2209,6 +2251,9 @@ class HLAReportGeneratorApp(QMainWindow):
             d_fields[key] = w
             form.addRow(lbl + ":", w)
             w.textChanged.connect(self._on_manual_field_debounced)
+            # auto-update interpretation when donor name or match changes
+            if key in ("name", "match"):
+                w.textChanged.connect(self._auto_fill_manual_lx_interpretation)
             if key == "relationship":
                 w.textChanged.connect(self._auto_detect_manual_template)
 
@@ -2238,6 +2283,8 @@ class HLAReportGeneratorApp(QMainWindow):
         self._donors_list_layout.addWidget(container)
         self._auto_detect_manual_template()
         self._refresh_manual_preview()
+        # ensure interpretation is generated for newly added donor
+        self._auto_fill_manual_lx_interpretation()
 
     def _remove_manual_donor(self, entry):
         """Remove a donor panel from the manual tab."""
@@ -2278,6 +2325,65 @@ class HLAReportGeneratorApp(QMainWindow):
                 sig["name"]     = name
                 if name in title_lookup:
                     sig["title"] = title_lookup[name]
+
+    def _make_lx_interpretation(self, patient_name: str, donor_name: str, match: str) -> str:
+        p = (patient_name or "Patient").strip()
+        d = (donor_name or "Potential donor").strip()
+        m = (match or "").strip()
+        # Normalize match to simple X/10 if user entered just a number
+        if m and "/" not in m and "of" not in m:
+            # assume it's a number like '7' -> '7/10'
+            try:
+                int(m)
+                m = f"{m}/10"
+            except Exception:
+                pass
+        sentence1 = f"The HLA typing of {p} (Patient) and {d} (Potential donor) shows allele match."
+        sentence2 = f"The patient had showed about {m} match with the donor." if m else ""
+        out = sentence1 + (" " + sentence2 if sentence2 else "")
+        return out
+
+    def _auto_fill_manual_lx_interpretation(self):
+        try:
+            pn_w = getattr(self, "_lx_pat_f", {}).get("patient_name")
+            pname = pn_w.text().strip() if pn_w and hasattr(pn_w, "text") else ""
+            donor_name = ""
+            match = ""
+            if self._manual_donors:
+                first = self._manual_donors[0]
+                dn_w = first["fields"].get("name")
+                mt_w = first["fields"].get("match")
+                donor_name = dn_w.text().strip() if dn_w and hasattr(dn_w, "text") else ""
+                match = mt_w.text().strip() if mt_w and hasattr(mt_w, "text") else ""
+            new = self._make_lx_interpretation(pname, donor_name, match)
+            cur = self._lx_interp_edit.toPlainText().strip() if hasattr(self, "_lx_interp_edit") else ""
+            if not cur or cur == (self._lx_last_auto_interp or ""):
+                if hasattr(self, "_lx_interp_edit"):
+                    self._lx_interp_edit.blockSignals(True)
+                    self._lx_interp_edit.setPlainText(new)
+                    self._lx_interp_edit.blockSignals(False)
+                self._lx_last_auto_interp = new
+        except Exception:
+            pass
+
+    def _auto_fill_bulk_lx_interpretation(self):
+        try:
+            pn_w = getattr(self, "_bulk_lx_pat_f", {}).get("patient_name")
+            pname = pn_w.text().strip() if pn_w and hasattr(pn_w, "text") else ""
+            dn_w = getattr(self, "_bulk_lx_don_f", {}).get("name")
+            mt_w = getattr(self, "_bulk_lx_don_f", {}).get("match")
+            donor_name = dn_w.text().strip() if dn_w and hasattr(dn_w, "text") else ""
+            match = mt_w.text().strip() if mt_w and hasattr(mt_w, "text") else ""
+            new = self._make_lx_interpretation(pname, donor_name, match)
+            cur = self._bulk_lx_interp_edit.toPlainText().strip() if hasattr(self, "_bulk_lx_interp_edit") else ""
+            if not cur or cur == (getattr(self, "_bulk_lx_last_auto_interp", None) or ""):
+                if hasattr(self, "_bulk_lx_interp_edit"):
+                    self._bulk_lx_interp_edit.blockSignals(True)
+                    self._bulk_lx_interp_edit.setPlainText(new)
+                    self._bulk_lx_interp_edit.blockSignals(False)
+                self._bulk_lx_last_auto_interp = new
+        except Exception:
+            pass
 
     def save_manual_draft(self):
         os.makedirs(DRAFTS_DIR, exist_ok=True)
@@ -2361,6 +2467,16 @@ class HLAReportGeneratorApp(QMainWindow):
             data["pra_result_fields"]  = {k: w.text().strip() for k, w in self._pra_result_f.items()}
             if hasattr(self, "_pra_nabl_chk"):
                 data["nabl"] = self._pra_nabl_chk.isChecked()
+        elif rtype == "luminex_typing" and hasattr(self, "_lx_pat_f"):
+            def _val(w):
+                return w.currentText() if isinstance(w, QComboBox) else w.text().strip()
+            data["luminex_patient_fields"] = {k: _val(w) for k, w in self._lx_pat_f.items()}
+            if hasattr(self, "_lx_don_f"):
+                data["luminex_donor_fields"] = {k: _val(w) for k, w in self._lx_don_f.items()}
+            if hasattr(self, "_lx_interp_edit"):
+                data["luminex_interpretation"] = self._lx_interp_edit.toPlainText().strip()
+            if hasattr(self, "_lx_nabl_chk"):
+                data["nabl"] = self._lx_nabl_chk.isChecked()
         try:
             with open(path, "w") as fh: json.dump(data, fh, indent=2)
             self.manual_status_label.setText(
@@ -2538,6 +2654,26 @@ class HLAReportGeneratorApp(QMainWindow):
                         self._pra_result_f[k].setText(str(v))
                 if hasattr(self, "_pra_nabl_chk"):
                     self._pra_nabl_chk.setChecked(data.get("nabl", True))
+            elif _rtype == "luminex_typing":
+                for k, v in data.get("luminex_patient_fields", {}).items():
+                    if hasattr(self, "_lx_pat_f") and k in self._lx_pat_f:
+                        w = self._lx_pat_f[k]
+                        if isinstance(w, QComboBox):
+                            w.setCurrentText(str(v))
+                        else:
+                            w.setText(str(v))
+                for k, v in data.get("luminex_donor_fields", {}).items():
+                    if hasattr(self, "_lx_don_f") and k in self._lx_don_f:
+                        w = self._lx_don_f[k]
+                        if isinstance(w, QComboBox):
+                            w.setCurrentText(str(v))
+                        else:
+                            w.setText(str(v))
+                _ie = getattr(self, "_lx_interp_edit", None)
+                if _ie is not None:
+                    _ie.setPlainText(data.get("luminex_interpretation", ""))
+                if hasattr(self, "_lx_nabl_chk"):
+                    self._lx_nabl_chk.setChecked(data.get("nabl", True))
             self._update_manual_rpl_visibility()
             self.manual_status_label.setText(f"Draft loaded: {os.path.basename(path)}")
         except Exception as e:
@@ -3766,10 +3902,25 @@ class HLAReportGeneratorApp(QMainWindow):
             ("collection_date", "Date of Collection",  ""),
         ]:
             src_key = "name" if key == "patient_name" else key
-            w = QLineEdit(str(p.get(src_key, dflt) or dflt))
-            w.setFixedHeight(24)
-            if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
-            w.textChanged.connect(self._on_bulk_field_debounced)
+            val = str(p.get(src_key, dflt) or dflt)
+            if key == "sample_type":
+                w = ClickOnlyComboBox()
+                w.addItems(["ACD Tube", "Sodium Heparin Whole Blood"])
+                if val in ("ACD Tube", "Sodium Heparin Whole Blood"):
+                    w.setCurrentText(val)
+                else:
+                    w.setCurrentText("ACD Tube")
+                w.setFixedHeight(24)
+                w.currentIndexChanged.connect(self._on_bulk_field_debounced)
+            else:
+                w = QLineEdit(val)
+                w.setFixedHeight(24)
+                if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
+                w.textChanged.connect(self._on_bulk_field_debounced)
+            # connect name/match to auto-fill interpretation
+            if key in ("patient_name",):
+                if hasattr(w, "text"):
+                    w.textChanged.connect(self._auto_fill_bulk_lx_interpretation)
             self._bulk_lx_pat_f[key] = w
             lpf.addRow(lbl + ":", w)
         _nabl_default = case.get("nabl", self.qsettings.value("nabl_stamp", True, type=bool))
@@ -3804,11 +3955,27 @@ class HLAReportGeneratorApp(QMainWindow):
             ("relation",        "Relation",            ""),
             ("sample_type",     "Sample Type",         "EDTA Blood"),
             ("collection_date", "Date of Collection",  ""),
+            ("match",           "Match Score",         ""),
         ]:
-            w = QLineEdit(str(don.get(key, dflt) or dflt))
-            w.setFixedHeight(24)
-            if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
-            w.textChanged.connect(self._on_bulk_field_debounced)
+            val = str(don.get(key, dflt) or dflt)
+            if key == "sample_type":
+                w = ClickOnlyComboBox()
+                w.addItems(["ACD Tube", "Sodium Heparin Whole Blood"])
+                if val in ("ACD Tube", "Sodium Heparin Whole Blood"):
+                    w.setCurrentText(val)
+                else:
+                    w.setCurrentText("ACD Tube")
+                w.setFixedHeight(24)
+                w.currentIndexChanged.connect(self._on_bulk_field_debounced)
+            else:
+                w = QLineEdit(val)
+                w.setFixedHeight(24)
+                if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
+                w.textChanged.connect(self._on_bulk_field_debounced)
+            # connect donor name/match to auto-fill interpretation
+            if key in ("name", "match"):
+                if hasattr(w, "text"):
+                    w.textChanged.connect(self._auto_fill_bulk_lx_interpretation)
             self._bulk_lx_don_f[key] = w
             ldf.addRow(lbl + ":", w)
         _dp_row = QHBoxLayout()
@@ -3857,10 +4024,15 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_lx_interp_edit.setFixedHeight(60)
         self._bulk_lx_interp_edit.setPlainText(case.get("luminex_interpretation", ""))
         self._bulk_lx_interp_edit.textChanged.connect(self._on_bulk_field_debounced)
+        # store last auto-generated bulk interp to avoid clobbering user edits
+        self._bulk_lx_last_auto_interp = None
         lif.addWidget(self._bulk_lx_interp_edit)
 
         for grp in (lx_pat_grp, meta_group, lx_don_grp, lx_hla_grp, lx_interp_grp):
             self._bulk_editor_layout.addWidget(grp)
+
+        # attempt an initial auto-fill
+        QTimer.singleShot(50, self._auto_fill_bulk_lx_interpretation)
 
         self._bulk_sig_combos = {}
         name_overrides = case.get("sig_name_overrides", {})
@@ -4088,7 +4260,10 @@ class HLAReportGeneratorApp(QMainWindow):
             if hasattr(self, "_bulk_lx_pat_f"):
                 for key, w in self._bulk_lx_pat_f.items():
                     dest = "name" if key == "patient_name" else key
-                    p[dest] = w.text().strip()
+                    if isinstance(w, QComboBox):
+                        p[dest] = w.currentText()
+                    else:
+                        p[dest] = w.text().strip()
                 p["hla"] = {locus: [w.text().strip() for w in ws]
                             for locus, ws in self._bulk_lx_pat_hla.items()
                             if hasattr(self, "_bulk_lx_pat_hla")}
@@ -4096,7 +4271,10 @@ class HLAReportGeneratorApp(QMainWindow):
             if hasattr(self, "_bulk_lx_don_f") and case.get("donors"):
                 d = case["donors"][0]
                 for key, w in self._bulk_lx_don_f.items():
-                    d[key] = w.text().strip()
+                    if isinstance(w, QComboBox):
+                        d[key] = w.currentText()
+                    else:
+                        d[key] = w.text().strip()
                 d["hla"] = {locus: [w.text().strip() for w in ws]
                             for locus, ws in self._bulk_lx_don_hla.items()
                             if hasattr(self, "_bulk_lx_don_hla")}

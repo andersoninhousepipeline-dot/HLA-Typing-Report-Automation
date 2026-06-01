@@ -2540,9 +2540,21 @@ def _build_luminex_report(case: dict, S: dict) -> list:
     elems.append(Paragraph("<b>Typing Result</b>", _rslt_hdr_s))
     elems.append(Spacer(1, 1*mm))
 
-    LOCI = ["A", "B", "C", "DRB1", "DQB1"]
     pat_hla = patient.get("hla", {})
     don_hla = donor.get("hla", {})
+
+    def _locus_has_val(hla_dict, locus):
+        # Test the RAW allele text — _clean_display() maps empty cells to an
+        # em-dash, which would make every locus look "filled".
+        a = hla_dict.get(locus, ["", ""]) or []
+        return any(str(x).strip() for x in a)
+
+    # Always show the standard Class I & II loci; append any extra locus
+    # (DPB1, DRB3/4/5, …) only when the patient or donor has a value for it.
+    _BASE_LOCI  = ["A", "B", "C", "DRB1", "DQB1"]
+    _EXTRA_LOCI = ["DPB1", "DRB3", "DRB4", "DRB5"]
+    LOCI = _BASE_LOCI + [l for l in _EXTRA_LOCI
+                         if _locus_has_val(pat_hla, l) or _locus_has_val(don_hla, l)]
     _th_s  = ParagraphStyle("_lx_th", fontName=F_BOLD, fontSize=10,
                              textColor=BLACK, alignment=TA_CENTER, leading=13)
     _td_s  = ParagraphStyle("_lx_td", fontName=F_REG,  fontSize=10,
@@ -2550,7 +2562,9 @@ def _build_luminex_report(case: dict, S: dict) -> list:
     _tsp_s = ParagraphStyle("_lx_ts", fontName=F_BOLD, fontSize=10,
                              textColor=BLACK, alignment=TA_CENTER, leading=13)
 
-    tbl_col_w = [cw*0.155, cw*0.169, cw*0.169, cw*0.169, cw*0.169, cw*0.169]
+    _label_w = 0.155
+    _loc_w   = (1.0 - _label_w) / len(LOCI)
+    tbl_col_w = [cw*_label_w] + [cw*_loc_w] * len(LOCI)
     hdr_row = ([Paragraph("<b>LOCUS</b>", _th_s)]
                + [Paragraph(f"<b>HLA-{l}*</b>", _th_s) for l in LOCI])
 
@@ -2565,8 +2579,8 @@ def _build_luminex_report(case: dict, S: dict) -> list:
     pat_pairs  = [_pair(pat_hla, l) for l in LOCI]
     don_pairs  = [_pair(don_hla, l) for l in LOCI]
 
-    pat_span_row = [Paragraph(f"<b>{pat_name_d} (Patient)</b>", _tsp_s)] + [""] * 5
-    don_span_row = [Paragraph(f"<b>{don_name_d} (Donor)</b>",   _tsp_s)] + [""] * 5
+    pat_span_row = [Paragraph(f"<b>{pat_name_d} (Patient)</b>", _tsp_s)] + [""] * len(LOCI)
+    don_span_row = [Paragraph(f"<b>{don_name_d} (Donor)</b>",   _tsp_s)] + [""] * len(LOCI)
     pat_row1 = ([Paragraph("<b>HLA-CLASS\nI &amp; II</b>", _th_s)]
                 + [Paragraph(p[0], _td_s) for p in pat_pairs])
     pat_row2 = ([Paragraph("", _td_s)]
@@ -2597,7 +2611,9 @@ def _build_luminex_report(case: dict, S: dict) -> list:
         ("TOPPADDING",    (0, 0), (-1, -1), 3),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
     ]))
-    elems.append(typing_t)
+    # Keep the whole result table on one page so the donor rows never split
+    # away from their header onto the next page.
+    elems.append(KeepTogether([typing_t]))
 
     # ── Page 2: Interpretation · Test Details · Disclaimer · References · Sigs
     elems.append(PageBreak())
