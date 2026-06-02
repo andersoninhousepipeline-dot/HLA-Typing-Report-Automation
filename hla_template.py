@@ -424,6 +424,73 @@ def _normalize_age(gender_age: str) -> str:
     return re.sub(_PAT, _repl, gender_age)
 
 
+def _fit_one_line(text: str, avail_pts: float, base_style: ParagraphStyle,
+                  min_size: float = 6.5) -> Paragraph:
+    """Render *text* on a single line, auto-shrinking the font (down to
+    *min_size*) when it would otherwise wrap to a second line.
+
+    Used for free-text demography values such as a lengthy Hospital/Clinic
+    name: wrapping a value to two lines makes the demography table one row
+    taller, which can push the rest of the report onto a new page.  Keeping
+    the value on one line holds the table height constant and prevents that
+    page break.
+    """
+    display = text or ""
+    avail = max(1.0, avail_pts - 6)  # leave room for cell padding
+    fs = base_style.fontSize
+    w = pdfmetrics.stringWidth(display, base_style.fontName, fs)
+    if w > avail:
+        fit = max(min_size, fs * avail / w)
+        style = ParagraphStyle(base_style.name + "_fit1", parent=base_style,
+                               fontSize=fit, leading=fit + 2)
+        return Paragraph(display, style)
+    return Paragraph(display, base_style)
+
+
+def _demography_col_widths(patient: dict, donor: dict) -> list:
+    """Compute the 7 column widths for the patient/donor demography table.
+
+    Layout: [lbl_L, colon_L, val_L, GAP, lbl_R, colon_R, val_R].  The patient
+    value column (val_L — Hospital/Clinic, names) and the donor value column
+    (val_R) share a fixed horizontal budget.  Donor values are usually short
+    (dates, 'NA', 'Male / 41 Years'), leaving the donor column half-empty, so
+    val_R is sized to just fit its widest entry and *all* the leftover space is
+    handed to val_L — letting a long Hospital/Clinic name render at full font
+    instead of being shrunk.  When a donor value (e.g. a long donor name) is
+    itself wide, the split shifts back the other way automatically.
+    """
+    cw = CONTENT_W
+    F_BOLD = _f("SegoeUI-Bold", "Helvetica-Bold")
+    # Label / colon / gap columns stay fixed (sized for their longest labels:
+    # "Sample Number" left, "Sample receipt date" right).
+    f0, f1, f3, f4, f5 = 0.176, 0.016, 0.012, 0.196, 0.016
+    fixed = (f0 + f1 + f3 + f4 + f5) * cw
+    pool = cw - fixed                      # shared by val_L (col2) + val_R (col6)
+
+    def _w(s):
+        return pdfmetrics.stringWidth(s or "", F_BOLD, 10)
+
+    # Widest donor value that lands in val_R.  The donor name is capped because
+    # it auto-shrinks to fit (see IV_name), so an unusually long name should not
+    # claim more than ~120 pt and starve the patient column.
+    donor_name_w = min(_w(_title_case(_clean_display(donor.get("name", "")))), 120.0)
+    donor_vals = [
+        donor_name_w,
+        _w(_normalize_age(donor.get("gender_age", ""))),
+        _w(_clean_display(donor.get("pin", "")) or "NA"),
+        _w(_clean_display(donor.get("sample_number", "")) or "NA"),
+        _w(_clean_display(donor.get("receipt_date", ""))),
+        _w(_clean_display(donor.get("report_date", ""))),
+    ]
+    need6 = max(donor_vals) + 8             # widest donor value + cell padding
+    col6 = max(58.0, min(need6, 165.0))     # clamp to a sane range
+    col2 = pool - col6
+    MIN2 = 150.0                            # never starve the patient value column
+    if col2 < MIN2:
+        col2, col6 = MIN2, pool - MIN2
+    return [f0 * cw, f1 * cw, col2, f3 * cw, f4 * cw, f5 * cw, col6]
+
+
 def _append_match_pct(match_str: str) -> str:
     """Append (X%) to 'N of M' match strings when no % is already present."""
     if not match_str or "%" in match_str:
@@ -1804,12 +1871,11 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     def IC():  return Paragraph("<b>:</b>", info_lbl_style)
 
     # 7-col layout: [lbl_L, colon_L, val_L, GAP, lbl_R, colon_R, val_R]
-    # Narrowed the gap and trimmed val_L so val_R (donor) is wide enough for
-    # long names. Names that are still too long auto-shrink (see IV_name). sum=1.000
+    # Column widths are computed per-report: the donor value column is sized to
+    # just fit its (usually short) values and all leftover width goes to the
+    # patient value column, so a long Hospital/Clinic name renders at full font.
     cw = CONTENT_W
-    info_col_w = [cw * 0.176, cw * 0.016, cw * 0.345,
-                  cw * 0.012,
-                  cw * 0.196, cw * 0.016, cw * 0.239]
+    info_col_w = _demography_col_widths(patient, donor)
 
     def E(): return Paragraph("", info_lbl_style)
 
@@ -1832,7 +1898,11 @@ def _build_cdc_report(case: dict, S: dict) -> list:
         [IL("PIN"),             IC(), IR(patient.get("pin","")),             E(), IL("PIN"),                 IC(), IR(donor.get("pin","NA"))],
         [IL("Sample Number"),   IC(), IR(patient.get("sample_number","")),   E(), IL("Sample Number"),       IC(), IR(donor.get("sample_number","NA"))],
         [IL("Diagnosis"),       IC(), IV(patient.get("diagnosis","")),       E(), IL("Sample receipt date"), IC(), IR(donor.get("receipt_date",""))],
-        [IL("Hospital/Clinic"), IC(), IV(patient.get("hospital_clinic","")), E(), IL("Report date"),         IC(), IR(donor.get("report_date",""))],
+        # Hospital/Clinic value fits on one line in the widened patient column;
+        # only an exceptionally long name shrinks (see _fit_one_line) — it never
+        # wraps, so the demography table height stays constant and the report
+        # cannot spill onto an extra page.
+        [IL("Hospital/Clinic"), IC(), _fit_one_line(_norm(patient.get("hospital_clinic","")), info_col_w[2], info_val_style), E(), IL("Report date"), IC(), IR(donor.get("report_date",""))],
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
     info_t.setStyle(TableStyle([
@@ -2138,12 +2208,11 @@ def _build_dsa_report(case: dict, S: dict) -> list:
     def IC():  return Paragraph("<b>:</b>", info_lbl_style)
 
     cw = CONTENT_W
-    # col: [lbl_L, colon_L, val_L, GAP, lbl_R, colon_R, val_R]  sum=1.000
-    # Narrowed the inter-column gap and trimmed val_L so val_R (donor) is wide
-    # enough for long names instead of wrapping. sum=1.000
-    info_col_w = [cw * 0.176, cw * 0.016, cw * 0.345,
-                  cw * 0.012,
-                  cw * 0.196, cw * 0.016, cw * 0.239]
+    # col: [lbl_L, colon_L, val_L, GAP, lbl_R, colon_R, val_R]
+    # Column widths are computed per-report: the donor value column is sized to
+    # just fit its (usually short) values and all leftover width goes to the
+    # patient value column, so a long Hospital/Clinic name renders at full font.
+    info_col_w = _demography_col_widths(patient, donor)
 
     def E(): return Paragraph("", info_lbl_style)
 
@@ -2166,7 +2235,11 @@ def _build_dsa_report(case: dict, S: dict) -> list:
         [IL("PIN"),             IC(), IR(patient.get("pin","")),             E(), IL("PIN"),                 IC(), IR(donor.get("pin","NA"))],
         [IL("Sample Number"),   IC(), IR(patient.get("sample_number","")),   E(), IL("Sample Number"),       IC(), IR(donor.get("sample_number","NA"))],
         [IL("Diagnosis"),       IC(), IV(patient.get("diagnosis","")),       E(), IL("Sample receipt date"), IC(), IR(donor.get("receipt_date",""))],
-        [IL("Hospital/Clinic"), IC(), IV(patient.get("hospital_clinic","")), E(), IL("Report date"),         IC(), IR(donor.get("report_date",""))],
+        # Hospital/Clinic value fits on one line in the widened patient column;
+        # only an exceptionally long name shrinks (see _fit_one_line) — it never
+        # wraps, so the demography table height stays constant and the report
+        # cannot spill onto an extra page.
+        [IL("Hospital/Clinic"), IC(), _fit_one_line(_norm(patient.get("hospital_clinic","")), info_col_w[2], info_val_style), E(), IL("Report date"), IC(), IR(donor.get("report_date",""))],
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
     info_t.setStyle(TableStyle([
@@ -3088,10 +3161,11 @@ def _build_flow_report(case: dict, S: dict) -> list:
     def IC():  return Paragraph("<b>:</b>", lbl_s)
     def E():   return Paragraph("", lbl_s)
 
-    # Narrowed the gap and trimmed val_L so val_R (donor) is wide enough for
-    # long names. Names that are still too long auto-shrink (see IV_name). sum=1.000
+    # Column widths are computed per-report: the donor value column is sized to
+    # just fit its (usually short) values and all leftover width goes to the
+    # patient value column, so a long Hospital/Clinic name renders at full font.
     cw = CONTENT_W
-    info_col_w = [cw*0.176, cw*0.016, cw*0.345, cw*0.012, cw*0.196, cw*0.016, cw*0.239]
+    info_col_w = _demography_col_widths(patient, donor)
 
     def IV_name(text, col_w_pts):
         """Render a name on one line; auto-shrink font (min 8pt) if it would wrap."""
@@ -3112,7 +3186,11 @@ def _build_flow_report(case: dict, S: dict) -> list:
         [IL("PIN"),             IC(), IR(patient.get("pin","")),             E(), IL("PIN"),                 IC(), IR(donor.get("pin","NA"))],
         [IL("Sample Number"),   IC(), IR(patient.get("sample_number","")),   E(), IL("Sample Number"),       IC(), IR(donor.get("sample_number","NA"))],
         [IL("Diagnosis"),       IC(), IV(patient.get("diagnosis","")),       E(), IL("Sample receipt date"), IC(), IR(donor.get("receipt_date",""))],
-        [IL("Hospital/Clinic"), IC(), IV(patient.get("hospital_clinic","")), E(), IL("Report date"),         IC(), IR(donor.get("report_date",""))],
+        # Hospital/Clinic value fits on one line in the widened patient column;
+        # only an exceptionally long name shrinks (see _fit_one_line) — it never
+        # wraps, so the demography table height stays constant and the report
+        # cannot spill onto an extra page.
+        [IL("Hospital/Clinic"), IC(), _fit_one_line(_norm(patient.get("hospital_clinic","")), info_col_w[2], val_s), E(), IL("Report date"), IC(), IR(donor.get("report_date",""))],
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
     info_t.setStyle(TableStyle([
