@@ -782,11 +782,9 @@ class HLAReportGeneratorApp(QMainWindow):
             ("comments",        "Additional Comments",  ""),
         ]
         for _k, _l, _d in _DSA_PAT_FIELDS:
-            _w = QLineEdit(_d); _w.setMaximumHeight(24)
-            if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
+            _w = self._make_field_widget(_k, _d, self._on_manual_field_debounced)
             self._dsa_pat_f[_k] = _w
             _dpf.addRow(_l + ":", _w)
-            _w.textChanged.connect(self._on_manual_field_debounced)
 
         # Patient photo
         _dpp_row = QHBoxLayout()
@@ -828,11 +826,9 @@ class HLAReportGeneratorApp(QMainWindow):
             ("report_date",      "Report Date",                 ""),
         ]
         for _k, _l, _d in _DSA_DON_FIELDS:
-            _w = QLineEdit(_d); _w.setMaximumHeight(24)
-            if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
+            _w = self._make_field_widget(_k, _d, self._on_manual_field_debounced)
             self._dsa_don_f[_k] = _w
             _ddf.addRow(_l + ":", _w)
-            _w.textChanged.connect(self._on_manual_field_debounced)
 
         # Donor photo
         _ddp_row = QHBoxLayout()
@@ -969,9 +965,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("comments",        "Additional Comments", ""),
         ]
         for _k, _l, _dflt in _FLOW_PAT_FIELDS:
-            _w = QLineEdit(_dflt); _w.setFixedHeight(24)
-            if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
-            _w.textChanged.connect(self._on_manual_field_debounced)
+            _w = self._make_field_widget(_k, _dflt, self._on_manual_field_debounced)
             self._flow_pat_f[_k] = _w
             _fpf.addRow(_l + ":", _w)
         self._flow_nabl_chk = QCheckBox("NABL Accreditation")
@@ -1009,9 +1003,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("report_date",     "Report Date",               ""),
         ]
         for _k, _l, _dflt in _FLOW_DON_FIELDS:
-            _w = QLineEdit(_dflt); _w.setFixedHeight(24)
-            if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
-            _w.textChanged.connect(self._on_manual_field_debounced)
+            _w = self._make_field_widget(_k, _dflt, self._on_manual_field_debounced)
             self._flow_don_f[_k] = _w
             _fdf.addRow(_l + ":", _w)
         _fd_row = QHBoxLayout()
@@ -1655,7 +1647,7 @@ class HLAReportGeneratorApp(QMainWindow):
             rf     = getattr(self, "_dsa_result_f", {})
             photos = getattr(self, "_dsa_photo_bytes", {})
 
-            def _tv(d, k, default=""): return d[k].text().strip() if k in d else default
+            def _tv(d, k, default=""): return d[k].text().strip() if k in d and hasattr(d[k], "text") else (d[k].currentText() if k in d else default)
 
             patient = {
                 "name":            _tv(pf, "patient_name"),
@@ -2326,6 +2318,40 @@ class HLAReportGeneratorApp(QMainWindow):
                 if name in title_lookup:
                     sig["title"] = title_lookup[name]
 
+    def _make_field_widget(self, key, value, on_change, height=24):
+        """Build a form field widget. 'sample_type' becomes a Sample Type
+        dropdown (ACD Tube / Sodium Heparin Whole Blood); every other field is a
+        QLineEdit. Wires the appropriate change signal to on_change."""
+        if key == "sample_type":
+            w = ClickOnlyComboBox()
+            opts = ["ACD Tube", "Sodium Heparin Whole Blood"]
+            w.addItems(opts)
+            w.setCurrentText(str(value) if str(value) in opts else opts[0])
+            w.setFixedHeight(height)
+            w.currentIndexChanged.connect(on_change)
+        else:
+            w = QLineEdit(str(value))
+            w.setFixedHeight(height)
+            if "date" in key.lower():
+                w.setPlaceholderText("DD-MM-YYYY")
+            w.textChanged.connect(on_change)
+        return w
+
+    @staticmethod
+    def _widget_value(w):
+        """Read a value from a form field widget (combo or line edit)."""
+        if isinstance(w, QComboBox):
+            return w.currentText()
+        return w.text().strip()
+
+    @staticmethod
+    def _set_widget_value(w, v):
+        """Set a value on a form field widget (combo or line edit)."""
+        if isinstance(w, QComboBox):
+            w.setCurrentText(str(v))
+        else:
+            w.setText(str(v))
+
     def _make_lx_interpretation(self, patient_name: str, donor_name: str, match: str) -> str:
         p = (patient_name or "Patient").strip()
         d = (donor_name or "Potential donor").strip()
@@ -2436,8 +2462,8 @@ class HLAReportGeneratorApp(QMainWindow):
             if hasattr(self, "_cdc_nabl_chk"):
                 data["nabl"] = self._cdc_nabl_chk.isChecked()
         elif rtype == "dsa_crossmatch" and hasattr(self, "_dsa_pat_f"):
-            data["dsa_patient_fields"] = {k: w.text().strip() for k, w in self._dsa_pat_f.items()}
-            data["dsa_donor_fields"]   = {k: w.text().strip() for k, w in self._dsa_don_f.items()}
+            data["dsa_patient_fields"] = {k: self._widget_value(w) for k, w in self._dsa_pat_f.items()}
+            data["dsa_donor_fields"]   = {k: self._widget_value(w) for k, w in self._dsa_don_f.items()}
             data["dsa_results"]        = {
                 k: (w.currentText() if isinstance(w, QComboBox) else w.text().strip())
                 for k, w in self._dsa_result_f.items()
@@ -2445,8 +2471,8 @@ class HLAReportGeneratorApp(QMainWindow):
             if hasattr(self, "_dsa_nabl_chk"):
                 data["nabl"] = self._dsa_nabl_chk.isChecked()
         elif rtype == "flow_crossmatch" and hasattr(self, "_flow_pat_f"):
-            data["flow_patient_fields"] = {k: w.text().strip() for k, w in self._flow_pat_f.items()}
-            data["flow_donor_fields"]   = {k: w.text().strip() for k, w in self._flow_don_f.items()}
+            data["flow_patient_fields"] = {k: self._widget_value(w) for k, w in self._flow_pat_f.items()}
+            data["flow_donor_fields"]   = {k: self._widget_value(w) for k, w in self._flow_don_f.items()}
             data["flow_results"]        = {
                 k: (w.currentText() if isinstance(w, QComboBox) else w.text().strip())
                 for k, w in self._flow_result_f.items()
@@ -2473,6 +2499,10 @@ class HLAReportGeneratorApp(QMainWindow):
             data["luminex_patient_fields"] = {k: _val(w) for k, w in self._lx_pat_f.items()}
             if hasattr(self, "_lx_don_f"):
                 data["luminex_donor_fields"] = {k: _val(w) for k, w in self._lx_don_f.items()}
+            data["luminex_patient_hla"] = {locus: [w.text().strip() for w in ws]
+                                           for locus, ws in getattr(self, "_lx_pat_hla", {}).items()}
+            data["luminex_donor_hla"]   = {locus: [w.text().strip() for w in ws]
+                                           for locus, ws in getattr(self, "_lx_don_hla", {}).items()}
             if hasattr(self, "_lx_interp_edit"):
                 data["luminex_interpretation"] = self._lx_interp_edit.toPlainText().strip()
             if hasattr(self, "_lx_nabl_chk"):
@@ -2496,6 +2526,7 @@ class HLAReportGeneratorApp(QMainWindow):
             with open(path) as fh: data = json.load(fh)
             # Normalize bulk-format drafts (have "patient" key instead of "patient_fields")
             if "patient" in data and "patient_fields" not in data:
+                _orig_case = data
                 p = data["patient"]
                 p_hla = p.get("hla", {})
                 p_fields = {k: v for k, v in p.items() if k != "hla"}
@@ -2538,6 +2569,15 @@ class HLAReportGeneratorApp(QMainWindow):
                     },
                     "rpl_reference": data.get("rpl_reference", {}),
                 }
+                # Luminex stores patient/donor in dedicated keys the manual
+                # load branch reads — synthesise them from the bulk case.
+                if data["report_type"] == "luminex_typing":
+                    data["luminex_patient_fields"] = dict(p_fields)
+                    data["luminex_patient_hla"]    = p_hla
+                    _od = (_orig_case.get("donors") or [{}])[0]
+                    data["luminex_donor_fields"]   = {k: v for k, v in _od.items() if k != "hla"}
+                    data["luminex_donor_hla"]      = _od.get("hla", {})
+                    data["luminex_interpretation"] = _orig_case.get("luminex_interpretation", "")
             for k, v in data.get("patient_fields", {}).items():
                 if k in self.f: self.f[k].setText(v)
             _tmpl_name = RTYPE_TO_TEMPLATE.get(data.get("report_type", "single_hla"), TEMPLATE_NAMES[0])
@@ -2604,10 +2644,10 @@ class HLAReportGeneratorApp(QMainWindow):
             elif _rtype == "dsa_crossmatch":
                 for k, v in data.get("dsa_patient_fields", {}).items():
                     if hasattr(self, "_dsa_pat_f") and k in self._dsa_pat_f:
-                        self._dsa_pat_f[k].setText(str(v))
+                        self._set_widget_value(self._dsa_pat_f[k], v)
                 for k, v in data.get("dsa_donor_fields", {}).items():
                     if hasattr(self, "_dsa_don_f") and k in self._dsa_don_f:
-                        self._dsa_don_f[k].setText(str(v))
+                        self._set_widget_value(self._dsa_don_f[k], v)
                 for k, v in data.get("dsa_results", {}).items():
                     if hasattr(self, "_dsa_result_f") and k in self._dsa_result_f:
                         w = self._dsa_result_f[k]
@@ -2618,10 +2658,10 @@ class HLAReportGeneratorApp(QMainWindow):
             elif _rtype == "flow_crossmatch":
                 for k, v in data.get("flow_patient_fields", {}).items():
                     if hasattr(self, "_flow_pat_f") and k in self._flow_pat_f:
-                        self._flow_pat_f[k].setText(str(v))
+                        self._set_widget_value(self._flow_pat_f[k], v)
                 for k, v in data.get("flow_donor_fields", {}).items():
                     if hasattr(self, "_flow_don_f") and k in self._flow_don_f:
-                        self._flow_don_f[k].setText(str(v))
+                        self._set_widget_value(self._flow_don_f[k], v)
                 for k, v in data.get("flow_results", {}).items():
                     if hasattr(self, "_flow_result_f") and k in self._flow_result_f:
                         w = self._flow_result_f[k]
@@ -2669,6 +2709,14 @@ class HLAReportGeneratorApp(QMainWindow):
                             w.setCurrentText(str(v))
                         else:
                             w.setText(str(v))
+                for locus, vals in data.get("luminex_patient_hla", {}).items():
+                    if hasattr(self, "_lx_pat_hla") and locus in self._lx_pat_hla:
+                        self._lx_pat_hla[locus][0].setText(_allele_str(vals[0] if len(vals) > 0 else None))
+                        self._lx_pat_hla[locus][1].setText(_allele_str(vals[1] if len(vals) > 1 else None))
+                for locus, vals in data.get("luminex_donor_hla", {}).items():
+                    if hasattr(self, "_lx_don_hla") and locus in self._lx_don_hla:
+                        self._lx_don_hla[locus][0].setText(_allele_str(vals[0] if len(vals) > 0 else None))
+                        self._lx_don_hla[locus][1].setText(_allele_str(vals[1] if len(vals) > 1 else None))
                 _ie = getattr(self, "_lx_interp_edit", None)
                 if _ie is not None:
                     _ie.setPlainText(data.get("luminex_interpretation", ""))
@@ -3533,10 +3581,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("comments",         "Additional Comments", ""),
         ]
         for key, lbl, dflt in DSA_PAT:
-            w = QLineEdit(str(p.get(key, dflt) or dflt))
-            w.setFixedHeight(24)
-            if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
-            w.textChanged.connect(self._on_bulk_field_debounced)
+            w = self._make_field_widget(key, str(p.get(key, dflt) or dflt), self._on_bulk_field_debounced)
             self._bulk_dsa_pat_f[key] = w
             dpf.addRow(lbl + ":", w)
 
@@ -3571,10 +3616,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("report_date",      "Report Date",                 ""),
         ]
         for key, lbl, dflt in DSA_DON:
-            w = QLineEdit(str(d.get(key, dflt) or dflt))
-            w.setFixedHeight(24)
-            if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
-            w.textChanged.connect(self._on_bulk_field_debounced)
+            w = self._make_field_widget(key, str(d.get(key, dflt) or dflt), self._on_bulk_field_debounced)
             self._bulk_dsa_don_f[key] = w
             ddf.addRow(lbl + ":", w)
 
@@ -3685,9 +3727,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("receipt_date","Sample Receipt Date",""), ("report_date","Report Date",""),
             ("remarks","Remarks",""), ("comments","Additional Comments",""),
         ]:
-            w = QLineEdit(str(p.get(key, dflt) or dflt)); w.setFixedHeight(24)
-            if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
-            w.textChanged.connect(self._on_bulk_field_debounced)
+            w = self._make_field_widget(key, str(p.get(key, dflt) or dflt), self._on_bulk_field_debounced)
             self._bulk_flow_pat_f[key] = w; fpf.addRow(lbl + ":", w)
 
         _nabl_default = case.get("nabl", self.qsettings.value("nabl_stamp", True, type=bool))
@@ -3719,9 +3759,7 @@ class HLAReportGeneratorApp(QMainWindow):
             ("collection_date","Collection Date",""), ("receipt_date","Sample Receipt Date",""),
             ("report_date","Report Date",""),
         ]:
-            w = QLineEdit(str(d.get(key, dflt) or dflt)); w.setFixedHeight(24)
-            if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
-            w.textChanged.connect(self._on_bulk_field_debounced)
+            w = self._make_field_widget(key, str(d.get(key, dflt) or dflt), self._on_bulk_field_debounced)
             self._bulk_flow_don_f[key] = w; fdf.addRow(lbl + ":", w)
         _bfdp_row = QHBoxLayout()
         _bfdp_lbl = QLabel("No photo selected"); _bfdp_lbl.setStyleSheet("color:gray;font-style:italic;")
@@ -4188,12 +4226,12 @@ class HLAReportGeneratorApp(QMainWindow):
             _dsa_photos = getattr(self, "_bulk_dsa_photo_bytes", {})
             if hasattr(self, "_bulk_dsa_pat_f"):
                 for key, w in self._bulk_dsa_pat_f.items():
-                    p[key] = w.text().strip()
+                    p[key] = self._widget_value(w)
                 p["photo_bytes"] = _dsa_photos.get("patient")
             if case.get("donors") and hasattr(self, "_bulk_dsa_don_f"):
                 d = case["donors"][0]
                 for key, w in self._bulk_dsa_don_f.items():
-                    d[key] = w.text().strip()
+                    d[key] = self._widget_value(w)
                 d["photo_bytes"] = _dsa_photos.get("donor")
             if hasattr(self, "_bulk_dsa_result_f"):
                 dsa_res = {}
@@ -4236,12 +4274,12 @@ class HLAReportGeneratorApp(QMainWindow):
         if case.get("report_type") == "flow_crossmatch":
             if hasattr(self, "_bulk_flow_pat_f"):
                 for key, w in self._bulk_flow_pat_f.items():
-                    p[key] = w.text().strip()
+                    p[key] = self._widget_value(w)
                 p["photo_bytes"] = self._bulk_flow_photo_bytes.get("patient") if hasattr(self, "_bulk_flow_photo_bytes") else None
             if hasattr(self, "_bulk_flow_don_f") and case.get("donors"):
                 d = case["donors"][0]
                 for key, w in self._bulk_flow_don_f.items():
-                    d[key] = w.text().strip()
+                    d[key] = self._widget_value(w)
                 d["photo_bytes"] = self._bulk_flow_photo_bytes.get("donor") if hasattr(self, "_bulk_flow_photo_bytes") else None
             if hasattr(self, "_bulk_flow_result_f"):
                 fr = {}
@@ -4735,6 +4773,11 @@ class HLAReportGeneratorApp(QMainWindow):
             ppf = data["pra_patient_fields"]
             patient = dict(ppf)
             patient["name"] = patient.pop("patient_name", ppf.get("patient_name", ""))
+        elif rtype == "luminex_typing" and "luminex_patient_fields" in data:
+            lpf = data["luminex_patient_fields"]
+            patient = dict(lpf)
+            patient["name"] = patient.pop("patient_name", lpf.get("patient_name", ""))
+            patient["hla"]  = data.get("luminex_patient_hla", {})
         else:
             patient = {k: v for k, v in pf.items() if k != "patient_name"}
             patient["name"] = pf.get("patient_name", "")
@@ -4757,6 +4800,11 @@ class HLAReportGeneratorApp(QMainWindow):
             raw_don = data["flow_donor_fields"]
             raw_don.setdefault("hla", {}); raw_don.setdefault("hla_c_type", "")
             donors = [raw_don]
+        elif rtype == "luminex_typing" and "luminex_donor_fields" in data:
+            raw_don = dict(data["luminex_donor_fields"])
+            raw_don["hla"] = data.get("luminex_donor_hla", {})
+            raw_don.setdefault("hla_c_type", "")
+            donors = [raw_don]
         else:
             donors = []
             for d in data.get("donors", []):
@@ -4778,7 +4826,8 @@ class HLAReportGeneratorApp(QMainWindow):
             "rpl_reference": data.get("rpl_reference", {}),
         }
         for key in ("cdc_results", "dsa_results", "flow_results",
-                    "kir_genes", "kir_genotype_override", "kir_interpretation"):
+                    "kir_genes", "kir_genotype_override", "kir_interpretation",
+                    "luminex_interpretation"):
             if key in data:
                 case[key] = data[key]
         # PRA result fields (manual draft → bulk case)
