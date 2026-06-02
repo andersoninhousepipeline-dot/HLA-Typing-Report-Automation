@@ -2688,52 +2688,41 @@ def _build_luminex_report(case: dict, S: dict) -> list:
     # away from their header onto the next page.
     elems.append(KeepTogether([typing_t]))
 
-    # ── Page 2: Interpretation · Test Details · Disclaimer · References · Sigs
+    # ── Page 2: Interpretation · Test Details · Disclaimer · Sigs
     elems.append(PageBreak())
 
-    # Page-2 styles: comfortable line spacing for readability.  Body text uses a
-    # 13.5pt leading on a 10pt font (~1.35x) and references 12pt on 9pt, with
-    # clear gaps between sections.  This is intentionally roomier than page 1;
-    # the signature block may flow onto a following page when there is a lot of
-    # text, which is acceptable — readability takes priority over a strict 2-page
-    # fit here.
+    # Page-2 styles: roomier text without risking the signature block or the
+    # QR/footer reserve.  The document bottom margin already protects QR_ZONE,
+    # so avoid negative spacers and keep the signature block together.
     _sec_s  = ParagraphStyle("_lx_sec", fontName=F_BOLD, fontSize=13,
-                              textColor=C_NGS_TITLE, leading=16, spaceAfter=1)
+                              textColor=C_NGS_TITLE, leading=17,
+                              spaceBefore=3, spaceAfter=3)
     _body_s = ParagraphStyle("_lx_bdy", fontName=F_REG,  fontSize=10,
-                              leading=12, alignment=TA_JUSTIFY)
-    # References use the same 10pt body font (uniform content size); kept on a
-    # tighter leading since they are a numbered list (line spacing ≠ font size),
-    # which lets the signature block stay on this page.
-    _ref_s  = ParagraphStyle("_lx_ref", fontName=F_REG,  fontSize=10,
-                              leading=10.5, leftIndent=14, firstLineIndent=-14, spaceBefore=1,
-                              alignment=TA_JUSTIFY)
+                              leading=14, spaceAfter=3, alignment=TA_JUSTIFY)
+    _rule_gap = 4
+    _section_gap = 2.5 * mm
 
     elems.append(Paragraph("<b>Interpretation</b>", _sec_s))
-    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=2))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=_rule_gap))
     _interp_text = _clean_display(interp) or ""
     if _interp_text:
         elems.append(Paragraph(_interp_text, _body_s))
-    elems.append(Spacer(1, 1*mm))
+    elems.append(Spacer(1, _section_gap))
 
     elems.append(Paragraph("<b>Test Details</b>", _sec_s))
-    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=2))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=_rule_gap))
     for _para in LUMINEX_TEST_DETAILS:
         elems.append(Paragraph(_para, _body_s))
-    elems.append(Spacer(1, 1*mm))
+    elems.append(Spacer(1, _section_gap))
 
     elems.append(Paragraph("<b>Disclaimer</b>", _sec_s))
-    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=2))
+    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=_rule_gap))
     elems.append(Paragraph(LUMINEX_DISCLAIMER, _body_s))
-    elems.append(Spacer(1, 1*mm))
-
-    elems.append(Paragraph("<b>Reference</b>", _sec_s))
-    elems.append(HRFlowable(width=CONTENT_W, thickness=0.8, color=colors.grey, spaceAfter=2))
-    for _i, _ref in enumerate(LUMINEX_REFERENCES, 1):
-        elems.append(Paragraph(f"{_i}.{_ref}", _ref_s))
+    elems.append(Spacer(1, _section_gap))
 
     # Small gap then the signature block (kept together so it never splits across
     # pages; the page-2 spacing above is tuned so it still lands on this page).
-    elems.append(Spacer(1, 1*mm))
+    elems.append(Spacer(1, 1.5*mm))
     sig_items = _signature_block(case.get("signatories", []), S)
     if sig_items:
         elems.append(KeepTogether(sig_items))

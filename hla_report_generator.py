@@ -1062,13 +1062,12 @@ class HLAReportGeneratorApp(QMainWindow):
         ]
         for _k, _l, _d in _LX_PAT_FIELDS:
             if _k == "sample_type":
+                # Luminex defaults to EDTA Blood, but the combo is editable so a
+                # different sample type can be typed or picked in the editor.
                 _w = ClickOnlyComboBox()
-                _w.addItems(["ACD Tube", "Sodium Heparin Whole Blood"])
-                # try to set incoming default if it matches one of the options
-                if _d in ("ACD Tube", "Sodium Heparin Whole Blood"):
-                    _w.setCurrentText(_d)
-                else:
-                    _w.setCurrentText("ACD Tube")
+                _w.setEditable(True)
+                _w.addItems(["EDTA Blood", "ACD Tube", "Sodium Heparin Whole Blood"])
+                _w.setCurrentText(_d or "EDTA Blood")
                 _w.setFixedHeight(24)
             else:
                 _w = QLineEdit(_d); _w.setMaximumHeight(24)
@@ -1078,7 +1077,7 @@ class HLAReportGeneratorApp(QMainWindow):
             if hasattr(_w, "text"):
                 _w.textChanged.connect(self._on_manual_field_debounced)
             else:
-                _w.currentIndexChanged.connect(self._on_manual_field_debounced)
+                _w.currentTextChanged.connect(self._on_manual_field_debounced)
         # auto-fill interpretation when patient name changes
         try:
             pn_w = self._lx_pat_f.get("patient_name")
@@ -1129,12 +1128,12 @@ class HLAReportGeneratorApp(QMainWindow):
         ]
         for _k, _l, _d in _LX_DON_FIELDS:
             if _k == "sample_type":
+                # Luminex defaults to EDTA Blood, but the combo is editable so a
+                # different sample type can be typed or picked in the editor.
                 _w = ClickOnlyComboBox()
-                _w.addItems(["ACD Tube", "Sodium Heparin Whole Blood"])
-                if _d in ("ACD Tube", "Sodium Heparin Whole Blood"):
-                    _w.setCurrentText(_d)
-                else:
-                    _w.setCurrentText("ACD Tube")
+                _w.setEditable(True)
+                _w.addItems(["EDTA Blood", "ACD Tube", "Sodium Heparin Whole Blood"])
+                _w.setCurrentText(_d or "EDTA Blood")
                 _w.setFixedHeight(24)
             else:
                 _w = QLineEdit(_d); _w.setMaximumHeight(24)
@@ -1144,7 +1143,7 @@ class HLAReportGeneratorApp(QMainWindow):
             if hasattr(_w, "text"):
                 _w.textChanged.connect(self._on_manual_field_debounced)
             else:
-                _w.currentIndexChanged.connect(self._on_manual_field_debounced)
+                _w.currentTextChanged.connect(self._on_manual_field_debounced)
         _lx_dp_row = QHBoxLayout()
         self._lx_don_photo_lbl = QLabel("No photo selected")
         self._lx_don_photo_lbl.setStyleSheet("color:gray;font-style:italic;")
@@ -2524,6 +2523,12 @@ class HLAReportGeneratorApp(QMainWindow):
         self._loading_draft = True
         try:
             with open(path) as fh: data = json.load(fh)
+            # Bulk "Save All/Selected" drafts are stored as a stacked list.
+            # Manual entry can only display one case, so load the first entry.
+            if isinstance(data, list):
+                if not data:
+                    raise ValueError("Selected draft does not contain any cases.")
+                data = data[0]
             # Normalize bulk-format drafts (have "patient" key instead of "patient_fields")
             if "patient" in data and "patient_fields" not in data:
                 _orig_case = data
@@ -3029,6 +3034,8 @@ class HLAReportGeneratorApp(QMainWindow):
             self.bulk_list.addItem(item)
         # Sync button + checkbox state after population
         self._on_bulk_check_changed(None)
+        if self.bulk_list.count():
+            self.bulk_list.setCurrentRow(0)
 
     def _filter_bulk_list(self, text):
         for i in range(self.bulk_list.count()):
@@ -3942,14 +3949,14 @@ class HLAReportGeneratorApp(QMainWindow):
             src_key = "name" if key == "patient_name" else key
             val = str(p.get(src_key, dflt) or dflt)
             if key == "sample_type":
+                # Luminex defaults to EDTA Blood, but the combo is editable so a
+                # different sample type can be typed or picked in the editor.
                 w = ClickOnlyComboBox()
-                w.addItems(["ACD Tube", "Sodium Heparin Whole Blood"])
-                if val in ("ACD Tube", "Sodium Heparin Whole Blood"):
-                    w.setCurrentText(val)
-                else:
-                    w.setCurrentText("ACD Tube")
+                w.setEditable(True)
+                w.addItems(["EDTA Blood", "ACD Tube", "Sodium Heparin Whole Blood"])
+                w.setCurrentText(val or "EDTA Blood")
                 w.setFixedHeight(24)
-                w.currentIndexChanged.connect(self._on_bulk_field_debounced)
+                w.currentTextChanged.connect(self._on_bulk_field_debounced)
             else:
                 w = QLineEdit(val)
                 w.setFixedHeight(24)
@@ -3997,14 +4004,14 @@ class HLAReportGeneratorApp(QMainWindow):
         ]:
             val = str(don.get(key, dflt) or dflt)
             if key == "sample_type":
+                # Luminex defaults to EDTA Blood, but the combo is editable so a
+                # different sample type can be typed or picked in the editor.
                 w = ClickOnlyComboBox()
-                w.addItems(["ACD Tube", "Sodium Heparin Whole Blood"])
-                if val in ("ACD Tube", "Sodium Heparin Whole Blood"):
-                    w.setCurrentText(val)
-                else:
-                    w.setCurrentText("ACD Tube")
+                w.setEditable(True)
+                w.addItems(["EDTA Blood", "ACD Tube", "Sodium Heparin Whole Blood"])
+                w.setCurrentText(val or "EDTA Blood")
                 w.setFixedHeight(24)
-                w.currentIndexChanged.connect(self._on_bulk_field_debounced)
+                w.currentTextChanged.connect(self._on_bulk_field_debounced)
             else:
                 w = QLineEdit(val)
                 w.setFixedHeight(24)
