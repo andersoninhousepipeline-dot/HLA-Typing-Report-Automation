@@ -4845,6 +4845,69 @@ class HLAReportGeneratorApp(QMainWindow):
             case["pra_class"]      = "I"
         return case
 
+    @staticmethod
+    def _canonicalize_luminex_draft_case(case: dict) -> dict:
+        """Normalize legacy/client Luminex draft shapes into the bulk case format."""
+        if not isinstance(case, dict) or case.get("report_type") != "luminex_typing":
+            return case
+
+        if "patient" not in case or not isinstance(case.get("patient"), dict):
+            case["patient"] = {}
+        patient = case["patient"]
+
+        lpf = case.get("luminex_patient_fields")
+        if isinstance(lpf, dict):
+            for key, value in lpf.items():
+                dest = "name" if key == "patient_name" else key
+                if not patient.get(dest):
+                    patient[dest] = value
+            if case.get("luminex_patient_hla") and not patient.get("hla"):
+                patient["hla"] = case.get("luminex_patient_hla", {})
+
+        if not patient.get("name") and patient.get("patient_name"):
+            patient["name"] = patient.get("patient_name", "")
+        patient.setdefault("hla", {})
+        patient.setdefault("hla_c_type", "")
+        patient.setdefault("_join_key", patient.get("pin", ""))
+        patient.setdefault("_has_insufficient_hla", False)
+
+        donors = case.get("donors")
+        if not isinstance(donors, list):
+            donors = []
+            case["donors"] = donors
+
+        ldf = case.get("luminex_donor_fields")
+        if isinstance(ldf, dict):
+            if donors:
+                donor = donors[0] if isinstance(donors[0], dict) else {}
+                donors[0] = donor
+            else:
+                donor = {}
+                donors.append(donor)
+            for key, value in ldf.items():
+                dest = "name" if key in ("donor_name", "patient_name") else key
+                if not donor.get(dest):
+                    donor[dest] = value
+            if case.get("luminex_donor_hla") and not donor.get("hla"):
+                donor["hla"] = case.get("luminex_donor_hla", {})
+
+        for donor in donors:
+            if not isinstance(donor, dict):
+                continue
+            if not donor.get("name") and donor.get("donor_name"):
+                donor["name"] = donor.get("donor_name", "")
+            if not donor.get("name") and donor.get("patient_name"):
+                donor["name"] = donor.get("patient_name", "")
+            donor.setdefault("hla", {})
+            donor.setdefault("hla_c_type", "")
+
+        case.setdefault("nabl", True)
+        case.setdefault("with_logo", True)
+        case.setdefault("luminex_interpretation", "")
+        case.setdefault("luminex_pat_photo", None)
+        case.setdefault("luminex_don_photo", None)
+        return case
+
     def load_bulk_draft(self):
         start_dir = DRAFTS_DIR if os.path.isdir(DRAFTS_DIR) else os.path.dirname(BULK_DRAFT_FILE)
         path, _ = QFileDialog.getOpenFileName(
@@ -4862,8 +4925,10 @@ class HLAReportGeneratorApp(QMainWindow):
             # Normalize manual-tab drafts (have "patient_fields" instead of "patient")
             normalized = []
             for item in draft:
-                if "patient_fields" in item and "patient" not in item:
+                if (("patient_fields" in item or "luminex_patient_fields" in item)
+                        and ("patient" not in item or item.get("report_type") == "luminex_typing")):
                     item = self._normalize_manual_draft_to_bulk(item)
+                item = self._canonicalize_luminex_draft_case(item)
                 normalized.append(item)
             draft = normalized
             self.cases = _filter_valid_cases(draft)
