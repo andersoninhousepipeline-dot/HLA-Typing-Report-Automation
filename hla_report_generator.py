@@ -141,10 +141,71 @@ REPORT_TEMPLATES = [
         "report_type":  "pra_class1",
         "default_path": os.path.join(_TEMPLATE_DIR, ""),
     },
+    {
+        "name":         "PRA Class II",
+        "report_type":  "pra_class2",
+        "default_path": os.path.join(_TEMPLATE_DIR, ""),
+    },
 ]
 TEMPLATE_NAMES    = [t["name"]        for t in REPORT_TEMPLATES]
 TEMPLATE_TO_RTYPE = {t["name"]:        t["report_type"] for t in REPORT_TEMPLATES}
 RTYPE_TO_TEMPLATE = {t["report_type"]: t["name"]        for t in REPORT_TEMPLATES}
+
+# Default number of signatories shown on each template's report. Every template
+# is independently editable in Settings → "Signatory Count Defaults"; these are
+# only the out-of-the-box values. (Historically single_hla used 3 and every
+# other report used 2 — preserved here so existing reports look unchanged.)
+DEFAULT_SIG_COUNTS = {
+    "single_hla":       3,
+    "rpl_couple":       2,
+    "transplant_donor": 2,
+    "cdc_crossmatch":   2,
+    "dsa_crossmatch":   2,
+    "sab_class1":       2,
+    "sab_class2":       2,
+    "flow_crossmatch":  2,
+    "luminex_typing":   2,
+    "kir_genotyping":   2,
+    "pra_class1":       2,
+    "pra_class2":       2,
+}
+
+
+def read_sig_count(qsettings, rtype):
+    """Resolve the signatory count for a report type from QSettings.
+
+    Reads the per-template key ``sig_count_<rtype>``. If that key was never
+    saved (e.g. an older install), it falls back to the legacy global keys
+    ``sig_count_single`` / ``sig_count_donor`` so previously-saved preferences
+    keep working, and finally to DEFAULT_SIG_COUNTS.
+    """
+    default = DEFAULT_SIG_COUNTS.get(rtype, 2)
+    key = f"sig_count_{rtype}"
+    if qsettings.contains(key):
+        return qsettings.value(key, default, type=int)
+    legacy = "sig_count_single" if rtype == "single_hla" else "sig_count_donor"
+    return qsettings.value(legacy, default, type=int)
+
+
+# Standard SAB "% PRA" sentence shared by the page-1 Remarks and the page-7
+# Comments box (matches the reference report wording). The "% PRA" form field
+# auto-fills both, so it only ever has to be entered once per case.
+_AUTO_PRA_RE = _re.compile(r"^\s*The SAB % PRA Class (?:I|II) is \d+%\.?\s*$",
+                           _re.IGNORECASE)
+
+
+def sab_pra_sentence(pct_text, sab_class):
+    """Build 'The SAB % PRA Class {I|II} is {n}%.' from a raw % value, or '' if none."""
+    m = _re.search(r"\d+", str(pct_text or ""))
+    if not m:
+        return ""
+    cls = "II" if str(sab_class or "").strip().upper().endswith("II") else "I"
+    return f"The SAB % PRA Class {cls} is {int(m.group())}%."
+
+
+def is_auto_pra_text(text):
+    """True if `text` is an auto-generated % PRA sentence (safe to overwrite)."""
+    return bool(_AUTO_PRA_RE.match(str(text or "")))
 
 DEFAULT_SIGNATORIES = [
     {"name": "Ms. S Aruna Devi",      "title": "Team Lead – Transplant Immunogenetics<br/>(Reviewed By)"},
@@ -192,14 +253,14 @@ class GenerateWorker(QThread):
     error    = pyqtSignal(str)
 
     def __init__(self, cases, output_dir, with_logo, signatories,
-                 sig_count_single, sig_count_donor, signature_stamp):
+                 sig_counts, signature_stamp):
         super().__init__()
         self.cases            = cases
         self.output_dir       = output_dir
         self.with_logo        = with_logo
         self.signatories      = signatories
-        self.sig_count_single = sig_count_single
-        self.sig_count_donor  = sig_count_donor
+        # sig_counts: {report_type -> number of signatories} for every template.
+        self.sig_counts       = sig_counts
         self.signature_stamp  = signature_stamp
 
     def run(self):
@@ -212,7 +273,7 @@ class GenerateWorker(QThread):
             c["signature_stamp"] = self.signature_stamp
             rtype = c.get("report_type", "single_hla")
             nabl  = c.get("nabl", True)
-            n = self.sig_count_single if rtype == "single_hla" else self.sig_count_donor
+            n = self.sig_counts.get(rtype, DEFAULT_SIG_COUNTS.get(rtype, 2))
             c["signatories"] = []
             for sig in self.signatories[:n]:
                 sign_info = hla_assets.SIGN_BY_NAME.get(sig["name"])
@@ -782,7 +843,12 @@ class HLAReportGeneratorApp(QMainWindow):
             ("comments",        "Additional Comments",  ""),
         ]
         for _k, _l, _d in _DSA_PAT_FIELDS:
-            _w = self._make_field_widget(_k, _d, self._on_manual_field_debounced)
+            if _k == "sample_type":
+                # Patient sample type stays "Serum" but is freely editable.
+                _w = QLineEdit(_d); _w.setFixedHeight(24)
+                _w.textChanged.connect(self._on_manual_field_debounced)
+            else:
+                _w = self._make_field_widget(_k, _d, self._on_manual_field_debounced)
             self._dsa_pat_f[_k] = _w
             _dpf.addRow(_l + ":", _w)
 
@@ -877,6 +943,14 @@ class HLAReportGeneratorApp(QMainWindow):
         self._sab_pat_group = _sab_pat_group
         _spf = QFormLayout(); _sab_pat_group.setLayout(_spf)
         _spf.setSpacing(1); _spf.setContentsMargins(4, 2, 4, 2)
+        # One-click import of a single-patient SAB Excel workbook (patient
+        # details + allele bead-detail + chart sheet) — fills the whole form.
+        _sab_xl_btn = QPushButton("📥  Import from SAB Excel (auto-fill)")
+        _sab_xl_btn.setMaximumHeight(28)
+        _sab_xl_btn.setToolTip("Load a single-patient SAB Class I/II Excel workbook "
+                               "to auto-fill patient details, alleles and the chart.")
+        _sab_xl_btn.clicked.connect(self._load_sab_excel)
+        _spf.addRow(_sab_xl_btn)
         _SAB_PAT_FIELDS = [
             ("patient_name",    "Patient Name *",         ""),
             ("gender_age",      "Gender / Age",           ""),
@@ -889,11 +963,18 @@ class HLAReportGeneratorApp(QMainWindow):
             ("receipt_date",    "Sample Receipt Date",    ""),
             ("report_date",     "Report Date",            ""),
             ("remarks",         "Remarks",                ""),
+            ("comments",        "Comments",               ""),
         ]
         for _k, _l, _dflt in _SAB_PAT_FIELDS:
-            _w = QLineEdit(_dflt); _w.setFixedHeight(24)
-            if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
-            _w.textChanged.connect(self._on_manual_field_debounced)
+            if _k == "comments":
+                # Multi-line, editable comment box → report's Comments box.
+                _w = QTextEdit(); _w.setPlainText(_dflt); _w.setFixedHeight(56)
+                _w.setPlaceholderText("Shown in the report's Comments box")
+                _w.textChanged.connect(self._on_manual_field_debounced)
+            else:
+                _w = QLineEdit(_dflt); _w.setFixedHeight(24)
+                if "date" in _k: _w.setPlaceholderText("DD-MM-YYYY")
+                _w.textChanged.connect(self._on_manual_field_debounced)
             self._sab_pat_f[_k] = _w
             _spf.addRow(_l + ":", _w)
 
@@ -902,9 +983,18 @@ class HLAReportGeneratorApp(QMainWindow):
         self._sab_class_combo = ClickOnlyComboBox()
         self._sab_class_combo.addItems(["I", "II"])
         self._sab_class_combo.setFixedHeight(24)
-        self._sab_class_combo.currentIndexChanged.connect(self._on_manual_field_debounced)
+        # Class change also re-flows the % PRA sentence (Class I ↔ II wording).
+        self._sab_class_combo.currentIndexChanged.connect(self._on_manual_sab_pra_changed)
         _sab_class_row.addWidget(_sab_class_lbl); _sab_class_row.addWidget(self._sab_class_combo, 1)
         _spf.addRow(_sab_class_row)
+
+        # % PRA — single source of truth for the standard sentence shown in both
+        # the page-1 Remarks and the page-7 Comments box. Entering it auto-fills
+        # both (leaving any custom Remarks/Comments text untouched).
+        self._sab_pra_edit = QLineEdit(); self._sab_pra_edit.setFixedHeight(24)
+        self._sab_pra_edit.setPlaceholderText("e.g. 79  → fills Remarks & Comments")
+        self._sab_pra_edit.textChanged.connect(self._on_manual_sab_pra_changed)
+        _spf.addRow("% PRA:", self._sab_pra_edit)
 
         self._sab_nabl_chk = QCheckBox("NABL Accreditation")
         self._sab_nabl_chk.setChecked(self.qsettings.value("nabl_stamp", True, type=bool))
@@ -965,7 +1055,12 @@ class HLAReportGeneratorApp(QMainWindow):
             ("comments",        "Additional Comments", ""),
         ]
         for _k, _l, _dflt in _FLOW_PAT_FIELDS:
-            _w = self._make_field_widget(_k, _dflt, self._on_manual_field_debounced)
+            if _k == "sample_type":
+                # Patient sample type stays "Serum" but is freely editable.
+                _w = QLineEdit(_dflt); _w.setFixedHeight(24)
+                _w.textChanged.connect(self._on_manual_field_debounced)
+            else:
+                _w = self._make_field_widget(_k, _dflt, self._on_manual_field_debounced)
             self._flow_pat_f[_k] = _w
             _fpf.addRow(_l + ":", _w)
         self._flow_nabl_chk = QCheckBox("NABL Accreditation")
@@ -1456,6 +1551,10 @@ class HLAReportGeneratorApp(QMainWindow):
             self._manual_pdf_view = QPdfView(self)
             self._manual_pdf_view.setDocument(self._manual_pdf_doc)
             self._manual_pdf_view.setPageMode(QPdfView.PageMode.MultiPage)
+            # FitToWidth: page fills the pane width (large + readable) and the
+            # view scrolls vertically through all pages. FitInView shrank the
+            # whole page to fit and interfered with vertical scrolling.
+            self._manual_pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
             right_layout.addWidget(self._manual_pdf_view, 1)
         else:
             self._manual_pdf_doc  = None
@@ -1494,21 +1593,284 @@ class HLAReportGeneratorApp(QMainWindow):
 
     @staticmethod
     def _parse_sab_allele_text_static(text: str) -> list:
-        """Parse allele text (allele,mfi per line) into [(allele, mfi_int), ...] desc."""
+        """Parse allele text (allele,mfi per line) into [(allele, mfi_int), ...] desc.
+
+        The MFI is the trailing number; everything before the last separator is
+        the allele name. Splitting on the *last* comma/tab (not every comma) is
+        essential because DQ/DP allele names contain commas themselves, e.g.
+        'DQA1*01:01, DQB1*05:01,1755'.
+        """
         import re as _re2
         result = []
         for line in text.strip().splitlines():
             line = line.strip()
             if not line: continue
-            parts = _re2.split(r"[,\t]", line)
-            if len(parts) >= 2:
-                allele = parts[0].strip()
-                try:
-                    mfi = int(float(parts[1].strip()))
-                    result.append((allele, mfi))
-                except ValueError:
-                    continue
+            m = _re2.match(r"^(.*)[,\t]\s*([0-9]+(?:\.[0-9]+)?)\s*$", line)
+            if not m: continue
+            allele = m.group(1).strip().rstrip(",").strip()
+            if not allele: continue
+            try:
+                mfi = int(float(m.group(2)))
+            except ValueError:
+                continue
+            result.append((allele, mfi))
         return sorted(result, key=lambda x: -x[1])
+
+    @staticmethod
+    def _parse_sab_excel(path: str) -> dict:
+        """Parse a single-patient SAB Class I/II Excel workbook.
+
+        Sheets are matched loosely by name:
+          • 'patient details'  — header row + one value row.
+          • '... REPORT ...'    — holds the 'Bead Detail' table
+            (Antigens / Raw Value columns) and the '% PRA' figure.
+          • '... CHART/CHAT ...'— holds the Bead Specificity Chart image.
+
+        Returns {patient, alleles, chart_bytes, pra_pct, sab_class}.
+        """
+        import openpyxl
+        from datetime import datetime, date
+
+        def _fmt(v):
+            if v is None:
+                return ""
+            if isinstance(v, (datetime, date)):
+                return v.strftime("%d-%m-%Y")
+            if isinstance(v, float) and v.is_integer():
+                return str(int(v))
+            return str(v).strip()
+
+        wb = openpyxl.load_workbook(path, data_only=True)
+
+        # ── locate sheets ───────────────────────────────────────────────────
+        pat_ws = rep_ws = chart_ws = None
+        for ws in wb.worksheets:
+            t = (ws.title or "").lower()
+            if pat_ws is None and "patient" in t:
+                pat_ws = ws
+            elif rep_ws is None and "report" in t:
+                rep_ws = ws
+            elif chart_ws is None and ("chart" in t or "chat" in t or "bead" in t):
+                chart_ws = ws
+        if rep_ws is None:  # fall back to the busiest non-patient/chart sheet
+            cand = [w for w in wb.worksheets if w not in (pat_ws, chart_ws)]
+            rep_ws = max(cand, key=lambda w: w.max_row * w.max_column) if cand else None
+
+        # ── patient details (header row + value row beneath) ────────────────
+        HEADER_MAP = {
+            "patient name":           "patient_name",
+            "gender/ age":            "gender_age",
+            "gender / age":           "gender_age",
+            "gender/age":             "gender_age",
+            "hospital mr no":         "hospital_mr_no",
+            "specimen":               "specimen",
+            "hospital/clinic":        "hospital_clinic",
+            "hospital / clinic":      "hospital_clinic",
+            "pin":                    "pin",
+            "sample number":          "sample_number",
+            "sample collection date": "collection_date",
+            "sample receipt date":    "receipt_date",
+            "report date":            "report_date",
+        }
+        patient = {}
+        if pat_ws is not None:
+            hdr_row = None
+            for r in range(1, min(pat_ws.max_row, 15) + 1):
+                for c in range(1, pat_ws.max_column + 1):
+                    v = pat_ws.cell(r, c).value
+                    if isinstance(v, str) and v.strip().lower() == "patient name":
+                        hdr_row = r
+                        break
+                if hdr_row:
+                    break
+            if hdr_row:
+                for c in range(1, pat_ws.max_column + 1):
+                    hv = pat_ws.cell(hdr_row, c).value
+                    if not isinstance(hv, str):
+                        continue
+                    key = HEADER_MAP.get(hv.strip().lower())
+                    if key:
+                        patient[key] = _fmt(pat_ws.cell(hdr_row + 1, c).value)
+
+        # ── allele bead-detail table + % PRA + class ────────────────────────
+        alleles, pra_pct, sab_class = [], None, None
+        if rep_ws is not None:
+            title = f" {(rep_ws.title or '').upper()} "
+            if "SAB II" in title or "CLASS II" in title or " II " in title:
+                sab_class = "II"
+            elif "SAB I" in title or "CLASS I" in title or " I " in title:
+                sab_class = "I"
+
+            ant_col = raw_col = hdr_row = None
+            for r in range(1, rep_ws.max_row + 1):
+                labels = {}
+                for c in range(1, rep_ws.max_column + 1):
+                    v = rep_ws.cell(r, c).value
+                    if isinstance(v, str):
+                        labels[v.strip().lower()] = c
+                if "antigens" in labels and "raw value" in labels:
+                    ant_col, raw_col, hdr_row = labels["antigens"], labels["raw value"], r
+                    break
+            if hdr_row:
+                for r in range(hdr_row + 1, rep_ws.max_row + 1):
+                    ant = rep_ws.cell(r, ant_col).value
+                    raw = rep_ws.cell(r, raw_col).value
+                    if raw is None:
+                        continue
+                    allele = str(ant).strip() if ant is not None else ""
+                    if not allele:
+                        continue
+                    try:
+                        alleles.append((allele, int(round(float(raw)))))
+                    except (TypeError, ValueError):
+                        continue
+                alleles.sort(key=lambda x: -x[1])
+
+            for r in range(1, rep_ws.max_row + 1):
+                for c in range(1, rep_ws.max_column + 1):
+                    v = rep_ws.cell(r, c).value
+                    if isinstance(v, str) and "% pra" in v.strip().lower():
+                        for c2 in range(c + 1, rep_ws.max_column + 1):
+                            nv = rep_ws.cell(r, c2).value
+                            if isinstance(nv, (int, float)):
+                                pra_pct = float(nv)
+                                break
+                        break
+                if pra_pct is not None:
+                    break
+
+        # ── chart image (largest embedded image) + its Excel rotation ───────
+        # openpyxl drops the picture rotation, so read the workbook zip directly:
+        # the largest media file is the chart, and the drawing XML that embeds it
+        # carries the rotation Excel displays it with (OOXML rot = 1/60000 deg).
+        import io as _io, zipfile as _zip, re as _re3, os as _os
+        chart_bytes, chart_rot = None, 0
+        try:
+            zf = _zip.ZipFile(path)
+            media = [n for n in zf.namelist() if n.startswith("xl/media/")]
+            if media:
+                chart_name = max(media, key=lambda n: zf.getinfo(n).file_size)
+                chart_bytes = zf.read(chart_name)
+                chart_base = _os.path.basename(chart_name)
+                for n in zf.namelist():
+                    if not _re3.match(r"xl/drawings/drawing\d+\.xml$", n):
+                        continue
+                    rels = f"xl/drawings/_rels/{_os.path.basename(n)}.rels"
+                    if rels not in zf.namelist():
+                        continue
+                    rels_xml = zf.read(rels).decode("utf-8", "ignore")
+                    targets = _re3.findall(r'Target="([^"]+)"', rels_xml)
+                    if not any(_os.path.basename(t) == chart_base for t in targets):
+                        continue
+                    draw_xml = zf.read(n).decode("utf-8", "ignore")
+                    rots = _re3.findall(r'<a:xfrm[^>]*\brot="(-?\d+)"', draw_xml)
+                    if rots:
+                        chart_rot = int(rots[0])
+                    break
+            zf.close()
+        except Exception:
+            chart_bytes, chart_rot = chart_bytes, 0
+        if chart_bytes is None:   # fall back to openpyxl's in-memory images
+            _best = 0
+            for ws in wb.worksheets:
+                for im in getattr(ws, "_images", []):
+                    try:
+                        blob = im._data()
+                    except Exception:
+                        continue
+                    if blob and len(blob) > _best:
+                        _best, chart_bytes = len(blob), blob
+
+        # Bake the Excel rotation into the bytes so the report pastes the chart
+        # exactly as it appears in Excel (no rotation needed downstream).
+        if chart_bytes and chart_rot:
+            try:
+                from PIL import Image as _PILImage
+                deg = (chart_rot / 60000.0) % 360      # OOXML hundred-thousandths
+                if deg:
+                    _pi = _PILImage.open(_io.BytesIO(chart_bytes))
+                    # OOXML rot is clockwise; PIL.rotate is counter-clockwise.
+                    _pi = _pi.rotate(-deg, expand=True)
+                    _buf = _io.BytesIO()
+                    _pi.save(_buf, format="PNG")
+                    chart_bytes = _buf.getvalue()
+            except Exception:
+                pass
+
+        return {
+            "patient":     patient,
+            "alleles":     alleles,
+            "chart_bytes": chart_bytes,
+            "pra_pct":     pra_pct,
+            "sab_class":   sab_class,
+        }
+
+    def _load_sab_excel(self):
+        """Open a single-patient SAB Excel workbook and auto-fill the SAB form."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select SAB Excel Workbook", str(Path.home()),
+            "Excel Workbooks (*.xlsx *.xlsm)")
+        if not path:
+            return
+        try:
+            data = self._parse_sab_excel(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Excel Import Failed",
+                                 f"Could not read the SAB Excel file:\n\n{e}")
+            return
+
+        # patient fields
+        pat = data.get("patient", {})
+        for key, w in getattr(self, "_sab_pat_f", {}).items():
+            if pat.get(key):
+                w.blockSignals(True); w.setText(pat[key]); w.blockSignals(False)
+
+        # SAB class (only override if the workbook clearly states one)
+        cls = data.get("sab_class")
+        if cls and hasattr(self, "_sab_class_combo"):
+            self._sab_class_combo.blockSignals(True)
+            self._sab_class_combo.setCurrentText(cls)
+            self._sab_class_combo.blockSignals(False)
+        cls_disp = (self._sab_class_combo.currentText()
+                    if hasattr(self, "_sab_class_combo") else (cls or "I"))
+
+        # alleles → text edit
+        alleles = data.get("alleles", [])
+        if alleles and hasattr(self, "_sab_allele_edit"):
+            self._sab_allele_edit.blockSignals(True)
+            self._sab_allele_edit.setPlainText(
+                "\n".join(f"{a},{m}" for a, m in alleles))
+            self._sab_allele_edit.blockSignals(False)
+
+        # chart image
+        if data.get("chart_bytes"):
+            self._sab_chart_bytes = data["chart_bytes"]
+            if hasattr(self, "_sab_chart_lbl"):
+                self._sab_chart_lbl.setText(
+                    f"Chart from Excel ({len(self._sab_chart_bytes) // 1024} KB)")
+
+        # % PRA → dedicated field + Remarks + Comments (matches reference wording).
+        pct = data.get("pra_pct")
+        if pct is not None:
+            if hasattr(self, "_sab_pra_edit"):
+                self._sab_pra_edit.blockSignals(True)
+                self._sab_pra_edit.setText(str(int(round(pct))))
+                self._sab_pra_edit.blockSignals(False)
+            _pf = getattr(self, "_sab_pat_f", {})
+            self._apply_sab_pra(int(round(pct)), cls_disp,
+                                _pf.get("remarks"), _pf.get("comments"))
+
+        self._on_manual_field_debounced()
+
+        summary = [f"{len(alleles)} allele(s)"]
+        if data.get("chart_bytes"):
+            summary.append("chart image")
+        if pct is not None:
+            summary.append(f"% PRA {int(round(pct))}%")
+        if not pat:
+            summary.append("(no patient-details sheet found)")
+        QMessageBox.information(self, "SAB Excel Imported",
+                                "Loaded " + ", ".join(summary) + ".")
 
     def _collect_manual_case(self) -> dict:
         """Build a case dict from the current Manual tab form state + current settings."""
@@ -1695,7 +2057,11 @@ class HLAReportGeneratorApp(QMainWindow):
         # Attach SAB-specific fields
         if rtype in ("sab_class1", "sab_class2"):
             pf = getattr(self, "_sab_pat_f", {})
-            def _tv(d, k, default=""): return d[k].text().strip() if k in d else default
+            def _tv(d, k, default=""):
+                if k not in d: return default
+                w = d[k]
+                return (w.toPlainText().strip() if hasattr(w, "toPlainText")
+                        else w.text().strip())
             patient = {
                 "name":            _tv(pf, "patient_name"),
                 "gender_age":      _tv(pf, "gender_age"),
@@ -1708,6 +2074,9 @@ class HLAReportGeneratorApp(QMainWindow):
                 "receipt_date":    _tv(pf, "receipt_date"),
                 "report_date":     _tv(pf, "report_date"),
                 "remarks":         _tv(pf, "remarks"),
+                "comments":        _tv(pf, "comments"),
+                "sab_pra_pct":     (self._sab_pra_edit.text().strip()
+                                    if hasattr(self, "_sab_pra_edit") else ""),
                 "hla": {}, "hla_c_type": "", "_join_key": _tv(pf, "pin"),
                 "_has_insufficient_hla": False,
             }
@@ -1849,7 +2218,7 @@ class HLAReportGeneratorApp(QMainWindow):
             case["kir_interpretation"] = _kir_ie.toPlainText().strip() if _kir_ie else ""
 
         # Attach PRA-specific fields
-        if rtype == "pra_class1":
+        if rtype in ("pra_class1", "pra_class2"):
             pf = getattr(self, "_pra_pat_f", {})
             rf = getattr(self, "_pra_result_f", {})
             def _tv(d, k, default=""): return d[k].text().strip() if k in d else default
@@ -1872,7 +2241,7 @@ class HLAReportGeneratorApp(QMainWindow):
             case = self._build_case(rtype, nabl, with_logo, sig_stamp, patient, [])
             case["pra_percentage"] = _tv(rf, "pra_percentage")
             case["pra_result"]     = _tv(rf, "pra_result")
-            case["pra_class"]      = "I"
+            case["pra_class"]      = "II" if rtype == "pra_class2" else "I"
 
         self._apply_sig_name_overrides(case, self._manual_sig_name_overrides)
         return case
@@ -1899,7 +2268,7 @@ class HLAReportGeneratorApp(QMainWindow):
         elif rtype == "kir_genotyping":
             name = self._kir_pat_f.get("patient_name", QLineEdit()).text().strip() if hasattr(self, "_kir_pat_f") else ""
             pin  = self._kir_pat_f.get("pin",           QLineEdit()).text().strip() if hasattr(self, "_kir_pat_f") else ""
-        elif rtype == "pra_class1":
+        elif rtype in ("pra_class1", "pra_class2"):
             name = self._pra_pat_f.get("patient_name", QLineEdit()).text().strip() if hasattr(self, "_pra_pat_f") else ""
             pin  = self._pra_pat_f.get("pin",           QLineEdit()).text().strip() if hasattr(self, "_pra_pat_f") else ""
         else:
@@ -1908,7 +2277,7 @@ class HLAReportGeneratorApp(QMainWindow):
         if not name:
             QMessageBox.warning(self, "Missing Fields", "Patient Name is required.")
             return
-        if not pin and rtype not in ("cdc_crossmatch", "dsa_crossmatch", "sab_class1", "sab_class2", "flow_crossmatch", "luminex_typing", "pra_class1"):
+        if not pin and rtype not in ("cdc_crossmatch", "dsa_crossmatch", "sab_class1", "sab_class2", "flow_crossmatch", "luminex_typing", "pra_class1", "pra_class2"):
             QMessageBox.warning(self, "Missing Fields", "PIN is required.")
             return
         out_dir = self.manual_output_label.text()
@@ -1956,12 +2325,27 @@ class HLAReportGeneratorApp(QMainWindow):
         if hasattr(self, "_manual_preview_status"):
             self._manual_preview_status.setText("")
         if QTPDF_OK and self._manual_pdf_doc is not None and os.path.exists(pdf_path):
+            # Remember the scroll position so live-preview reloads don't jump
+            # back to page 1 on every keystroke (best-effort; never blocks load).
+            _nav, _cur_page, _cur_loc = None, 0, None
+            try:
+                _nav = self._manual_pdf_view.pageNavigator()
+                _cur_page = _nav.currentPage()
+                _cur_loc  = _nav.currentLocation()
+            except Exception:
+                _nav = None
             try:
                 self._manual_pdf_doc.close()
                 self._manual_pdf_doc.load(pdf_path)
-                self._manual_pdf_view.setZoomMode(QPdfView.ZoomMode.FitInView)
+                # Zoom mode is set once at construction (FitToWidth); not reset here.
             except Exception as e:
                 print(f"[preview] load error: {e}")
+            try:
+                if _nav is not None and _cur_loc is not None \
+                        and 0 <= _cur_page < self._manual_pdf_doc.pageCount():
+                    _nav.jump(_cur_page, _cur_loc)
+            except Exception:
+                pass
         elif FITZ_OK and os.path.exists(pdf_path):
             while self._manual_preview_vbox.count():
                 child = self._manual_preview_vbox.takeAt(0)
@@ -1981,7 +2365,7 @@ class HLAReportGeneratorApp(QMainWindow):
         try:
             case = self._collect_manual_case()
             _rtype_preview = case.get("report_type", "single_hla")
-            _NO_HLA_TYPES = ("cdc_crossmatch", "dsa_crossmatch", "flow_crossmatch", "sab_class1", "sab_class2", "luminex_typing", "pra_class1")
+            _NO_HLA_TYPES = ("cdc_crossmatch", "dsa_crossmatch", "flow_crossmatch", "sab_class1", "sab_class2", "luminex_typing", "pra_class1", "pra_class2")
             if _rtype_preview not in _NO_HLA_TYPES and _has_insufficient_data(case.get("patient", {})):
                 return
             self._start_manual_preview(case)
@@ -1993,6 +2377,39 @@ class HLAReportGeneratorApp(QMainWindow):
 
     def _on_manual_field_debounced(self):
         self._manual_edit_timer.start(400)
+
+    @staticmethod
+    def _apply_sab_pra(pct_text, sab_class, remarks_w, comments_w):
+        """Auto-fill the % PRA sentence into the Remarks and Comments widgets.
+
+        A field is updated only when it is empty or still holds a previously
+        auto-generated % PRA sentence, so any custom wording the user typed is
+        never clobbered. Signals are blocked to avoid recursive change events.
+        """
+        sentence = sab_pra_sentence(pct_text, sab_class)
+        if not sentence:
+            return
+        if remarks_w is not None:
+            cur = remarks_w.text().strip()
+            if not cur or is_auto_pra_text(cur):
+                remarks_w.blockSignals(True)
+                remarks_w.setText(sentence)
+                remarks_w.blockSignals(False)
+        if comments_w is not None:
+            cur = comments_w.toPlainText().strip()
+            if not cur or is_auto_pra_text(cur):
+                comments_w.blockSignals(True)
+                comments_w.setPlainText(sentence)
+                comments_w.blockSignals(False)
+
+    def _on_manual_sab_pra_changed(self, *args):
+        """Manual tab: % PRA value or SAB class changed → refresh sentence + preview."""
+        cls = (self._sab_class_combo.currentText()
+               if hasattr(self, "_sab_class_combo") else "I")
+        pf = getattr(self, "_sab_pat_f", {})
+        self._apply_sab_pra(self._sab_pra_edit.text(), cls,
+                            pf.get("remarks"), pf.get("comments"))
+        self._on_manual_field_debounced()
 
     def _on_manual_rtype_changed(self):
         """Sync global template_combo when the per-case Report Type combo changes."""
@@ -2017,7 +2434,7 @@ class HLAReportGeneratorApp(QMainWindow):
         is_flow_check = rtype == "flow_crossmatch"
         is_lx_check   = rtype == "luminex_typing"
         is_kir_check  = rtype == "kir_genotyping"
-        is_pra_check  = rtype == "pra_class1"
+        is_pra_check  = rtype in ("pra_class1", "pra_class2")
         for _grp in ("_std_pat_group", "_std_hla_group", "_std_donors_outer"):
             if hasattr(self, _grp):
                 getattr(self, _grp).setVisible(
@@ -2059,8 +2476,8 @@ class HLAReportGeneratorApp(QMainWindow):
         for _grp in ("_kir_pat_group", "_kir_genes_group", "_kir_result_group"):
             if hasattr(self, _grp):
                 getattr(self, _grp).setVisible(is_kir)
-        # PRA form groups — only for PRA Class I
-        is_pra = rtype == "pra_class1"
+        # PRA form groups — only for PRA Class I / II
+        is_pra = rtype in ("pra_class1", "pra_class2")
         for _grp in ("_pra_pat_group", "_pra_res_group"):
             if hasattr(self, _grp):
                 getattr(self, _grp).setVisible(is_pra)
@@ -2297,6 +2714,9 @@ class HLAReportGeneratorApp(QMainWindow):
             self._manual_sig_name_overrides.pop(slot, None)
         else:
             self._manual_sig_name_overrides[slot] = text
+        # Refresh the live preview so the swapped signature shows immediately —
+        # without this the override only appeared on the final generated PDF.
+        self._on_manual_field_debounced()
 
     def _apply_sig_name_overrides(self, case: dict, name_overrides: dict):
         """
@@ -2487,7 +2907,7 @@ class HLAReportGeneratorApp(QMainWindow):
             _nabl_w = getattr(self, "_kir_nabl_chk", None)
             if _nabl_w is not None:
                 data["nabl"] = _nabl_w.isChecked()
-        elif rtype == "pra_class1" and hasattr(self, "_pra_pat_f"):
+        elif rtype in ("pra_class1", "pra_class2") and hasattr(self, "_pra_pat_f"):
             data["pra_patient_fields"] = {k: w.text().strip() for k, w in self._pra_pat_f.items()}
             data["pra_result_fields"]  = {k: w.text().strip() for k, w in self._pra_result_f.items()}
             if hasattr(self, "_pra_nabl_chk"):
@@ -2690,7 +3110,7 @@ class HLAReportGeneratorApp(QMainWindow):
                 _nabl_w = getattr(self, "_kir_nabl_chk", None)
                 if _nabl_w is not None:
                     _nabl_w.setChecked(data.get("nabl", True))
-            elif _rtype == "pra_class1":
+            elif _rtype in ("pra_class1", "pra_class2"):
                 for k, v in data.get("pra_patient_fields", {}).items():
                     if hasattr(self, "_pra_pat_f") and k in self._pra_pat_f:
                         self._pra_pat_f[k].setText(str(v))
@@ -2782,6 +3202,13 @@ class HLAReportGeneratorApp(QMainWindow):
         self.chk_nabl.setChecked(True)
         opts_row.addWidget(self.chk_nabl)
         opts_row.addStretch()
+        sab_xl_btn = QPushButton("Import SAB Excel")
+        sab_xl_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        sab_xl_btn.setToolTip("Add a single-patient SAB Class I/II Excel workbook as a case "
+                              "(patient details + alleles + chart).")
+        sab_xl_btn.clicked.connect(self._bulk_import_sab_excel)
+        opts_row.addWidget(sab_xl_btn)
+
         load_btn = QPushButton("Load & Parse Excel")
         load_btn.setStyleSheet(GENERATE_BTN_STYLE)
         load_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight))
@@ -3016,6 +3443,60 @@ class HLAReportGeneratorApp(QMainWindow):
             import traceback; traceback.print_exc()
 
 
+    def _bulk_import_sab_excel(self):
+        """Add a single-patient SAB Class I/II Excel workbook as a bulk case."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select SAB Excel Workbook", str(Path.home()),
+            "Excel Workbooks (*.xlsx *.xlsm)")
+        if not path:
+            return
+        try:
+            data = self._parse_sab_excel(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Excel Import Failed",
+                                 f"Could not read the SAB Excel file:\n\n{e}")
+            return
+
+        pat   = data.get("patient", {})
+        cls   = data.get("sab_class") or "I"
+        rtype = "sab_class2" if cls == "II" else "sab_class1"
+        pct   = data.get("pra_pct")
+        pra_txt = (f"The SAB % PRA Class {cls} is {int(round(pct))}%."
+                   if pct is not None else "")
+        patient = {
+            "name":            pat.get("patient_name", ""),
+            "gender_age":      pat.get("gender_age", ""),
+            "hospital_mr_no":  pat.get("hospital_mr_no", "") or "NA",
+            "specimen":        pat.get("specimen", "") or "Serum",
+            "hospital_clinic": pat.get("hospital_clinic", ""),
+            "pin":             pat.get("pin", ""),
+            "sample_number":   pat.get("sample_number", ""),
+            "collection_date": pat.get("collection_date", ""),
+            "receipt_date":    pat.get("receipt_date", ""),
+            "report_date":     pat.get("report_date", ""),
+            "remarks":         pra_txt,
+            "comments":        pra_txt,
+            "hla": {}, "hla_c_type": "",
+        }
+        nabl      = self.chk_nabl.isChecked()
+        with_logo = self.logo_combo.currentText() == "With Logo"
+        sig_stamp = self.qsettings.value("sig_stamp", True, type=bool)
+        case = self._build_case(rtype, nabl, with_logo, sig_stamp, patient, [])
+        case["sab_alleles"]     = data.get("alleles", [])
+        case["sab_chart_bytes"] = data.get("chart_bytes")
+        case["sab_class"]       = cls
+
+        self.cases.append(case)
+        self._populate_bulk_list()
+        self.bulk_list.setCurrentRow(len(self.cases) - 1)
+        self._bulk_log(
+            f"Imported SAB Class {cls} case: {patient['name'] or 'Patient'} "
+            f"({len(case['sab_alleles'])} alleles"
+            + (", chart" if case['sab_chart_bytes'] else "") + ")")
+        QMessageBox.information(
+            self, "SAB Excel Imported",
+            f"Added 1 SAB Class {cls} case: {patient['name'] or 'Patient'}.")
+
     def _populate_bulk_list(self):
         self.bulk_list.clear()
         colors = {"single_hla": "#E8F5E9", "rpl_couple": "#FFF3E0",
@@ -3064,6 +3545,15 @@ class HLAReportGeneratorApp(QMainWindow):
     def _on_bulk_field_debounced(self):
         """Triggered by any field change; restarts debounce timer."""
         self._edit_timer.start(400) # 400ms debounce
+
+    def _on_bulk_sab_pra_changed(self, *args):
+        """Bulk SAB editor: % PRA value or class changed → refresh sentence + preview."""
+        cls = (self._bulk_sab_class_combo.currentText()
+               if hasattr(self, "_bulk_sab_class_combo") else "I")
+        pf = getattr(self, "_bulk_sab_pat_f", {})
+        self._apply_sab_pra(self._bulk_sab_pra_edit.text(), cls,
+                            pf.get("remarks"), pf.get("comments"))
+        self._on_bulk_field_debounced()
 
     def _on_bulk_rtype_combo_changed(self):
         """Per-case Report Type combo changed — flush edits then rebuild form immediately."""
@@ -3213,6 +3703,11 @@ class HLAReportGeneratorApp(QMainWindow):
         # ── KIR Genotyping branch ────────────────────────────────────────────
         if case.get("report_type") == "kir_genotyping":
             self._rebuild_bulk_kir_editor(idx, case, pat_group, meta_group)
+            return
+
+        # ── PRA Class I / II branch ──────────────────────────────────────────
+        if case.get("report_type") in ("pra_class1", "pra_class2"):
+            self._rebuild_bulk_pra_editor(idx, case, pat_group, meta_group)
             return
 
         # ── CDC Cross match branch — separate form for CDC reports ───────────
@@ -3588,7 +4083,12 @@ class HLAReportGeneratorApp(QMainWindow):
             ("comments",         "Additional Comments", ""),
         ]
         for key, lbl, dflt in DSA_PAT:
-            w = self._make_field_widget(key, str(p.get(key, dflt) or dflt), self._on_bulk_field_debounced)
+            if key == "sample_type":
+                # Patient sample type stays "Serum" but is freely editable.
+                w = QLineEdit(str(p.get(key, dflt) or dflt)); w.setFixedHeight(24)
+                w.textChanged.connect(self._on_bulk_field_debounced)
+            else:
+                w = self._make_field_widget(key, str(p.get(key, dflt) or dflt), self._on_bulk_field_debounced)
             self._bulk_dsa_pat_f[key] = w
             dpf.addRow(lbl + ":", w)
 
@@ -3734,7 +4234,12 @@ class HLAReportGeneratorApp(QMainWindow):
             ("receipt_date","Sample Receipt Date",""), ("report_date","Report Date",""),
             ("remarks","Remarks",""), ("comments","Additional Comments",""),
         ]:
-            w = self._make_field_widget(key, str(p.get(key, dflt) or dflt), self._on_bulk_field_debounced)
+            if key == "sample_type":
+                # Patient sample type stays "Serum" but is freely editable.
+                w = QLineEdit(str(p.get(key, dflt) or dflt)); w.setFixedHeight(24)
+                w.textChanged.connect(self._on_bulk_field_debounced)
+            else:
+                w = self._make_field_widget(key, str(p.get(key, dflt) or dflt), self._on_bulk_field_debounced)
             self._bulk_flow_pat_f[key] = w; fpf.addRow(lbl + ":", w)
 
         _nabl_default = case.get("nabl", self.qsettings.value("nabl_stamp", True, type=bool))
@@ -3843,14 +4348,29 @@ class HLAReportGeneratorApp(QMainWindow):
             ("receipt_date",    "Sample Receipt Date",    ""),
             ("report_date",     "Report Date",            ""),
             ("remarks",         "Remarks",                ""),
+            ("comments",        "Comments",               ""),
         ]
         for key, lbl, dflt in SAB_PAT:
-            w = QLineEdit(str(p.get(key, dflt) or dflt))
-            w.setFixedHeight(24)
-            if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
-            w.textChanged.connect(self._on_bulk_field_debounced)
+            if key == "comments":
+                # Multi-line, editable comment box → report's Comments box.
+                w = QTextEdit(); w.setPlainText(str(p.get(key, dflt) or dflt))
+                w.setFixedHeight(56)
+                w.setPlaceholderText("Shown in the report's Comments box")
+                w.textChanged.connect(self._on_bulk_field_debounced)
+            else:
+                w = QLineEdit(str(p.get(key, dflt) or dflt))
+                w.setFixedHeight(24)
+                if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
+                w.textChanged.connect(self._on_bulk_field_debounced)
             self._bulk_sab_pat_f[key] = w
             spf.addRow(lbl + ":", w)
+
+        # % PRA — auto-fills the Remarks + Comments sentence (see manual tab).
+        self._bulk_sab_pra_edit = QLineEdit(str(p.get("sab_pra_pct", "") or ""))
+        self._bulk_sab_pra_edit.setFixedHeight(24)
+        self._bulk_sab_pra_edit.setPlaceholderText("e.g. 79  → fills Remarks & Comments")
+        self._bulk_sab_pra_edit.textChanged.connect(self._on_bulk_sab_pra_changed)
+        spf.addRow("% PRA:", self._bulk_sab_pra_edit)
 
         _nabl_default = case.get("nabl", self.qsettings.value("nabl_stamp", True, type=bool))
         self._bulk_nabl_chk = QCheckBox("NABL Accreditation")
@@ -3892,7 +4412,8 @@ class HLAReportGeneratorApp(QMainWindow):
         _cur_class = "II" if case.get("sab_class") == "II" else "I"
         self._bulk_sab_class_combo.setCurrentText(_cur_class)
         self._bulk_sab_class_combo.setFixedHeight(24)
-        self._bulk_sab_class_combo.currentIndexChanged.connect(self._on_bulk_field_debounced)
+        # Class change also re-flows the % PRA sentence (Class I ↔ II wording).
+        self._bulk_sab_class_combo.currentIndexChanged.connect(self._on_bulk_sab_pra_changed)
         _class_row.addWidget(_class_lbl); _class_row.addWidget(self._bulk_sab_class_combo, 1)
         saf.addLayout(_class_row)
 
@@ -4190,6 +4711,76 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_editor_layout.addWidget(sig_group)
         QTimer.singleShot(200, self._refresh_bulk_preview)
 
+    def _rebuild_bulk_pra_editor(self, idx, case, _old_pat_group, meta_group):
+        """Build PRA Class I / II editor form inside the bulk editor scroll area."""
+        p = case["patient"]
+        self._bulk_pra_pat_f    = {}
+        self._bulk_pra_result_f = {}
+
+        pra_pat_grp = QGroupBox("Patient Information")
+        ppf = QFormLayout(); pra_pat_grp.setLayout(ppf)
+        ppf.setSpacing(1); ppf.setContentsMargins(4, 2, 4, 2)
+        for key, lbl, dflt in [
+            ("patient_name",    "Patient Name *",         ""),
+            ("gender",          "Gender",                 ""),
+            ("age",             "Age",                    ""),
+            ("specimen",        "Specimen",               "Serum"),
+            ("hospital_clinic", "Hospital / Clinic",      ""),
+            ("pin",             "PIN",                    ""),
+            ("sample_number",   "Sample Number",          ""),
+            ("collection_date", "Sample Collection Date", ""),
+            ("receipt_date",    "Sample Receipt Date",    ""),
+            ("report_date",     "Report Date",            ""),
+        ]:
+            src_key = "name" if key == "patient_name" else key
+            w = QLineEdit(str(p.get(src_key, dflt) or dflt))
+            w.setFixedHeight(24)
+            if "date" in key: w.setPlaceholderText("DD-MM-YYYY")
+            w.textChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_pra_pat_f[key] = w
+            ppf.addRow(lbl + ":", w)
+        _nabl_default = case.get("nabl", self.qsettings.value("nabl_stamp", True, type=bool))
+        self._bulk_pra_nabl_chk = QCheckBox("NABL Accreditation")
+        self._bulk_pra_nabl_chk.setChecked(_nabl_default)
+        self._bulk_pra_nabl_chk.stateChanged.connect(self._on_bulk_field_debounced)
+        ppf.addRow(self._bulk_pra_nabl_chk)
+
+        pra_res_grp = QGroupBox("PRA Result")
+        prf = QFormLayout(); pra_res_grp.setLayout(prf)
+        prf.setSpacing(1); prf.setContentsMargins(4, 2, 4, 2)
+        _w_pct = QLineEdit(str(case.get("pra_percentage", "") or ""))
+        _w_pct.setFixedHeight(24); _w_pct.setPlaceholderText("e.g. 14  (% sign optional)")
+        _w_pct.textChanged.connect(self._on_bulk_field_debounced)
+        self._bulk_pra_result_f["pra_percentage"] = _w_pct
+        prf.addRow("PRA Percentage:", _w_pct)
+        _w_res = QLineEdit(str(case.get("pra_result", "") or ""))
+        _w_res.setFixedHeight(24)
+        _w_res.setPlaceholderText("Leave blank to auto-classify from percentage")
+        _w_res.textChanged.connect(self._on_bulk_field_debounced)
+        self._bulk_pra_result_f["pra_result"] = _w_res
+        prf.addRow("Result:", _w_res)
+
+        for grp in (pra_pat_grp, meta_group, pra_res_grp):
+            self._bulk_editor_layout.addWidget(grp)
+
+        self._bulk_sig_combos = {}
+        name_overrides = case.get("sig_name_overrides", {})
+        sig_group = QGroupBox("Signature Override")
+        sig_form  = QFormLayout(); sig_group.setLayout(sig_form)
+        sig_form.setSpacing(2); sig_form.setContentsMargins(4, 2, 4, 2)
+        _sig_opts = ["(Use Default)"] + list(hla_assets.SIGN_BY_NAME.keys())
+        for i in range(3):
+            cmb = ClickOnlyComboBox(); cmb.addItems(_sig_opts); cmb.setFixedHeight(24)
+            saved = name_overrides.get(i, name_overrides.get(str(i), ""))
+            if saved:
+                pos = cmb.findText(saved)
+                if pos >= 0: cmb.setCurrentIndex(pos)
+            cmb.currentIndexChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_sig_combos[i] = cmb
+            sig_form.addRow(f"Signatory {i+1}:", cmb)
+        self._bulk_editor_layout.addWidget(sig_group)
+        QTimer.singleShot(200, self._refresh_bulk_preview)
+
     def _flush_bulk_edits(self, idx):
         """Read current form field values and write back to cases[idx]."""
         if idx < 0 or idx >= len(self.cases): return
@@ -4261,7 +4852,10 @@ class HLAReportGeneratorApp(QMainWindow):
         if case.get("report_type") in ("sab_class1", "sab_class2"):
             if hasattr(self, "_bulk_sab_pat_f"):
                 for key, w in self._bulk_sab_pat_f.items():
-                    p[key] = w.text().strip()
+                    p[key] = (w.toPlainText().strip() if hasattr(w, "toPlainText")
+                              else w.text().strip())
+            if hasattr(self, "_bulk_sab_pra_edit"):
+                p["sab_pra_pct"] = self._bulk_sab_pra_edit.text().strip()
             if hasattr(self, "_bulk_sab_allele_edit"):
                 case["sab_alleles"] = self._parse_sab_allele_text_static(
                     self._bulk_sab_allele_edit.toPlainText())
@@ -4353,6 +4947,24 @@ class HLAReportGeneratorApp(QMainWindow):
             case["with_logo"] = self.logo_combo.currentText() == "With Logo"
             if hasattr(self, "_bulk_kir_nabl_chk") and self._bulk_kir_nabl_chk is not None:
                 case["nabl"] = self._bulk_kir_nabl_chk.isChecked()
+            return
+
+        # ── PRA path ─────────────────────────────────────────────────────────
+        if case.get("report_type") in ("pra_class1", "pra_class2"):
+            if hasattr(self, "_bulk_pra_pat_f"):
+                for key, w in self._bulk_pra_pat_f.items():
+                    dest = "name" if key == "patient_name" else key
+                    p[dest] = w.text().strip()
+            if hasattr(self, "_bulk_pra_result_f"):
+                case["pra_percentage"] = self._bulk_pra_result_f["pra_percentage"].text().strip()
+                case["pra_result"]     = self._bulk_pra_result_f["pra_result"].text().strip()
+            if hasattr(self, "_bulk_rtype_combo") and self._bulk_rtype_combo is not None:
+                case["report_type"] = TEMPLATE_TO_RTYPE.get(
+                    self._bulk_rtype_combo.currentText(), "pra_class1")
+            case["pra_class"] = "II" if case.get("report_type") == "pra_class2" else "I"
+            case["with_logo"] = self.logo_combo.currentText() == "With Logo"
+            if hasattr(self, "_bulk_pra_nabl_chk") and self._bulk_pra_nabl_chk is not None:
+                case["nabl"] = self._bulk_pra_nabl_chk.isChecked()
             return
 
         if not self._bulk_fields: return
@@ -4705,15 +5317,14 @@ class HLAReportGeneratorApp(QMainWindow):
 
         with_logo  = self.logo_combo.currentText() == "With Logo"
         sigs       = self._get_signatories()
-        sig_single = self.qsettings.value("sig_count_single", 3, type=int)
-        sig_donor  = self.qsettings.value("sig_count_donor",  2, type=int)
+        sig_counts = self._sig_counts_map()
         sig_stamp  = self.qsettings.value("signature_stamp", False, type=bool)
 
         self.bulk_status_label.setText("Generating…")
         self.bulk_log.clear()
 
         self.worker = GenerateWorker(
-            cases, out, with_logo, sigs, sig_single, sig_donor, sig_stamp
+            cases, out, with_logo, sigs, sig_counts, sig_stamp
         )
         self.worker.progress.connect(self._on_bulk_progress)
         self.worker.finished.connect(self._on_bulk_done)
@@ -4776,7 +5387,7 @@ class HLAReportGeneratorApp(QMainWindow):
             kpf = data["kir_patient_fields"]
             patient = dict(kpf)
             patient["name"] = patient.pop("patient_name", kpf.get("patient_name", ""))
-        elif rtype == "pra_class1" and "pra_patient_fields" in data:
+        elif rtype in ("pra_class1", "pra_class2") and "pra_patient_fields" in data:
             ppf = data["pra_patient_fields"]
             patient = dict(ppf)
             patient["name"] = patient.pop("patient_name", ppf.get("patient_name", ""))
@@ -4838,11 +5449,11 @@ class HLAReportGeneratorApp(QMainWindow):
             if key in data:
                 case[key] = data[key]
         # PRA result fields (manual draft → bulk case)
-        if rtype == "pra_class1":
+        if rtype in ("pra_class1", "pra_class2"):
             prf = data.get("pra_result_fields", {})
             case["pra_percentage"] = prf.get("pra_percentage", "")
             case["pra_result"]     = prf.get("pra_result", "")
-            case["pra_class"]      = "I"
+            case["pra_class"]      = "II" if rtype == "pra_class2" else "I"
         return case
 
     @staticmethod
@@ -4982,13 +5593,12 @@ class HLAReportGeneratorApp(QMainWindow):
 
         with_logo  = self.logo_combo.currentText() == "With Logo"
         sigs       = self._get_signatories()
-        sig_single = self.qsettings.value("sig_count_single", 3, type=int)
-        sig_donor  = self.qsettings.value("sig_count_donor",  2, type=int)
+        sig_counts = self._sig_counts_map()
         sig_stamp  = self.qsettings.value("signature_stamp", False, type=bool)
 
         self.bulk_status_label.setText("Generating…")
         self.worker = GenerateWorker(
-            [self.cases[idx]], out, with_logo, sigs, sig_single, sig_donor, sig_stamp
+            [self.cases[idx]], out, with_logo, sigs, sig_counts, sig_stamp
         )
         self.worker.progress.connect(self._on_bulk_progress)
         self.worker.finished.connect(self._on_bulk_done)
@@ -5000,7 +5610,18 @@ class HLAReportGeneratorApp(QMainWindow):
     # ══════════════════════════════════════════════════════════════════════════
     def _create_settings_tab(self):
         tab = QWidget()
-        lay = QVBoxLayout(); tab.setLayout(lay)
+        _outer = QVBoxLayout(tab)
+        _outer.setContentsMargins(0, 0, 0, 0)
+        # Wrap settings content in a scroll area so this tab's tall form doesn't
+        # force a large minimum height on the whole window (QTabWidget uses the
+        # max minimum across tabs). Without this, short screens push the Manual
+        # tab's pinned Generate controls off-screen with no way to scroll.
+        _settings_scroll = QScrollArea()
+        _settings_scroll.setWidgetResizable(True)
+        _settings_content = QWidget()
+        _settings_scroll.setWidget(_settings_content)
+        _outer.addWidget(_settings_scroll)
+        lay = QVBoxLayout(); _settings_content.setLayout(lay)
 
         grp1 = QGroupBox("Report Options")
         g1   = QVBoxLayout(); grp1.setLayout(g1)
@@ -5022,14 +5643,16 @@ class HLAReportGeneratorApp(QMainWindow):
             lambda: self.qsettings.setValue("signature_stamp", self.chk_stamp.isChecked()))
         lay.addWidget(grp1)
 
-        grp2 = QGroupBox("Signatory Count Defaults")
+        grp2 = QGroupBox("Signatory Count Defaults (per template)")
         g2   = QFormLayout(); grp2.setLayout(g2)
-        self.spin_single = QSpinBox(); self.spin_single.setRange(1, 5)
-        self.spin_donor  = QSpinBox(); self.spin_donor.setRange(1, 5)
-        self.spin_single.setValue(self.qsettings.value("sig_count_single", 3, type=int))
-        self.spin_donor.setValue( self.qsettings.value("sig_count_donor",  2, type=int))
-        g2.addRow("Single HLA report — signatures:", self.spin_single)
-        g2.addRow("Donor / RPL report — signatures:", self.spin_donor)
+        # One spin box per report template — each independently editable.
+        self._sig_count_spins = {}
+        for tpl in REPORT_TEMPLATES:
+            rtype = tpl["report_type"]
+            spin  = QSpinBox(); spin.setRange(1, 5)
+            spin.setValue(read_sig_count(self.qsettings, rtype))
+            self._sig_count_spins[rtype] = spin
+            g2.addRow(f"{tpl['name']} — signatures:", spin)
         lay.addWidget(grp2)
 
         grp3 = QGroupBox("Signatories (order = report display order)")
@@ -5134,9 +5757,14 @@ class HLAReportGeneratorApp(QMainWindow):
         self.qsettings.setValue("with_logo",        self.chk_logo.isChecked())
         self.qsettings.setValue("nabl_stamp",        self.chk_nabl_stamp.isChecked())
         self.qsettings.setValue("signature_stamp",   self.chk_stamp.isChecked())
-        self.qsettings.setValue("sig_count_single",  self.spin_single.value())
-        self.qsettings.setValue("sig_count_donor",   self.spin_donor.value())
+        for rtype, spin in self._sig_count_spins.items():
+            self.qsettings.setValue(f"sig_count_{rtype}", spin.value())
         QMessageBox.information(self, "Saved", "Settings saved successfully.")
+
+    def _sig_counts_map(self):
+        """{report_type -> signatory count} for every template, from QSettings."""
+        return {t["report_type"]: read_sig_count(self.qsettings, t["report_type"])
+                for t in REPORT_TEMPLATES}
 
     # ══════════════════════════════════════════════════════════════════════════
     # TAB 4 — USER GUIDE
@@ -5169,9 +5797,12 @@ class HLAReportGeneratorApp(QMainWindow):
 <h3>Quick Start — Bulk Upload</h3>
 <ol>
   <li>Go to <b>Bulk Upload</b> tab</li>
-  <li>Browse and select your Excel file (MINISEQ or SURFSEQ)</li>
+  <li>Browse and select your Excel file (HLA typing, Luminex, CDC, DSA, Flow or PRA)</li>
   <li>Tick <b>NABL-Accredited</b> for MINISEQ files; untick for SURFSEQ</li>
-  <li>Click <b>Load &amp; Parse Excel</b> — cases are auto-detected</li>
+  <li>Click <b>Load &amp; Parse Excel</b> — the report type is auto-detected from the
+      file name and sheet contents</li>
+  <li>For <b>SAB Class I / II</b>, use the dedicated <b>Import SAB Excel</b> button
+      (single-patient workbook with patient details + bead table + chart)</li>
   <li>Select a case from the list to review and edit it in the editor on the right</li>
   <li>Click <b>Apply Edits</b> after making changes to a case</li>
   <li>Select output folder and click <b>Generate All Reports</b></li>
@@ -5180,23 +5811,58 @@ class HLAReportGeneratorApp(QMainWindow):
 <h3>Excel File Sheets</h3>
 <table>
   <tr><th>Sheet</th><th>Purpose</th></tr>
-  <tr><td><code>patient-donor detail</code></td><td>Patient &amp; donor metadata</td></tr>
-  <tr><td><code>result data</code></td><td>HLA allele results</td></tr>
+  <tr><td><code>patient-donor detail</code></td><td>Patient &amp; donor metadata (HLA typing files)</td></tr>
+  <tr><td><code>result data</code></td><td>HLA allele results (HLA typing files)</td></tr>
 </table>
-<div class="tip">MINISEQ → enable NABL stamp. SURFSEQ → disable NABL stamp.</div>
+<div class="tip">MINISEQ → enable NABL stamp. SURFSEQ → disable NABL stamp.
+Crossmatch, Luminex, SAB and PRA templates use their own sheet layouts — the parser
+locates the right sheet by its column headers, so sheet names don't have to match exactly.</div>
 
 <h3>Report Types</h3>
+<p>The app supports the templates below. Most are auto-detected on
+<b>Load&nbsp;&amp;&nbsp;Parse&nbsp;Excel</b>; SAB uses its own import button, and KIR is
+entered manually. Any case can also be built from scratch on the <b>Manual Entry</b> tab.</p>
 <table>
-  <tr><th>Type</th><th>Detection</th><th>Pages</th></tr>
-  <tr><td>Single HLA</td><td>No donor rows</td><td>1–2</td></tr>
-  <tr><td>RPL Couple</td><td>Diagnosis=RPL or wife/husband relationship</td><td>3</td></tr>
-  <tr><td>Transplant Donor</td><td>Donor present, non-RPL</td><td>2+</td></tr>
+  <tr><th>Template</th><th>How it's created / detected</th><th>Pages</th></tr>
+  <tr><td>With CL <i>(Single HLA)</i></td><td>Bulk: HLA typing file with no donor rows</td><td>1–2</td></tr>
+  <tr><td>RPL</td><td>Bulk: Diagnosis = RPL, or wife/husband relationship</td><td>3</td></tr>
+  <tr><td>HLA Typing High Resolution <i>(Transplant Donor)</i></td><td>Bulk: donor present, non-RPL</td><td>2+</td></tr>
+  <tr><td>HLA Typing (Luminex)</td><td>Bulk: file name contains <code>LUMINEX</code>, or a sheet headed <code>SampleName</code></td><td>2+</td></tr>
+  <tr><td>CDC Crossmatch</td><td>Bulk: file name has <code>CDC</code>, or demographics mention neither DSA nor Flow</td><td>2</td></tr>
+  <tr><td>DSA Crossmatch</td><td>Bulk: file name has <code>DSA</code>, or demographics mention "Donor Specific"</td><td>2</td></tr>
+  <tr><td>Flow Crossmatch</td><td>Bulk: file name has <code>FLOW</code>, or demographics mention "Flow Cytometry"</td><td>2</td></tr>
+  <tr><td>SAB Class I / II</td><td><b>Import SAB Excel</b> button (single-patient workbook), or Manual Entry</td><td>3+</td></tr>
+  <tr><td>PRA Class I / II</td><td>Bulk: file name contains <code>PRA</code> (add <code>II</code> / <code>class 2</code> for Class II), or Manual Entry</td><td>2</td></tr>
+  <tr><td>KIR Genotyping</td><td>Manual Entry only</td><td>1–2</td></tr>
 </table>
 
+<h3>Antibody &amp; Crossmatch Reports</h3>
+<ul>
+  <li><b>SAB Class I / II</b> — import a single-patient SAB workbook with the
+      <b>Import SAB Excel</b> button (Bulk) or <b>Import from SAB Excel</b> (Manual,
+      top of the SAB form). It auto-fills patient details, the allele/MFI bead table
+      and the bead-specificity chart. Enter the <b>% PRA</b> once; it fills the page-1
+      <b>Remarks</b> and the last-page <b>Comments</b> with the standard
+      "The SAB % PRA Class I/II is N%." sentence, and the class always follows the
+      selected SAB Class.</li>
+  <li><b>PRA Class I / II</b> — a PRA workbook holds one patient per row (demographics
+      only). On import the patient details are filled and the case defaults to
+      <b>Class I</b> (or Class II if the file name signals it); enter the
+      <b>PRA Percentage</b> and <b>Result</b> in the editor (leave Result blank to
+      auto-classify from the percentage).</li>
+  <li><b>CDC / DSA / Flow</b> — crossmatch templates auto-detected from the file name or
+      demographics sheet; results (T/B cell, DTT) are read from the workbook and shown
+      in the editor for review.</li>
+  <li><b>KIR Genotyping</b> — built on the Manual Entry tab: pick the KIR template,
+      set gene presence/absence and the genotype interpretation.</li>
+</ul>
+
 <h3>Manual Entry</h3>
-<p>Fill in the Patient Information form. Enter HLA alleles in the <b>HLA Results</b> section
-(one row per locus, Allele&nbsp;1 and Allele&nbsp;2 side by side). Enable the
-<b>Donor Information</b> checkbox for transplant or RPL cases.</p>
+<p>Choose the <b>Report Type</b> at the top of the Manual Entry tab — the form adapts to
+the selected template. For HLA typing, fill the Patient Information form and enter alleles
+in the <b>HLA Results</b> section (one row per locus, Allele&nbsp;1 and Allele&nbsp;2 side
+by side); enable <b>Donor Information</b> for transplant or RPL cases. SAB and PRA show
+their own patient/result fields, and the SAB form includes an Excel auto-fill button.</p>
 
 <h3>Editing in Bulk Upload</h3>
 <p>Select a case from the list. The right panel shows a full editable form for patient info,
@@ -5208,8 +5874,8 @@ case — edits are flushed automatically).</p>
 
 <h3>Signatures</h3>
 <ul>
-  <li>Single HLA — default 3 signatures; Donor/RPL — default 2 signatures</li>
-  <li>Configure counts and names in the <b>Settings</b> tab</li>
+  <li>Each report template has its own signature count (default: Single HLA 3, all others 2)</li>
+  <li>Configure per-template counts and signatory names in the <b>Settings</b> tab</li>
 </ul>
 </body></html>""")
         lay.addWidget(browser)
@@ -5241,9 +5907,7 @@ case — edits are flushed automatically).</p>
 
     def _build_case(self, rtype, nabl, with_logo, sig_stamp, patient, donors):
         sigs_raw   = self._get_signatories()
-        n          = (self.qsettings.value("sig_count_single", 3, type=int)
-                      if rtype == "single_hla"
-                      else self.qsettings.value("sig_count_donor", 2, type=int))
+        n          = read_sig_count(self.qsettings, rtype)
         sigs = []
         for sig in sigs_raw[:n]:
             sign_info = hla_assets.SIGN_BY_NAME.get(sig["name"],

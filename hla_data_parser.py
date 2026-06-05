@@ -1129,6 +1129,141 @@ def parse_luminex_excel(filepath: str, nabl: bool = True) -> list:
     return cases
 
 
+def _normalize_age_token(age: str) -> str:
+    """Normalize a bare age value to 'N Years' / 'N Months' (years win when both
+    are present), matching the manual-entry style.
+
+    '59y' → '59 Years', '33' → '33 Years', '3 months' → '3 Months',
+    '21 y 2 months' → '21 Years', '1y' → '1 Year'.
+    """
+    s = _clean_str(age)
+    if not s:
+        return s
+    m = re.search(r'(\d+)\s*y', s, re.I)            # years take priority
+    if m:
+        n = int(m.group(1))
+        return f"{n} {'Year' if n == 1 else 'Years'}"
+    m = re.search(r'(\d+)\s*m', s, re.I)            # months only
+    if m:
+        n = int(m.group(1))
+        return f"{n} {'Month' if n == 1 else 'Months'}"
+    m = re.search(r'\d+', s)                        # bare number → assume years
+    if m:
+        n = int(m.group())
+        return f"{n} {'Year' if n == 1 else 'Years'}"
+    return s
+
+
+def parse_pra_excel(filepath: str, nabl: bool = True) -> list:
+    """Parse a PRA (Panel Reactive Antibody) demographics workbook into cases.
+
+    The PRA template ships a single sheet of patient demographics (one patient
+    per row) with no result columns — the % PRA value and qualitative result are
+    filled in later in the editor.  The sheet and its header row are located by
+    *content* (the first row containing a cell that starts with 'patient'), and
+    columns are mapped by header text, so the parser tolerates layout shifts.
+
+    Every data row becomes a PRA Class I case by default; the filename may carry
+    a 'II' / 'class 2' hint to route to Class II instead, and the per-case Report
+    Type combo lets the user switch either way in the editor.
+    """
+    fname_upper = os.path.basename(filepath).upper()
+    is_class2 = any(tok in fname_upper for tok in ("PRA II", "PRA2", "PRA_2",
+                                                   "CLASS II", "CLASS2", "CLASS_2"))
+    rtype = "pra_class2" if is_class2 else "pra_class1"
+    cls   = "II" if is_class2 else "I"
+
+    # Locate the sheet + header row holding a "patient" label.
+    df = header_row = None
+    for sh in pd.ExcelFile(filepath).sheet_names:
+        try:
+            cand = pd.read_excel(filepath, sheet_name=sh, header=None)
+        except Exception:
+            continue
+        for i, row in cand.iterrows():
+            if any(isinstance(v, str) and v.strip().lower().startswith("patient")
+                   for v in row):
+                df, header_row = cand, i
+                break
+        if header_row is not None:
+            break
+    if df is None or header_row is None:
+        return []
+
+    # Map normalized header text → column index.
+    col = {}
+    for c, v in enumerate(df.iloc[header_row]):
+        if isinstance(v, str):
+            col[_norm_col(v)] = c
+
+    def _ci(*names):
+        for n in names:
+            if n in col:
+                return col[n]
+        return None
+
+    c_name   = _ci("patient", "patient name")
+    c_ga     = _ci("gender/age", "gender / age", "gender age")
+    c_pin    = _ci("pin")
+    c_sample = _ci("sample number")
+    c_spec   = _ci("specimen", "sample type")
+    c_hosp   = _ci("hospital/clinic", "hospital / clinic")
+    c_coll   = _ci("sample collection date", "date of collection", "collection date")
+    c_recv   = _ci("sample receipt date", "receipt date")
+    c_rep    = _ci("report date")
+
+    def _rv(row, c):
+        return _clean_str(row.iloc[c]) if c is not None and c < len(row) else ""
+
+    def _rd(row, c):
+        return _fmt_date(row.iloc[c]) if c is not None and c < len(row) else ""
+
+    cases = []
+    for i in range(header_row + 1, len(df)):
+        row  = df.iloc[i]
+        name = _sentence_case(_rv(row, c_name))
+        if not name:
+            continue
+        # Split a combined "gender/age" value (e.g. "male/59y") into its parts.
+        gender, age = "", ""
+        ga = _rv(row, c_ga)
+        if ga:
+            parts = re.split(r"[/\\]", ga, maxsplit=1)
+            gender = _sentence_case(parts[0])
+            age    = _normalize_age_token(parts[1]) if len(parts) > 1 else ""
+        patient = {
+            "name":            name,
+            "gender":          gender,
+            "age":             age,
+            "specimen":        _rv(row, c_spec) or "Serum",
+            "hospital_clinic": _sentence_case(_rv(row, c_hosp)),
+            "pin":             _rv(row, c_pin),
+            "sample_number":   _rv(row, c_sample),
+            "collection_date": _rd(row, c_coll),
+            "receipt_date":    _rd(row, c_recv),
+            "report_date":     _rd(row, c_rep),
+            "hla": {}, "hla_c_type": "",
+            "_join_key": _rv(row, c_pin),
+            "_has_insufficient_hla": False,
+        }
+        cases.append({
+            "report_type":     rtype,
+            "nabl":            nabl,
+            "with_logo":       True,
+            "signature_stamp": False,
+            "methodology":     "", "imgt_release": "",
+            "coverage":        "", "typing_status": "Complete",
+            "reviewer":        "",
+            "patient":         patient,
+            "donors":          [],
+            "rpl_reference":   {},
+            "pra_class":       cls,
+            "pra_percentage":  "",
+            "pra_result":      "",
+        })
+    return cases
+
+
 # ─── Main parser ─────────────────────────────────────────────────────────────
 
 def parse_excel(filepath: str, nabl: bool = True) -> list:
@@ -1158,6 +1293,8 @@ def parse_excel(filepath: str, nabl: bool = True) -> list:
         # DSA must win over Flow when both keywords appear in the name.
         if "LUMINEX" in fname_upper:
             return parse_luminex_excel(filepath, nabl)
+        if "PRA" in fname_upper:
+            return parse_pra_excel(filepath, nabl)
         if "DSA" in fname_upper:
             return parse_dsa_excel(filepath, nabl)
         if "FLOW" in fname_upper and "CDC" not in fname_upper:

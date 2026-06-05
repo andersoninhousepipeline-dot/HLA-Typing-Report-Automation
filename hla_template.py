@@ -32,6 +32,29 @@ from reportlab.pdfbase.pdfmetrics import registerFontFamily
 
 import hla_assets
 
+
+class _BorderedTable(Table):
+    """A Table that strokes its own outer border on every page fragment.
+
+    ReportLab's ``BOX``/``OUTLINE`` style only closes the bottom edge on the
+    *final* fragment of a split table, so a long table that spills onto the next
+    page leaves the page-ending fragment open at the bottom. Drawing the border
+    rectangle ourselves in ``draw`` (which runs once per fragment) guarantees a
+    fully closed border on each page — without adding any inner row lines.
+    """
+
+    _border_width = 0.5
+    _border_color = colors.HexColor("#A0A0A0")
+
+    def draw(self):
+        Table.draw(self)
+        c = self.canv
+        c.saveState()
+        c.setStrokeColor(self._border_color)
+        c.setLineWidth(self._border_width)
+        c.rect(0, 0, self._width, self._height, stroke=1, fill=0)
+        c.restoreState()
+
 # ─── Page geometry (Letter, 21.59 cm × 27.94 cm) ────────────────────────────
 PAGE_W, PAGE_H = letter        # 612.0 × 792.0 pts
 MARGIN_L = 15 * mm            # ≈ 42.5 pts  → actual content starts ~43 pts
@@ -69,7 +92,6 @@ C_CDC_DTT_HDR  = colors.HexColor("#2C3E50")   # dark header for DTT table
 # SAB Assay
 C_SAB_HEADING  = colors.HexColor("#C55A11")   # orange-amber for section headings
 C_SAB_TBL_HDR  = colors.HexColor("#9DC3E6")   # steel blue for allele table headers
-C_SAB_HIGH_ROW = colors.HexColor("#FFCCCC")   # light pink for MFI >=1000 data rows
 
 # ─── Static text constants ────────────────────────────────────────────────────
 COVERAGE_LINES = [
@@ -590,9 +612,12 @@ def _title_case(text: str) -> str:
                 return _DEGREE_MAP[token.lower()] + "."
             return token
         lower = token.lower()
-        # Rule 2a: Known name prefix (checked before degree map to avoid "Ms" → "MS")
-        if lower in _PREFIX_MAP_TC:
-            return _PREFIX_MAP_TC[lower]
+        # Rule 2a: Known name prefix (checked before degree map to avoid "Ms"/"Ms." → "MS").
+        # Accept an optional trailing dot so "Ms." is treated as the prefix, not the
+        # "ms" (Master of Surgery) degree.
+        _pfx = lower.rstrip(".")
+        if _pfx in _PREFIX_MAP_TC and lower in (_pfx, _pfx + "."):
+            return _PREFIX_MAP_TC[_pfx] + ("." if token.endswith(".") else "")
         # Rule 2b: Known degrees → fixed form with trailing dot
         if lower in _DEGREE_MAP:
             return _DEGREE_MAP[lower] + "."
@@ -644,8 +669,9 @@ def _title_case(text: str) -> str:
     # Split preserving whitespace and comma delimiters
     parts = re.split(r"(\s+|,)", text)
     result = "".join(_process_token(p) if not re.match(r"^(\s+|,)$", p) else p for p in parts)
-    # Normalise standalone prefix before a name: "Mr Arun" / "Dr. Priya" → "Mr.Arun" / "Dr.Priya"
-    result = re.sub(r'(?<!\w)(Mr|Mrs|Ms|Miss|Master|Dr|Prof)\.?\s+(?=[A-Za-z])', r'\1.', result)
+    # Normalise standalone prefix before a name: "Mr Arun" / "Dr. Priya" → "Mr. Arun" / "Dr. Priya"
+    # (keep the conventional space after the prefix dot, e.g. "Mrs. Sasikala").
+    result = re.sub(r'(?<!\w)(Mr|Mrs|Ms|Miss|Master|Dr|Prof)\.?\s+(?=[A-Za-z])', r'\1. ', result)
     result = re.sub(r'(?<!\w)(Mr|Mrs|Ms|Miss|Master|Dr|Prof)\.?\s+(?=\d)', r'\1. ', result)
     return result
 
@@ -678,12 +704,18 @@ def _get_nabl_seal_bytes() -> bytes:
 class _HFCanvas:
     """Draws header image (or text) and footer image on every page."""
 
-    def __init__(self, case: dict, title: str, banner_h: float, footer_h: float, total_pages: int = 1):
-        self.case        = case
-        self.title       = title
-        self.banner_h    = banner_h
-        self.footer_h    = footer_h
-        self.total_pages = total_pages
+    def __init__(self, case: dict, title: str, banner_h: float, footer_h: float, total_pages: int = 1,
+                 repeat_info: bool = False, repeat_top_offset: float = 0):
+        self.case              = case
+        self.title             = title
+        self.banner_h          = banner_h
+        self.footer_h          = footer_h
+        self.total_pages       = total_pages
+        # When repeat_info is True the patient demography table is redrawn on
+        # every page (SAB reports); repeat_top_offset is the distance from the
+        # page top to the table's top edge.
+        self.repeat_info       = repeat_info
+        self.repeat_top_offset = repeat_top_offset
 
     def __call__(self, canvas, doc):
         canvas.saveState()
@@ -726,6 +758,13 @@ class _HFCanvas:
             _page_num_y,
             f"Page {doc.page} of {self.total_pages}"
         )
+
+        # ── Repeating patient demography table (SAB) ─────────────────────────
+        if self.repeat_info:
+            info_t = _sab_info_table(self.case)
+            _w, _h = info_t.wrapOn(canvas, CONTENT_W, PAGE_H)
+            info_t.drawOn(canvas, MARGIN_L,
+                          PAGE_H - self.repeat_top_offset - _h)
 
         canvas.restoreState()
 
@@ -2732,13 +2771,13 @@ def _build_luminex_report(case: dict, S: dict) -> list:
 
 # ─── SAB (Single Antigen Bead) Assay report builder ───────────────────────────
 
-def _build_sab_report(case: dict, S: dict) -> list:
-    """Return story flowables for SAB Class I (or II) report."""
-    patient   = case.get("patient", {})
-    alleles   = case.get("sab_alleles", [])   # [(allele_str, mfi_int), ...] sorted desc
-    chart_b   = case.get("sab_chart_bytes")
-    sab_class = case.get("sab_class", "I")
+def _sab_info_table(case: dict) -> Table:
+    """Patient demography table for SAB reports.
 
+    Drawn once per page by _HFCanvas (repeat_info=True) so it appears at the
+    top of every page, matching the reference report layout.
+    """
+    patient = case.get("patient", {})
     F_BOLD = _f("SegoeUI-Bold", "Helvetica-Bold")
     F_REG  = _f("SegoeUI",      "Helvetica")
 
@@ -2755,11 +2794,7 @@ def _build_sab_report(case: dict, S: dict) -> list:
     def _E():     return Paragraph("",
                     ParagraphStyle("_sie", fontName=F_REG,  fontSize=10, textColor=BLACK, leading=12))
 
-    elems = []
-
-    # â"€â"€ Info table â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     cw = CONTENT_W
-    # col: [lbl_L, colon_L, val_L, GAP, lbl_R, colon_R, val_R]  sum=1.000
     info_col_w = [cw*0.167, cw*0.016, cw*0.340, cw*0.020, cw*0.225, cw*0.016, cw*0.216]
     info_rows = [
         [_IL("Patient name"),    _IC(), _IV(patient.get("name","")),
@@ -2785,8 +2820,38 @@ def _build_sab_report(case: dict, S: dict) -> list:
         ("LEFTPADDING",   (3,0), (3,-1), 0), ("RIGHTPADDING", (3,0), (3,-1), 0),
         ("LEFTPADDING",   (5,0), (5,-1), 0), ("RIGHTPADDING", (5,0), (5,-1), 2),
     ]))
-    elems.append(info_t)
-    elems.append(Spacer(1, 5*mm))
+    return info_t
+
+
+def _build_sab_report(case: dict, S: dict) -> list:
+    """Return story flowables for SAB Class I (or II) report."""
+    patient   = case.get("patient", {})
+    alleles   = case.get("sab_alleles", [])   # [(allele_str, mfi_int), ...] sorted desc
+    chart_b   = case.get("sab_chart_bytes")
+    sab_class = case.get("sab_class", "I")
+
+    # The "% PRA" sentence in Remarks/Comments is auto-filled from a separate
+    # control, so it can carry a stale class token (e.g. "Class II") into a
+    # Class I report. Force the class to match this report so the two never
+    # disagree, regardless of how the case was entered (manual/bulk/draft/Excel).
+    _pra_class_re = re.compile(r"(The SAB % PRA Class )(?:I{1,2})( is\b)", re.IGNORECASE)
+    def _fix_pra_class(text):
+        if not text:
+            return text
+        return _pra_class_re.sub(lambda m: f"{m.group(1)}{sab_class}{m.group(2)}", text)
+
+    F_BOLD = _f("SegoeUI-Bold", "Helvetica-Bold")
+    F_REG  = _f("SegoeUI",      "Helvetica")
+
+    def _raw(v):  return _clean_display(v) or "NA"
+    def _norm(v): return _title_case(_clean_display(v)) or "NA"
+
+    elems = []
+    cw = CONTENT_W
+
+    # Patient demography table is drawn on every page by _HFCanvas
+    # (repeat_info=True); the top margin reserves space for it, so the story
+    # starts directly with the "Test Report" title.
 
     # â"€â"€ "Test Report" title + bordered test name box â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     _title_s = ParagraphStyle("_sab_ttl", fontName=F_BOLD, fontSize=14,
@@ -2835,7 +2900,7 @@ def _build_sab_report(case: dict, S: dict) -> list:
         elems.append(Paragraph(f"{i}. {c}", _bull_s))
 
     # â"€â"€ Remarks â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-    _rmk = _clean_display(patient.get("remarks", ""))
+    _rmk = _fix_pra_class(_clean_display(patient.get("remarks", "")))
     if _rmk and _rmk != "—":
         elems.append(Spacer(1, 4*mm))
         _rmk_s = ParagraphStyle("_sab_rmk", fontName=F_BOLD, fontSize=10, leading=14)
@@ -2860,25 +2925,26 @@ def _build_sab_report(case: dict, S: dict) -> list:
     elems.append(Paragraph(f"Class {sab_class} Single Antigen Bead (SAB) Result", _cls_hdr_s))
     elems.append(Spacer(1, 3*mm))
 
-    def _allele_table(rows_data, high=False):
+    def _allele_table(rows_data):
         _acw = [cw * 0.55, cw * 0.45]
         tdata = [[Paragraph("<b>Allele Specificity</b>", _th_s),
                   Paragraph("<b>MFI</b>", _th_s)]]
         for allele, mfi in rows_data:
             tdata.append([Paragraph(str(allele), _td_s), Paragraph(str(mfi), _td_s)])
-        t = Table(tdata, colWidths=_acw, repeatRows=1)
+        t = _BorderedTable(tdata, colWidths=_acw, repeatRows=1)
         style_cmds = [
             ("BACKGROUND",    (0,0), (-1, 0), C_SAB_TBL_HDR),
             ("BACKGROUND",    (0,1), (-1,-1), colors.white),
-            ("INNERGRID",     (0,0), (-1,-1), 0.5, colors.HexColor("#A0A0A0")),
-            ("BOX",           (0,0), (-1,-1), 0.5, colors.HexColor("#A0A0A0")),
+            # No per-row horizontal lines — keep only the column divider and the
+            # header underline inside the table. The outer border is stroked by
+            # _BorderedTable so it stays closed on every page, even when the
+            # table spills across a page break.
+            ("LINEAFTER",     (0,0), (0,-1), 0.5, colors.HexColor("#A0A0A0")),
+            ("LINEBELOW",     (0,0), (-1,0), 0.5, colors.HexColor("#A0A0A0")),
             ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
             ("TOPPADDING",    (0,0), (-1,-1), 4),
             ("BOTTOMPADDING", (0,0), (-1,-1), 4),
         ]
-        if high:
-            for i in range(1, len(tdata)):
-                style_cmds.append(("BACKGROUND", (0, i), (-1, i), C_SAB_HIGH_ROW))
         t.setStyle(TableStyle(style_cmds))
         return t
 
@@ -2886,7 +2952,7 @@ def _build_sab_report(case: dict, S: dict) -> list:
         f"Antibodies detected against HLA Class {sab_class} antigens tested with MFI &gt;1000",
         _sub_s))
     if high_alleles:
-        elems.append(_allele_table(high_alleles, high=True))
+        elems.append(_allele_table(high_alleles))
     else:
         elems.append(Paragraph("No antibodies detected with MFI â‰¥ 1000.", _td_s))
     elems.append(Spacer(1, 6*mm))
@@ -2895,7 +2961,7 @@ def _build_sab_report(case: dict, S: dict) -> list:
         f"Antibodies detected against HLA Class {sab_class} antigens tested with MFI &lt;1000",
         _sub_s))
     if low_alleles:
-        elems.append(_allele_table(low_alleles, high=False))
+        elems.append(_allele_table(low_alleles))
     else:
         elems.append(Paragraph("No antibodies detected with MFI < 1000.", _td_s))
 
@@ -2904,17 +2970,24 @@ def _build_sab_report(case: dict, S: dict) -> list:
         elems.append(PageBreak())
         _ct_s = ParagraphStyle("_sab_ct", fontName=F_BOLD, fontSize=12,
                                 textColor=BLACK, alignment=TA_CENTER, leading=16)
-        elems.append(Paragraph("Bead Specificity Chart", _ct_s))
-        elems.append(Spacer(1, 3*mm))
         try:
             img = Image(io.BytesIO(chart_b))
-            iw, ih = img.imageWidth, img.imageHeight
-            scale  = min(CONTENT_W / iw, 180*mm / ih, 1.0)
-            img.drawWidth  = iw * scale
-            img.drawHeight = ih * scale
+            # Stretch the chart to span exactly the demography table width
+            # (CONTENT_W) and fill the available page height below it. Width is
+            # forced to match the demography; height is fitted to the page, so a
+            # tall (rotated) chart is compressed vertically to fit — per request.
+            _spacer_h = 3 * mm
+            _title_h  = _ct_s.leading + 2
+            _block_h  = case.get("_sab_chart_max_h") or 180 * mm
+            _img_h    = max(60.0, _block_h - _title_h - _spacer_h)
+            img.drawWidth  = CONTENT_W
+            img.drawHeight = _img_h
+            img.hAlign = "LEFT"   # align with the demography table's left edge
+            elems.append(Paragraph("Bead Specificity Chart", _ct_s))
+            elems.append(Spacer(1, _spacer_h))
             elems.append(img)
         except Exception:
-            pass
+            elems.append(Paragraph("Bead Specificity Chart", _ct_s))
 
     # â"€â"€ Last page: comments box + limitations + signatures â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     elems.append(PageBreak())
@@ -2922,10 +2995,14 @@ def _build_sab_report(case: dict, S: dict) -> list:
     _cb_lbl_s  = ParagraphStyle("_sab_cbl", fontName=F_BOLD, fontSize=10, leading=14)
     _cb_val_s  = ParagraphStyle("_sab_cbv", fontName=F_REG,  fontSize=10, leading=14, spaceBefore=3)
     _cb_note_s = ParagraphStyle("_sab_cbn", fontName=F_BOLD, fontSize=10, leading=14, spaceBefore=3)
-    _rmk_display = _clean_display(patient.get("remarks", ""))
+    # Comments box: prefer the editable "comments" field, fall back to "remarks"
+    # (keeps older cases/drafts that only set remarks rendering unchanged).
+    _cmt_display = _fix_pra_class(
+        _clean_display(patient.get("comments", ""))
+        or _clean_display(patient.get("remarks", "")))
     _cmt_rows = [
         [Paragraph("<b>Comments:</b>", _cb_lbl_s)],
-        [Paragraph(_rmk_display or "", _cb_val_s)],
+        [Paragraph(_cmt_display or "", _cb_val_s)],
         [Paragraph(f"<b>Note:</b> {SAB_NOTE}", _cb_note_s)],
     ]
     _cmt_t = Table(_cmt_rows, colWidths=[cw * 0.90])
@@ -2963,7 +3040,7 @@ def _build_sab_report(case: dict, S: dict) -> list:
 def _build_pra_report(case: dict, S: dict) -> list:
     """Return story flowables for a Panel Reactive Antibodies (PRA) Quantitative report."""
     patient = case.get("patient", {})
-    cls     = case.get("pra_class", "I")
+    cls     = case.get("pra_class") or ("II" if case.get("report_type") == "pra_class2" else "I")
     _pct    = str(case.get("pra_percentage", "") or "").strip()
     pct     = (_pct if _pct.endswith("%") else _pct + "%") if _pct else ""
     # Use the entered result if present; otherwise auto-classify from the percentage.
@@ -2990,7 +3067,10 @@ def _build_pra_report(case: dict, S: dict) -> list:
     elems = []
 
     # ── Info table (5-row, 7-col) ──────────────────────────────────────────────
-    info_col_w = [cw*0.150, cw*0.016, cw*0.300, cw*0.020, cw*0.232, cw*0.016, cw*0.266]
+    # Patient value column (idx 2) is widened so a long Hospital/Clinic name fits
+    # on one line; the slack comes from the right value column (idx 6), whose
+    # entries (PIN, dates) are short — this shifts the right block rightward.
+    info_col_w = [cw*0.150, cw*0.016, cw*0.380, cw*0.020, cw*0.232, cw*0.016, cw*0.186]
     info_rows = [
         [_IL("Patient name"),    _IC(), _IV(patient.get("name","")),
          _E(), _IL("PIN"),                    _IC(), _IR(patient.get("pin",""))],
@@ -3562,6 +3642,7 @@ def generate_pdf(case: dict, output_path: str) -> str:
         "luminex_typing":   "",
         "kir_genotyping":   "KIR Genotyping",
         "pra_class1":       "Panel Reactive Antibodies (PRA) Class I Quantitative",
+        "pra_class2":       "Panel Reactive Antibodies (PRA) Class II Quantitative",
     }
     title = TITLES.get(report_type, "HLA Typing Report")
 
@@ -3587,6 +3668,15 @@ def generate_pdf(case: dict, output_path: str) -> str:
     # clearance so "HLA Typing" sits closer to the header.
     _top_gap      = 1.5 * mm if report_type == "luminex_typing" else 4 * mm
     top_margin    = MARGIN_T + banner_h + _top_gap
+
+    # SAB reports repeat the patient demography table on every page (drawn by
+    # _HFCanvas). Reserve top-margin space for it: table height + a gap below.
+    _is_sab = report_type in ("sab_class1", "sab_class2")
+    _sab_info_offset = 0
+    if _is_sab:
+        _sab_info_h = _sab_info_table(case).wrap(CONTENT_W, PAGE_H)[1]
+        _sab_info_offset = top_margin          # table top edge from page top
+        top_margin += _sab_info_h + 5 * mm     # push content below the table
     _PAGE_NUM_AREA = 4 * mm
     # CDC/DSA result tables sit at the very bottom of page 1; add extra clearance so
     # the last table row doesn't land inside the ITdose QR overlay zone.
@@ -3594,6 +3684,12 @@ def generate_pdf(case: dict, output_path: str) -> str:
     _cdc_dsa_extra = 6 * mm if report_type in ("cdc_crossmatch", "dsa_crossmatch") else 0
     # QR_ZONE: blank strip above footer+page-number reserved for external QR-code overlay
     bottom_margin = MARGIN_B + footer_h + _PAGE_NUM_AREA + 2 * mm + QR_ZONE + _cdc_dsa_extra
+
+    # Tell the SAB builder how tall the chart block (title + chart) may be on a
+    # content page. Kept conservatively below the true frame so the chart page
+    # never overflows; the builder shrinks the chart to fit this if needed.
+    if _is_sab:
+        case["_sab_chart_max_h"] = (PAGE_H - top_margin - bottom_margin) - 15 * mm
 
     doc = SimpleDocTemplate(
         output_path,
@@ -3622,7 +3718,7 @@ def generate_pdf(case: dict, output_path: str) -> str:
         body = _build_luminex_report(case, S)
     elif report_type == "kir_genotyping":
         body = _build_kir_report(case, S)
-    elif report_type == "pra_class1":
+    elif report_type in ("pra_class1", "pra_class2"):
         body = _build_pra_report(case, S)
     else:
         body = _build_ngs_single(case, S)
@@ -3638,7 +3734,8 @@ def generate_pdf(case: dict, output_path: str) -> str:
     # Fix 4: use the numbered-canvas approach for accurate page counting.
     # total_pages starts at 1 (dummy); _NumberedCanvas updates it in save() before
     # drawing header/footer, so every page shows the real "Page X of N".
-    cb = _HFCanvas(case, title, banner_h, footer_h, total_pages=1)
+    cb = _HFCanvas(case, title, banner_h, footer_h, total_pages=1,
+                   repeat_info=_is_sab, repeat_top_offset=_sab_info_offset)
     numbered_canvas_class = _make_numbered_canvas_class(cb)
     doc.build(story, canvasmaker=numbered_canvas_class)
     return output_path
@@ -3649,6 +3746,31 @@ def generate_pdf(case: dict, output_path: str) -> str:
 def make_filename(case: dict) -> str:
     def safe(s):
         return re.sub(r"[^\w.\-]", "_", str(s).strip()).strip("_") or "Unknown"
+
+    def safe_readable(s):
+        # Keep a human-readable name (spaces, dots) and only strip characters
+        # that are illegal in Windows/macOS filenames.
+        s = re.sub(r'[\\/:*?"<>|\r\n\t]+', " ", str(s))
+        return re.sub(r"\s+", " ", s).strip(" .") or "Unknown"
+
+    report_type = case.get("report_type", "")
+
+    # SAB reports use a spaced, human-readable convention:
+    #   "<Name>_SAB _Class <I|II>_<WITH|WITHOUT> LOGO.pdf"
+    if report_type in ("sab_class1", "sab_class2"):
+        name = safe_readable(case["patient"].get("name", ""))
+        cls  = case.get("sab_class") or ("II" if report_type == "sab_class2" else "I")
+        logo = "WITH LOGO" if case.get("with_logo", True) else "WITHOUT LOGO"
+        return f"{name}_SAB _Class {cls}_{logo}.pdf"
+
+    # PRA reports use a spaced, human-readable convention:
+    #   "<Name>_PRA_Class <I|II>_<WITH|WITHOUT> LOGO.pdf"
+    if report_type in ("pra_class1", "pra_class2"):
+        name = safe_readable(case["patient"].get("name", ""))
+        cls  = case.get("pra_class") or ("II" if report_type == "pra_class2" else "I")
+        logo = "WITH LOGO" if case.get("with_logo", True) else "WITHOUT LOGO"
+        return f"{name}_PRA_Class {cls}_{logo}.pdf"
+
     p = safe(case["patient"].get("name", ""))
     donors = "_".join(
         safe(d.get("name", ""))
@@ -3659,7 +3781,8 @@ def make_filename(case: dict) -> str:
              "rpl_couple": "RPL", "cdc_crossmatch": "CDC",
              "dsa_crossmatch": "DSA", "sab_class1": "SAB_C1", "sab_class2": "SAB_C2",
              "flow_crossmatch": "FLOW", "luminex_typing": "HLA_LUMINEX",
-             "kir_genotyping": "KIR", "pra_class1": "PRA_C1"}.get(case.get("report_type", ""), "HLA")
+             "kir_genotyping": "KIR", "pra_class1": "PRA_C1",
+             "pra_class2": "PRA_C2"}.get(report_type, "HLA")
     logo  = "WITH_LOGO" if case.get("with_logo", True) else "WITHOUT_LOGO"
     parts = [p] + ([donors] if donors else []) + [rtype, logo]
     return "_".join(parts) + ".pdf"
