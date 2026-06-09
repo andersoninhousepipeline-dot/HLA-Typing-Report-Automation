@@ -1211,12 +1211,35 @@ def parse_pra_excel(filepath: str, nabl: bool = True) -> list:
     c_coll   = _ci("sample collection date", "date of collection", "collection date")
     c_recv   = _ci("sample receipt date", "receipt date")
     c_rep    = _ci("report date")
+    c_pct    = _ci("percentage", "pra percentage", "pra %", "% pra", "pra")
 
     def _rv(row, c):
         return _clean_str(row.iloc[c]) if c is not None and c < len(row) else ""
 
     def _rd(row, c):
         return _fmt_date(row.iloc[c]) if c is not None and c < len(row) else ""
+
+    def _rpct(row, c):
+        """Read the PRA % cell as a 0-100 figure.
+
+        Cells formatted as a percentage in Excel store a fraction (0.14 == 14%),
+        so any value in (0, 1] is scaled up by 100; whole numbers pass through.
+        """
+        if c is None or c >= len(row):
+            return ""
+        raw = row.iloc[c]
+        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+            return ""
+        s = _clean_str(raw).replace("%", "").strip()
+        if not s:
+            return ""
+        try:
+            v = float(s)
+        except ValueError:
+            return s
+        if 0 < v <= 1:
+            v *= 100
+        return str(int(round(v))) if abs(v - round(v)) < 1e-9 else f"{v:g}"
 
     cases = []
     for i in range(header_row + 1, len(df)):
@@ -1258,8 +1281,106 @@ def parse_pra_excel(filepath: str, nabl: bool = True) -> list:
             "donors":          [],
             "rpl_reference":   {},
             "pra_class":       cls,
-            "pra_percentage":  "",
+            "pra_percentage":  _rpct(row, c_pct),
             "pra_result":      "",
+        })
+    return cases
+
+
+def parse_kir_excel(filepath: str, nabl: bool = True) -> list:
+    """Parse a KIR Genotyping demographics workbook into cases.
+
+    Like the PRA template, the KIR workbook ships a single sheet of patient
+    demographics (one patient per row) with no result columns — the gene
+    presence/absence, genotype and interpretation are filled in later in the
+    editor.  The sheet and its header row are located by *content* (the first
+    row containing a cell that starts with 'patient'), and columns are mapped by
+    header text, so the parser tolerates layout shifts.
+
+    Each data row becomes a KIR Genotyping case with empty gene results
+    (defaulting to absent / genotype AA until reviewed).
+    """
+    # Locate the sheet + header row holding a "patient" label.
+    df = header_row = None
+    for sh in pd.ExcelFile(filepath).sheet_names:
+        try:
+            cand = pd.read_excel(filepath, sheet_name=sh, header=None)
+        except Exception:
+            continue
+        for i, row in cand.iterrows():
+            if any(isinstance(v, str) and v.strip().lower().startswith("patient")
+                   for v in row):
+                df, header_row = cand, i
+                break
+        if header_row is not None:
+            break
+    if df is None or header_row is None:
+        return []
+
+    # Map normalized header text → column index.
+    col = {}
+    for c, v in enumerate(df.iloc[header_row]):
+        if isinstance(v, str):
+            col[_norm_col(v)] = c
+
+    def _ci(*names):
+        for n in names:
+            if n in col:
+                return col[n]
+        return None
+
+    c_name   = _ci("patient", "patient name")
+    c_ga     = _ci("gender / age", "gender/age", "gender age")
+    c_mr     = _ci("hospital mr no", "hospital mr no.", "mr no")
+    c_spec   = _ci("specimen", "sample type")
+    c_hosp   = _ci("hospital/clinic", "hospital / clinic")
+    c_pin    = _ci("pin")
+    c_sample = _ci("sample number")
+    c_coll   = _ci("sample collection date", "date of collection", "collection date")
+    c_recv   = _ci("sample receipt date", "receipt date")
+    c_rep    = _ci("report date")
+
+    def _rv(row, c):
+        return _clean_str(row.iloc[c]) if c is not None and c < len(row) else ""
+
+    def _rd(row, c):
+        return _fmt_date(row.iloc[c]) if c is not None and c < len(row) else ""
+
+    cases = []
+    for i in range(header_row + 1, len(df)):
+        row  = df.iloc[i]
+        name = _sentence_case(_rv(row, c_name))
+        if not name:
+            continue
+        patient = {
+            "name":            name,
+            "gender_age":      _rv(row, c_ga),
+            "hospital_mr_no":  _rv(row, c_mr) or "NA",
+            "specimen":        _rv(row, c_spec) or "Blood EDTA",
+            "hospital_clinic": _sentence_case(_rv(row, c_hosp)),
+            "pin":             _rv(row, c_pin),
+            "sample_number":   _rv(row, c_sample),
+            "collection_date": _rd(row, c_coll),
+            "receipt_date":    _rd(row, c_recv),
+            "report_date":     _rd(row, c_rep),
+            "hla": {}, "hla_c_type": "",
+            "_join_key": _rv(row, c_pin),
+            "_has_insufficient_hla": False,
+        }
+        cases.append({
+            "report_type":     "kir_genotyping",
+            "nabl":            nabl,
+            "with_logo":       True,
+            "signature_stamp": False,
+            "methodology":     "", "imgt_release": "",
+            "coverage":        "", "typing_status": "Complete",
+            "reviewer":        "",
+            "patient":         patient,
+            "donors":          [],
+            "rpl_reference":   {},
+            "kir_genes":             {},
+            "kir_genotype_override": "Auto",
+            "kir_interpretation":    "",
         })
     return cases
 
@@ -1293,6 +1414,8 @@ def parse_excel(filepath: str, nabl: bool = True) -> list:
         # DSA must win over Flow when both keywords appear in the name.
         if "LUMINEX" in fname_upper:
             return parse_luminex_excel(filepath, nabl)
+        if "KIR" in fname_upper:
+            return parse_kir_excel(filepath, nabl)
         if "PRA" in fname_upper:
             return parse_pra_excel(filepath, nabl)
         if "DSA" in fname_upper:

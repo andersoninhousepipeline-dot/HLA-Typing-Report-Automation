@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import copy
+import base64
 import subprocess
 import platform
 import datetime
@@ -102,6 +103,11 @@ REPORT_TEMPLATES = [
         "default_path": os.path.join(_TEMPLATE_DIR, "Dummy_NGS High Resolution 28.10.2025.pdf"),
     },
     {
+        "name":         "HLA (NGS with Photo)",
+        "report_type":  "ngs_photo",
+        "default_path": os.path.join(_TEMPLATE_DIR, "Dummy_NGS High Resolution 28.10.2025.pdf"),
+    },
+    {
         "name":         "CDC",
         "report_type":  "cdc_crossmatch",
         "default_path": os.path.join(_TEMPLATE_DIR, ""),
@@ -159,6 +165,7 @@ DEFAULT_SIG_COUNTS = {
     "single_hla":       3,
     "rpl_couple":       2,
     "transplant_donor": 2,
+    "ngs_photo":        2,
     "cdc_crossmatch":   2,
     "dsa_crossmatch":   2,
     "sab_class1":       2,
@@ -600,6 +607,22 @@ class HLAReportGeneratorApp(QMainWindow):
                 w.textChanged.connect(self._auto_detect_manual_template)
             w.textChanged.connect(self._on_manual_field_debounced)
 
+        # Patient photo upload — only shown for the "HLA (NGS with Photo)" template.
+        self._std_pat_photo_bytes = None
+        _pp_row = QWidget()
+        _pp_lay = QHBoxLayout(_pp_row)
+        _pp_lay.setContentsMargins(0, 0, 0, 0); _pp_lay.setSpacing(4)
+        _pp_lay.addWidget(QLabel("Patient Photo:"))
+        self._std_pat_photo_btn = QPushButton("Upload…")
+        self._std_pat_photo_btn.setMaximumHeight(24)
+        self._std_pat_photo_lbl = QLabel("No photo")
+        self._std_pat_photo_btn.clicked.connect(lambda: self._upload_std_photo("patient"))
+        _pp_lay.addWidget(self._std_pat_photo_btn)
+        _pp_lay.addWidget(self._std_pat_photo_lbl, 1)
+        self._std_pat_photo_row = _pp_row
+        pat_form.addRow(_pp_row)
+        _pp_row.setVisible(False)
+
         self._manual_nabl_chk = QCheckBox("NABL Accreditation")
         self._manual_nabl_chk.setChecked(self.qsettings.value("nabl_stamp", True, type=bool))
         self._manual_nabl_chk.stateChanged.connect(self._on_manual_field_debounced)
@@ -951,6 +974,15 @@ class HLAReportGeneratorApp(QMainWindow):
                                "to auto-fill patient details, alleles and the chart.")
         _sab_xl_btn.clicked.connect(self._load_sab_excel)
         _spf.addRow(_sab_xl_btn)
+        # Results-only import: the workbook holds just the allele table and chart
+        # (no patient-details sheet); the demography fields are filled in by hand.
+        _sab_xl_man_btn = QPushButton("📥  SAB Excel (Manual)")
+        _sab_xl_man_btn.setMaximumHeight(28)
+        _sab_xl_man_btn.setToolTip("Load a SAB Excel workbook that contains only the "
+                                   "allele table and chart (no patient sheet); fill the "
+                                   "demography fields below in manually.")
+        _sab_xl_man_btn.clicked.connect(self._load_sab_excel_manual)
+        _spf.addRow(_sab_xl_man_btn)
         _SAB_PAT_FIELDS = [
             ("patient_name",    "Patient Name *",         ""),
             ("gender_age",      "Gender / Age",           ""),
@@ -1806,7 +1838,22 @@ class HLAReportGeneratorApp(QMainWindow):
         }
 
     def _load_sab_excel(self):
-        """Open a single-patient SAB Excel workbook and auto-fill the SAB form."""
+        """Import a SAB workbook and auto-fill the whole form (patient + results)."""
+        self._import_sab_excel(fill_patient=True)
+
+    def _load_sab_excel_manual(self):
+        """Import a results-only SAB workbook (allele table + chart, no patient
+        sheet); the demography fields are filled in manually."""
+        self._import_sab_excel(fill_patient=False)
+
+    def _import_sab_excel(self, fill_patient: bool = True):
+        """Open a SAB Excel workbook and fill the SAB form.
+
+        fill_patient=True  → also write the patient demography fields (auto-fill).
+        fill_patient=False → import only the allele table, chart and % PRA; the
+                             demography is typed by hand (for workbooks that carry
+                             no patient-details sheet).
+        """
         path, _ = QFileDialog.getOpenFileName(
             self, "Select SAB Excel Workbook", str(Path.home()),
             "Excel Workbooks (*.xlsx *.xlsm)")
@@ -1819,11 +1866,12 @@ class HLAReportGeneratorApp(QMainWindow):
                                  f"Could not read the SAB Excel file:\n\n{e}")
             return
 
-        # patient fields
+        # patient fields (auto-fill mode only)
         pat = data.get("patient", {})
-        for key, w in getattr(self, "_sab_pat_f", {}).items():
-            if pat.get(key):
-                w.blockSignals(True); w.setText(pat[key]); w.blockSignals(False)
+        if fill_patient:
+            for key, w in getattr(self, "_sab_pat_f", {}).items():
+                if pat.get(key):
+                    w.blockSignals(True); w.setText(pat[key]); w.blockSignals(False)
 
         # SAB class (only override if the workbook clearly states one)
         cls = data.get("sab_class")
@@ -1867,7 +1915,9 @@ class HLAReportGeneratorApp(QMainWindow):
             summary.append("chart image")
         if pct is not None:
             summary.append(f"% PRA {int(round(pct))}%")
-        if not pat:
+        if not fill_patient:
+            summary.append("(fill in the demography manually)")
+        elif not pat:
             summary.append("(no patient-details sheet found)")
         QMessageBox.information(self, "SAB Excel Imported",
                                 "Loaded " + ", ".join(summary) + ".")
@@ -1884,6 +1934,7 @@ class HLAReportGeneratorApp(QMainWindow):
 
         patient = {k: w.text().strip() for k, w in self.f.items()}
         patient["name"] = patient.get("patient_name", "")
+        patient["photo_bytes"] = getattr(self, "_std_pat_photo_bytes", None)
         patient["hla"] = {
             locus: [a[0].text().strip(), a[1].text().strip()]
             for locus, a in self.hla_pat.items()
@@ -1914,6 +1965,7 @@ class HLAReportGeneratorApp(QMainWindow):
                 "hla": donor_hla, "hla_c_type": "", "remarks": d.get("remarks", ""),
                 "hospital_clinic": d.get("hospital_clinic", "") or patient.get("hospital_clinic", ""),
                 "specimen":        patient.get("specimen", "Blood - EDTA"),
+                "photo_bytes":     entry.get("photo_bytes"),
             })
 
         case = self._build_case(rtype, nabl, with_logo, sig_stamp, patient, donors)
@@ -2427,6 +2479,14 @@ class HLAReportGeneratorApp(QMainWindow):
         if not (hasattr(self, "_manual_rpl_group") and hasattr(self, "_manual_rtype_combo")):
             return
         rtype = TEMPLATE_TO_RTYPE.get(self._manual_rtype_combo.currentText(), "single_hla")
+        # Patient/donor photo rows — only for the "HLA (NGS with Photo)" template
+        is_ngs_photo = rtype == "ngs_photo"
+        if hasattr(self, "_std_pat_photo_row"):
+            self._std_pat_photo_row.setVisible(is_ngs_photo)
+        for _entry in getattr(self, "_manual_donors", []):
+            _row = _entry.get("photo_row")
+            if _row is not None:
+                _row.setVisible(is_ngs_photo)
         is_cdc = rtype == "cdc_crossmatch"
         is_dsa = rtype == "dsa_crossmatch"
         # Standard form groups — hidden for CDC, DSA, SAB, and Luminex
@@ -2500,6 +2560,44 @@ class HLAReportGeneratorApp(QMainWindow):
             self._manual_cdc_donor_photo_lbl.setText(fname)
         self._on_manual_field_debounced()
 
+    def _upload_bulk_std_photo(self, person: dict, label):
+        """Upload a patient/donor photo (Bulk tab) for an 'HLA (NGS with Photo)' case.
+        Writes the bytes straight into the case's person dict (self.cases is the
+        backing store) so they round-trip through generation without a flush."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Photo", str(Path.home()),
+            "Images (*.png *.jpg *.jpeg *.bmp *.tiff)")
+        if not path:
+            return
+        with open(path, "rb") as fh:
+            person["photo_bytes"] = fh.read()
+        label.setText(os.path.basename(path))
+        self._on_bulk_field_debounced()
+
+    def _upload_std_photo(self, who: str):
+        """Upload the patient photo for the 'HLA (NGS with Photo)' template."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Patient Photo", str(Path.home()),
+            "Images (*.png *.jpg *.jpeg *.bmp *.tiff)")
+        if not path:
+            return
+        with open(path, "rb") as fh:
+            self._std_pat_photo_bytes = fh.read()
+        self._std_pat_photo_lbl.setText(os.path.basename(path))
+        self._on_manual_field_debounced()
+
+    def _upload_std_donor_photo(self, entry: dict):
+        """Upload a donor photo for the 'HLA (NGS with Photo)' template."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Donor Photo", str(Path.home()),
+            "Images (*.png *.jpg *.jpeg *.bmp *.tiff)")
+        if not path:
+            return
+        with open(path, "rb") as fh:
+            entry["photo_bytes"] = fh.read()
+        entry.get("photo_lbl") and entry["photo_lbl"].setText(os.path.basename(path))
+        self._on_manual_field_debounced()
+
     def _upload_dsa_photo(self, who: str, label):
         """Open file dialog for DSA patient/donor photo upload."""
         path, _ = QFileDialog.getOpenFileName(
@@ -2516,6 +2614,11 @@ class HLAReportGeneratorApp(QMainWindow):
 
     def _auto_detect_manual_template(self):
         """Intelligently update the Template combo based on donor+relationship+diagnosis."""
+        # Respect an explicit "HLA (NGS with Photo)" selection — auto-detect only
+        # chooses between single/transplant/rpl and must not override this template.
+        if hasattr(self, "_manual_rtype_combo") and \
+           TEMPLATE_TO_RTYPE.get(self._manual_rtype_combo.currentText()) == "ngs_photo":
+            return
         has_donors = bool(self._manual_donors)
         diagnosis  = self.f.get("diagnosis", QLineEdit()).text().strip().upper()
 
@@ -2556,6 +2659,10 @@ class HLAReportGeneratorApp(QMainWindow):
         for entry in list(self._manual_donors):
             entry["container"].deleteLater()
         self._manual_donors.clear()
+        # Standard "NGS with Photo" patient photo
+        self._std_pat_photo_bytes = None
+        if hasattr(self, "_std_pat_photo_lbl"):
+            self._std_pat_photo_lbl.setText("No photo")
         # CDC form fields
         for d in (getattr(self, "_cdc_pat_f", {}), getattr(self, "_cdc_don_f", {})):
             for w in d.values():
@@ -2677,6 +2784,17 @@ class HLAReportGeneratorApp(QMainWindow):
             form.addRow(f"  {locus}:", row_w)
             d_hla[locus] = [a1, a2]
 
+        # Donor photo upload — only shown for the "HLA (NGS with Photo)" template.
+        _dp_row = QWidget()
+        _dp_lay = QHBoxLayout(_dp_row)
+        _dp_lay.setContentsMargins(0, 0, 0, 0); _dp_lay.setSpacing(4)
+        _dp_lay.addWidget(QLabel("Donor Photo:"))
+        _dp_btn = QPushButton("Upload…"); _dp_btn.setMaximumHeight(24)
+        _dp_lbl = QLabel("No photo")
+        _dp_lay.addWidget(_dp_btn)
+        _dp_lay.addWidget(_dp_lbl, 1)
+        form.addRow(_dp_row)
+
         remove_btn = QPushButton(f"Remove Donor {di + 1}")
         remove_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
         remove_btn.setMaximumHeight(22)
@@ -2684,7 +2802,20 @@ class HLAReportGeneratorApp(QMainWindow):
         c_lay.addWidget(group)
         c_lay.addWidget(remove_btn)
 
-        entry = {"container": container, "fields": d_fields, "hla": d_hla, "group": group}
+        entry = {"container": container, "fields": d_fields, "hla": d_hla, "group": group,
+                 "photo_bytes": None, "photo_row": _dp_row, "photo_lbl": _dp_lbl}
+        # Restore a photo saved in a draft (base64) if present
+        _pb64 = (donor_data or {}).get("photo_b64") if isinstance(donor_data, dict) else None
+        if _pb64:
+            try:
+                entry["photo_bytes"] = base64.b64decode(_pb64)
+                _dp_lbl.setText("Photo loaded")
+            except Exception:
+                pass
+        _dp_btn.clicked.connect(lambda checked, e=entry: self._upload_std_donor_photo(e))
+        _dp_row.setVisible(
+            TEMPLATE_TO_RTYPE.get(self._manual_rtype_combo.currentText(), "single_hla") == "ngs_photo"
+            if hasattr(self, "_manual_rtype_combo") else False)
         self._manual_donors.append(entry)
         remove_btn.clicked.connect(lambda checked, e=entry: self._remove_manual_donor(e))
 
@@ -2847,6 +2978,10 @@ class HLAReportGeneratorApp(QMainWindow):
             name_val = getattr(self, "_lx_pat_f", {}).get("patient_name", QLineEdit()).text().strip()
         elif rtype == "kir_genotyping":
             name_val = getattr(self, "_kir_pat_f", {}).get("patient_name", QLineEdit()).text().strip()
+        elif rtype in ("sab_class1", "sab_class2"):
+            name_val = getattr(self, "_sab_pat_f", {}).get("patient_name", QLineEdit()).text().strip()
+        elif rtype in ("pra_class1", "pra_class2"):
+            name_val = getattr(self, "_pra_pat_f", {}).get("patient_name", QLineEdit()).text().strip()
         else:
             name_val = self.f.get("patient_name", QLineEdit()).text().strip()
         safe_name      = _re.sub(r"[^\w\-]", "_", name_val) if name_val else "Unknown"
@@ -2856,11 +2991,14 @@ class HLAReportGeneratorApp(QMainWindow):
 
         saved_donors = []
         for entry in self._manual_donors:
-            saved_donors.append({
+            _d = {
                 "fields": {k: w.text().strip() for k, w in entry["fields"].items()},
                 "hla":    {locus: [a[0].text().strip(), a[1].text().strip()]
                            for locus, a in entry["hla"].items()},
-            })
+            }
+            if entry.get("photo_bytes"):
+                _d["photo_b64"] = base64.b64encode(entry["photo_bytes"]).decode("ascii")
+            saved_donors.append(_d)
         data = {
             "patient_fields": {k: w.text().strip() for k, w in self.f.items()},
             "report_type": rtype,
@@ -2873,6 +3011,8 @@ class HLAReportGeneratorApp(QMainWindow):
             "report_settings": {k: w.text().strip() for k, w in self._manual_report_settings.items()},
             "rpl_reference":   {k: w.text().strip() for k, w in self._manual_rpl_fields.items()},
         }
+        if getattr(self, "_std_pat_photo_bytes", None):
+            data["patient_photo_b64"] = base64.b64encode(self._std_pat_photo_bytes).decode("ascii")
         # Save CDC/DSA/Flow-specific form data so it can be fully restored on load
         if rtype == "cdc_crossmatch" and hasattr(self, "_cdc_pat_f"):
             data["cdc_patient_fields"] = {k: w.text().strip() for k, w in self._cdc_pat_f.items()}
@@ -2977,6 +3117,7 @@ class HLAReportGeneratorApp(QMainWindow):
                             "remarks":         d.get("remarks", ""),
                         },
                         "hla": d.get("hla", {}),
+                        "photo_b64": d.get("photo_b64"),
                     })
                 data = {
                     "patient_fields":    p_fields,
@@ -2994,6 +3135,8 @@ class HLAReportGeneratorApp(QMainWindow):
                     },
                     "rpl_reference": data.get("rpl_reference", {}),
                 }
+                if p.get("photo_b64"):
+                    data["patient_photo_b64"] = p["photo_b64"]
                 # Luminex stores patient/donor in dedicated keys the manual
                 # load branch reads — synthesise them from the bulk case.
                 if data["report_type"] == "luminex_typing":
@@ -3005,6 +3148,18 @@ class HLAReportGeneratorApp(QMainWindow):
                     data["luminex_interpretation"] = _orig_case.get("luminex_interpretation", "")
             for k, v in data.get("patient_fields", {}).items():
                 if k in self.f: self.f[k].setText(v)
+            # Restore patient photo ("HLA (NGS with Photo)" template)
+            self._std_pat_photo_bytes = None
+            if hasattr(self, "_std_pat_photo_lbl"):
+                self._std_pat_photo_lbl.setText("No photo")
+            _ppb64 = data.get("patient_photo_b64")
+            if _ppb64:
+                try:
+                    self._std_pat_photo_bytes = base64.b64decode(_ppb64)
+                    if hasattr(self, "_std_pat_photo_lbl"):
+                        self._std_pat_photo_lbl.setText("Photo loaded")
+                except Exception:
+                    pass
             _tmpl_name = RTYPE_TO_TEMPLATE.get(data.get("report_type", "single_hla"), TEMPLATE_NAMES[0])
             for combo in (self.template_combo,
                           getattr(self, "_manual_rtype_combo", None)):
@@ -3500,7 +3655,7 @@ class HLAReportGeneratorApp(QMainWindow):
     def _populate_bulk_list(self):
         self.bulk_list.clear()
         colors = {"single_hla": "#E8F5E9", "rpl_couple": "#FFF3E0",
-                  "transplant_donor": "#E3F2FD"}
+                  "transplant_donor": "#E3F2FD", "ngs_photo": "#E1F5FE"}
         for i, case in enumerate(self.cases):
             p      = case["patient"]
             donors = case.get("donors", [])
@@ -3627,6 +3782,19 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_nabl_chk.setChecked(_nabl_default)
         self._bulk_nabl_chk.stateChanged.connect(self._on_bulk_field_debounced)
         pat_form.addRow(self._bulk_nabl_chk)
+
+        # Patient photo upload — only for "HLA (NGS with Photo)" cases
+        _bp_row = QWidget()
+        _bp_lay = QHBoxLayout(_bp_row)
+        _bp_lay.setContentsMargins(0, 0, 0, 0); _bp_lay.setSpacing(4)
+        _bp_lay.addWidget(QLabel("Patient Photo:"))
+        _bp_btn = QPushButton("Upload…"); _bp_btn.setMaximumHeight(24)
+        _bp_lbl = QLabel("Photo loaded" if p.get("photo_bytes") else "No photo")
+        _bp_btn.clicked.connect(
+            lambda checked, person=p, lbl=_bp_lbl: self._upload_bulk_std_photo(person, lbl))
+        _bp_lay.addWidget(_bp_btn); _bp_lay.addWidget(_bp_lbl, 1)
+        pat_form.addRow(_bp_row)
+        _bp_row.setVisible(case.get("report_type") == "ngs_photo")
 
         # Report-level fields
         meta_group = QGroupBox("Report Settings")
@@ -3819,6 +3987,19 @@ class HLAReportGeneratorApp(QMainWindow):
                 a2.textChanged.connect(self._on_bulk_field_debounced)
                 d_form.addRow(f"  {locus}:", row_w)
                 d_hla[locus] = [a1, a2]
+
+            # Donor photo upload — only for "HLA (NGS with Photo)" cases
+            _bd_row = QWidget()
+            _bd_lay = QHBoxLayout(_bd_row)
+            _bd_lay.setContentsMargins(0, 0, 0, 0); _bd_lay.setSpacing(4)
+            _bd_lay.addWidget(QLabel("Donor Photo:"))
+            _bd_btn = QPushButton("Upload…"); _bd_btn.setMaximumHeight(24)
+            _bd_lbl = QLabel("Photo loaded" if d.get("photo_bytes") else "No photo")
+            _bd_btn.clicked.connect(
+                lambda checked, person=d, lbl=_bd_lbl: self._upload_bulk_std_photo(person, lbl))
+            _bd_lay.addWidget(_bd_btn); _bd_lay.addWidget(_bd_lbl, 1)
+            d_form.addRow(_bd_row)
+            _bd_row.setVisible(case.get("report_type") == "ngs_photo")
 
             # Remove donor button
             rm_btn = QPushButton(f"Remove Donor {di+1}")
@@ -5185,7 +5366,8 @@ class HLAReportGeneratorApp(QMainWindow):
                     "rpl_reference", "cdc_results", "dsa_results",
                     "flow_results", "sab_alleles", "sab_chart_bytes", "sab_class",
                     "luminex_interpretation", "luminex_pat_photo", "luminex_don_photo",
-                    "pra_percentage", "pra_result", "pra_class"):
+                    "pra_percentage", "pra_result", "pra_class",
+                    "kir_genes", "kir_genotype_override", "kir_interpretation"):
             if case.get(key):
                 c[key] = case[key]
         # Carry photo bytes into the preview case patient/donor dicts
@@ -5242,6 +5424,47 @@ class HLAReportGeneratorApp(QMainWindow):
         else:
             self._sel_all_btn.setText("Select All")
 
+    @staticmethod
+    def _restore_case_photos(case: dict) -> None:
+        """In-place: decode patient/donor ``photo_b64`` (from a draft) back into
+        raw ``photo_bytes`` for the 'HLA (NGS with Photo)' template."""
+        def _conv(person):
+            if isinstance(person, dict) and person.get("photo_b64"):
+                try:
+                    person["photo_bytes"] = base64.b64decode(person["photo_b64"])
+                except Exception:
+                    pass
+        _conv(case.get("patient"))
+        for d in case.get("donors", []) or []:
+            _conv(d)
+
+    @staticmethod
+    def _jsonsafe_draft(case: dict) -> dict:
+        """Return a JSON-serializable copy of a bulk case for draft storage.
+
+        Drops the runtime-only ``signatories`` and converts raw patient/donor
+        ``photo_bytes`` (used by the 'HLA (NGS with Photo)' template) to base64
+        ``photo_b64`` strings without mutating the live case dict.
+        """
+        draft = {k: v for k, v in case.items() if k != "signatories"}
+
+        def _conv(person):
+            pb = person.get("photo_bytes")
+            if isinstance(pb, (bytes, bytearray)):
+                p2 = dict(person)
+                p2.pop("photo_bytes", None)
+                p2["photo_b64"] = base64.b64encode(pb).decode("ascii")
+                return p2
+            return person
+
+        pat = case.get("patient")
+        if isinstance(pat, dict):
+            draft["patient"] = _conv(pat)
+        donors = case.get("donors")
+        if isinstance(donors, list):
+            draft["donors"] = [_conv(d) if isinstance(d, dict) else d for d in donors]
+        return draft
+
     def _save_cases_as_drafts(self, cases: list, stacked_prefix: str) -> tuple:
         """Save each case as an individual file AND as one stacked file.
         Returns (saved_individual, stacked_filename, failed_list).
@@ -5258,7 +5481,7 @@ class HLAReportGeneratorApp(QMainWindow):
             template_label = _re.sub(r"[^\w\-]", "_", RTYPE_TO_TEMPLATE.get(rtype, rtype))
             filename       = f"{safe_name}_{template_label}_draft.json"
             path      = os.path.join(DRAFTS_DIR, filename)
-            draft     = {k: v for k, v in case.items() if k != "signatories"}
+            draft     = self._jsonsafe_draft(case)
             try:
                 with open(path, "w") as fh: json.dump(draft, fh, indent=2, default=str)
                 saved.append(filename)
@@ -5268,7 +5491,7 @@ class HLAReportGeneratorApp(QMainWindow):
         # ── Stacked file (all cases in one list) ──────────────────────────────
         stacked_filename = f"{stacked_prefix}_stacked_{today}.json"
         stacked_path     = os.path.join(DRAFTS_DIR, stacked_filename)
-        all_drafts       = [{k: v for k, v in c.items() if k != "signatories"} for c in cases]
+        all_drafts       = [self._jsonsafe_draft(c) for c in cases]
         try:
             with open(stacked_path, "w") as fh: json.dump(all_drafts, fh, indent=2, default=str)
         except Exception as e:
@@ -5404,6 +5627,8 @@ class HLAReportGeneratorApp(QMainWindow):
         patient.setdefault("hla_c_type", "")
         patient.setdefault("_join_key", patient.get("pin", ""))
         patient.setdefault("_has_insufficient_hla", False)
+        if data.get("patient_photo_b64"):
+            patient["photo_b64"] = data["patient_photo_b64"]
 
         # Build donors list
         if rtype == "cdc_crossmatch" and "cdc_donor_fields" in data:
@@ -5431,6 +5656,8 @@ class HLAReportGeneratorApp(QMainWindow):
                 entry.setdefault("name", "")
                 entry.setdefault("hla", d.get("hla", {}))
                 entry.setdefault("hla_c_type", "")
+                if d.get("photo_b64"):
+                    entry["photo_b64"] = d["photo_b64"]
                 donors.append(entry)
 
         case = {
@@ -5540,6 +5767,7 @@ class HLAReportGeneratorApp(QMainWindow):
                         and ("patient" not in item or item.get("report_type") == "luminex_typing")):
                     item = self._normalize_manual_draft_to_bulk(item)
                 item = self._canonicalize_luminex_draft_case(item)
+                self._restore_case_photos(item)
                 normalized.append(item)
             draft = normalized
             self.cases = _filter_valid_cases(draft)
@@ -5570,7 +5798,7 @@ class HLAReportGeneratorApp(QMainWindow):
         filename       = f"{safe_name}_{template_label}_draft.json"
         path      = os.path.join(DRAFTS_DIR, filename)
 
-        draft = {k: v for k, v in case.items() if k != "signatories"}
+        draft = self._jsonsafe_draft(case)
         try:
             with open(path, "w") as fh: json.dump(draft, fh, indent=2, default=str)
             QMessageBox.information(self, "Draft Saved",
@@ -5820,8 +6048,8 @@ locates the right sheet by its column headers, so sheet names don't have to matc
 
 <h3>Report Types</h3>
 <p>The app supports the templates below. Most are auto-detected on
-<b>Load&nbsp;&amp;&nbsp;Parse&nbsp;Excel</b>; SAB uses its own import button, and KIR is
-entered manually. Any case can also be built from scratch on the <b>Manual Entry</b> tab.</p>
+<b>Load&nbsp;&amp;&nbsp;Parse&nbsp;Excel</b>; SAB uses its own import button. Any case can
+also be built from scratch on the <b>Manual Entry</b> tab.</p>
 <table>
   <tr><th>Template</th><th>How it's created / detected</th><th>Pages</th></tr>
   <tr><td>With CL <i>(Single HLA)</i></td><td>Bulk: HLA typing file with no donor rows</td><td>1–2</td></tr>
@@ -5833,7 +6061,7 @@ entered manually. Any case can also be built from scratch on the <b>Manual Entry
   <tr><td>Flow Crossmatch</td><td>Bulk: file name has <code>FLOW</code>, or demographics mention "Flow Cytometry"</td><td>2</td></tr>
   <tr><td>SAB Class I / II</td><td><b>Import SAB Excel</b> button (single-patient workbook), or Manual Entry</td><td>3+</td></tr>
   <tr><td>PRA Class I / II</td><td>Bulk: file name contains <code>PRA</code> (add <code>II</code> / <code>class 2</code> for Class II), or Manual Entry</td><td>2</td></tr>
-  <tr><td>KIR Genotyping</td><td>Manual Entry only</td><td>1–2</td></tr>
+  <tr><td>KIR Genotyping</td><td>Bulk: file name contains <code>KIR</code> (demographics only), or Manual Entry</td><td>1–2</td></tr>
 </table>
 
 <h3>Antibody &amp; Crossmatch Reports</h3>
@@ -5853,8 +6081,11 @@ entered manually. Any case can also be built from scratch on the <b>Manual Entry
   <li><b>CDC / DSA / Flow</b> — crossmatch templates auto-detected from the file name or
       demographics sheet; results (T/B cell, DTT) are read from the workbook and shown
       in the editor for review.</li>
-  <li><b>KIR Genotyping</b> — built on the Manual Entry tab: pick the KIR template,
-      set gene presence/absence and the genotype interpretation.</li>
+  <li><b>KIR Genotyping</b> — a KIR workbook holds patient demographics (one
+      patient per row, file name contains <code>KIR</code>); on import the patient
+      details are filled and the case defaults to all genes absent. Set the gene
+      presence/absence and genotype interpretation in the editor. Can also be built
+      from scratch on the Manual Entry tab.</li>
 </ul>
 
 <h3>Manual Entry</h3>

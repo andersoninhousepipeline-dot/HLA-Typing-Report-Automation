@@ -700,6 +700,18 @@ def _get_nabl_seal_bytes() -> bytes:
     return _nabl_seal_bytes_cache
 
 
+def _qr_reserve(report_type: str) -> float:
+    """Height of the blank strip kept above the footer for the external QR overlay.
+
+    HLA (NGS with Photo) reports can carry long remarks between the patient and
+    donor locus tables. To keep both tables (and the patient remarks) on one page
+    they are allowed to reclaim half of this strip; the page number and the
+    content-frame bottom both move down with the reduced reservation so nothing
+    overlaps.
+    """
+    return QR_ZONE / 2 if report_type == "ngs_photo" else QR_ZONE
+
+
 # ─── Canvas: header + footer on every page ────────────────────────────────────
 class _HFCanvas:
     """Draws header image (or text) and footer image on every page."""
@@ -750,7 +762,8 @@ class _HFCanvas:
             )
         # Page number near the top of the reserved bottom area (above external
         # overlay content); nudged ~5mm lower for tidier bottom alignment.
-        _page_num_y = MARGIN_B + self.footer_h + QR_ZONE - 3 * mm
+        _page_num_y = MARGIN_B + self.footer_h + _qr_reserve(
+            self.case.get("report_type", "")) - 3 * mm
         canvas.setFont(_f("Calibri", "Helvetica"), 9)
         canvas.setFillColor(BLACK)
         canvas.drawRightString(
@@ -843,6 +856,12 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
         [L("Referred By"), C(), V(person.get("referred_by", ""))],
         [L("Hospital / Clinic"), C(), V(person.get("hospital_clinic", ""))],
     ])
+    # On the patient/NABL table the Referred By and Hospital rows sit below the
+    # seal, so their value cells span across the (freed) logo column for extra
+    # width — letting long text stay on one line at full font, wrapping only when
+    # it still doesn't fit (handled via the SPANs + logo_row_end below).
+    hosp_idx     = len(left_rows) - 1
+    referred_idx = len(left_rows) - 2
 
     if is_donor:
         rel_display = _format_relationship(person.get("relationship", ""), patient_name)
@@ -877,7 +896,9 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
         referred_by_val = _clean_display(person.get("referred_by", ""))
         has_referred = referred_by_val not in ("—", "", "-")
         logo_row_start = 0 if has_referred else 1
-        logo_row_end   = max_r - 2
+        # End the seal span above the Referred By row so both Referred By and
+        # Hospital/Clinic can use the full width of the (freed) logo column.
+        logo_row_end   = max(logo_row_start, referred_idx - 1)
 
         rows = []
         for i, (lr, rr) in enumerate(zip(left_rows, right_rows)):
@@ -899,6 +920,10 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
             ("SPAN",          (3, logo_row_start), (3, logo_row_end)),
             ("ALIGN",         (3, logo_row_start), (3, logo_row_start), "CENTER"),
             ("VALIGN",        (3, logo_row_start), (3, logo_row_start), "MIDDLE"),
+            # Referred By + Hospital/Clinic values extend across the (freed) logo
+            # column on their rows so long text fits on one line beneath the seal.
+            ("SPAN",          (2, referred_idx), (3, referred_idx)),
+            ("SPAN",          (2, hosp_idx), (3, hosp_idx)),
             ("LEFTPADDING",   (3, 0), (3, -1), 0),
             ("RIGHTPADDING",  (3, 0), (3, -1), 0),
             ("TOPPADDING",    (3, 0), (3, -1), 0),
@@ -1463,6 +1488,274 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
     return elems
 
 
+def _build_ngs_photo(case: dict, S: dict) -> list:
+    """
+    ngs_photo — "HLA (NGS with Photo)".
+
+    Same data model as transplant_donor, but page 1 uses a combined side-by-side
+    patient|donor demography table, a patient/donor photo + relation block, and a
+    single combined typing-result table (one section per person). Page 2 carries
+    an auto-generated Interpretation paragraph followed by the same methodology
+    and signature blocks as the transplant report.
+    """
+    patient     = case.get("patient", {})
+    donors      = case.get("donors", [])
+    donor       = donors[0] if donors else {}
+    signatories = case.get("signatories") or hla_assets.get_default_signatories(
+        "transplant_donor", case.get("nabl", True))
+
+    F_BOLD = _f("SegoeUI-Bold", "Helvetica-Bold")
+    F_REG  = _f("SegoeUI",      "Helvetica")
+
+    def _P(text, font=F_BOLD, size=10, color=BLACK, align=TA_LEFT, leading=None):
+        return Paragraph(text, ParagraphStyle("_np", fontName=font, fontSize=size,
+            textColor=color, alignment=align, leading=leading or size + 2))
+
+    def _clean(val):
+        s = str(val).strip() if val else ""
+        return s if s and s.lower() not in ("nan", "none", "") else "NA"
+
+    def _norm(val):
+        return _title_case(_clean_display(val)) or "NA"
+
+    def _raw(val):
+        return _clean_display(val) or "NA"
+
+    elems = []
+
+    # ── Combined demography table (patient | donor) ───────────────────────────
+    info_lbl_style = ParagraphStyle("_np_lbl", fontName=F_BOLD, fontSize=10,
+                                    textColor=BLACK, leading=12)
+    info_val_style = ParagraphStyle("_np_val", fontName=F_BOLD, fontSize=10,
+                                    textColor=BLACK, leading=12)
+
+    def IL(t): return Paragraph(f"<b>{t}</b>", info_lbl_style)
+    def IV(t): return Paragraph(_norm(t), info_val_style)
+    def IR(t): return Paragraph(_raw(t),  info_val_style)
+    def IC():  return Paragraph("<b>:</b>", info_lbl_style)
+    def E():   return Paragraph("", info_lbl_style)
+
+    info_col_w = _demography_col_widths(patient, donor)
+
+    def IV_name(text, col_w_pts):
+        display = _norm(text)
+        avail = col_w_pts - 6
+        fn, fs = info_val_style.fontName, info_val_style.fontSize
+        w = pdfmetrics.stringWidth(display, fn, fs)
+        if w > avail:
+            fit = max(8.0, fs * avail / w)
+            style = ParagraphStyle("_np_val_fit", parent=info_val_style,
+                                   fontSize=fit, leading=fit + 2)
+            return Paragraph(display, style)
+        return Paragraph(display, info_val_style)
+
+    info_rows = [
+        [IL("Patient name"),    IC(), IV_name(patient.get("name", ""), info_col_w[2]), E(), IL("Donor name"),           IC(), IV_name(donor.get("name", ""), info_col_w[6])],
+        [IL("Gender / Age"),    IC(), IR(_normalize_age(patient.get("gender_age", ""))), E(), IL("Gender / Age"),       IC(), IR(_normalize_age(donor.get("gender_age", "")))],
+        [IL("PIN"),             IC(), IR(patient.get("pin", "")),            E(), IL("PIN"),                 IC(), IR(donor.get("pin", "NA"))],
+        [IL("Sample Number"),   IC(), IR(patient.get("sample_number", "")),  E(), IL("Sample Number"),       IC(), IR(donor.get("sample_number", "NA"))],
+        [IL("Specimen"),        IC(), IV(patient.get("specimen") or "Blood - EDTA"), E(), IL("Sample receipt date"), IC(), IR(donor.get("receipt_date", ""))],
+        [IL("Hospital/Clinic"), IC(), _fit_one_line(_norm(patient.get("hospital_clinic", "")), info_col_w[2], info_val_style), E(), IL("Report date"), IC(), IR(donor.get("report_date", ""))],
+    ]
+    info_t = Table(info_rows, colWidths=info_col_w)
+    info_t.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#E8E8E8")),
+        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 2),
+        ("LEFTPADDING",   (1, 0), (1, -1), 0),
+        ("RIGHTPADDING",  (1, 0), (1, -1), 2),
+        ("LEFTPADDING",   (3, 0), (3, -1), 0),
+        ("RIGHTPADDING",  (3, 0), (3, -1), 0),
+        ("LEFTPADDING",   (5, 0), (5, -1), 0),
+        ("RIGHTPADDING",  (5, 0), (5, -1), 2),
+    ]))
+    elems.append(info_t)
+    elems.append(Spacer(1, 1 * mm))
+
+    # ── Photo / relation block (centred, patient | donor) ─────────────────────
+    _ph_w  = 28 * mm
+    _ph_h  = 30 * mm
+    _pc_w  = 54 * mm
+    _lbl_w = 38 * mm
+    col_w_photo = [_lbl_w, _pc_w, _pc_w]
+
+    def _photo_cell(photo_bytes):
+        if photo_bytes:
+            try:
+                return Image(io.BytesIO(photo_bytes), width=_ph_w, height=_ph_h)
+            except Exception:
+                pass
+        return Spacer(1, _ph_h)
+
+    pat_photo   = _photo_cell(patient.get("photo_bytes"))
+    don_photo   = _photo_cell(donor.get("photo_bytes"))
+    rel_display = _norm(donor.get("relationship", "")) if donor else "NA"
+    p_collect   = _clean(patient.get("collection_date", ""))
+    d_collect   = _clean(donor.get("collection_date", ""))
+    _GREY = colors.HexColor("#E8E8E8")
+
+    photo_rows = [
+        [E(),
+         _P(_norm(patient.get("name", "")), F_BOLD, 11, BLACK, TA_CENTER),
+         _P(_norm(donor.get("name", "")),   F_BOLD, 11, BLACK, TA_CENTER)],
+        [E(), pat_photo, don_photo],
+        [_P("Relation:",          F_BOLD, 10, BLACK, TA_LEFT),
+         _P("Patient",            F_REG, 10, BLACK, TA_CENTER),
+         _P(rel_display,          F_REG, 10, BLACK, TA_CENTER)],
+        [_P("Date of Collection:", F_BOLD, 10, BLACK, TA_LEFT),
+         _P(p_collect,            F_REG, 10, BLACK, TA_CENTER),
+         _P(d_collect,            F_REG, 10, BLACK, TA_CENTER)],
+    ]
+    photo_t = Table(photo_rows, colWidths=col_w_photo)
+    photo_t.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), _GREY),
+        ("BOX",           (0, 0), (-1, -1), 1.0, colors.white),
+        ("INNERGRID",     (0, 0), (-1, -1), 1.0, colors.white),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN",         (0, 0), (0, -1),  "LEFT"),
+        ("ALIGN",         (1, 0), (2, -1),  "CENTER"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 6),
+    ]))
+    photo_t.hAlign = "CENTER"
+    elems.append(photo_t)
+    elems.append(Spacer(1, 3 * mm))
+
+    # ── Combined typing-result table ──────────────────────────────────────────
+    elems.append(_P("Typing Result", F_BOLD, 13, C_TITLE, TA_LEFT))
+    elems.append(Spacer(1, 1 * mm))
+
+    LOCI       = ["A", "B", "C", "DRB1", "DQB1", "DPB1"]
+    EXTRA_LOCI = ["DRB3", "DRB4", "DRB5"]
+
+    def _has(h, l): return any(h.get(l, [None, None]))
+    all_hla = [patient.get("hla", {})] + [d.get("hla", {}) for d in donors]
+    loci = [l for l in LOCI if any(_has(h, l) for h in all_hla)]
+    loci += [l for l in EXTRA_LOCI if any(_has(h, l) for h in all_hla)]
+    if not loci:
+        loci = LOCI
+
+    n = len(loci)
+    col_w = [CONTENT_W * 0.13] + [CONTENT_W * 0.87 / n] * n
+
+    def HH(t): return Paragraph(t, S["hla_hdr"])
+    def HV(t): return Paragraph(_clean_display(t), S["hla_val"])
+
+    def _person_table(name_label, person, include_header):
+        h = person.get("hla", {})
+        rows, extra = [], []
+        r = 0
+        if include_header:
+            rows.append([HH("LOCUS")] + [HH(f"HLA-{l}*") for l in loci])
+            extra += [("BACKGROUND", (0, 0), (-1, 0), C_HLA_HDR),
+                      ("TEXTCOLOR",  (0, 0), (-1, 0), BLACK)]
+            r += 1
+        sec_r = r
+        rows.append([_P(name_label, F_BOLD, 10, BLACK, TA_CENTER)] + [""] * len(loci))
+        extra += [("SPAN",       (0, sec_r), (-1, sec_r)),
+                  ("BACKGROUND", (0, sec_r), (-1, sec_r), C_HLA_ROW)]
+        r += 1
+        a_r = r
+        cls_label = Paragraph("HLA-CLASS<br/>I , II", S["hla_lbl"])
+        row1, row2 = [cls_label], [HV("")]
+        for l in loci:
+            al = h.get(l, [None, None])
+            row1.append(HV(_strip_prefix(al[0]) if al and al[0] else "—"))
+            row2.append(HV(_strip_prefix(al[1]) if al and len(al) > 1 and al[1] else "—"))
+        rows.append(row1); rows.append(row2)
+        extra += [("SPAN",       (0, a_r), (0, a_r + 1)),
+                  ("BACKGROUND", (0, a_r), (-1, a_r + 1), C_HLA_ROW),
+                  ("VALIGN",     (0, a_r), (0, a_r + 1), "MIDDLE")]
+        t = Table(rows, colWidths=col_w)
+        t.setStyle(TableStyle([
+            ("GRID",          (0, 0), (-1, -1), 0.5, WHITE),
+            ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ] + extra))
+        return t
+
+    def _remarks_para(person):
+        raw = person.get("remarks", "")
+        disp = _normalize_hla_alleles(_clean_display(raw)) if raw else ""
+        if not disp or disp == "—":
+            return None
+        para = Paragraph(f"<b>Remarks:</b> {disp}",
+                         ParagraphStyle("_np_rmk", parent=S["body_small"],
+                                        fontSize=10, leading=12, wordWrap="CJK",
+                                        alignment=TA_LEFT, spaceBefore=0, spaceAfter=0))
+        # Wrap in a full-width grey cell (matching the locus table's row fill and
+        # white gridlines) so the remarks read as a row inside the table.
+        rmk_t = Table([[para]], colWidths=[CONTENT_W])
+        rmk_t.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), C_HLA_ROW),
+            ("BOX",           (0, 0), (-1, -1), 0.5, WHITE),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 6),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        return rmk_t
+
+    # Keep the patient locus table, the patient remarks, and the donor locus
+    # table(s) together as one unit so a multi-line patient remark can never push
+    # the donor locus onto the next page — both tables always stay on the same
+    # page with the patient remarks between them. Donor remarks are emitted
+    # *after* this unit so they may overflow to the next page on their own without
+    # splitting the two tables.
+    combined = [_person_table(f"{_norm(patient.get('name', ''))} (Patient)", patient, True)]
+    _rp = _remarks_para(patient)
+    if _rp:
+        combined.append(_rp)
+    # Patient remarks (grey cell) and the donor table(s) follow flush — no spacers —
+    # so the patient table, remarks and donor table read as one continuous table.
+    for d in donors:
+        combined.append(_person_table(f"{_norm(d.get('name', ''))} (Donor)", d, False))
+    elems.append(KeepTogether(combined))
+
+    for d in donors:
+        _rd = _remarks_para(d)
+        if _rd:
+            elems.append(_rd)
+
+    # ── Interpretation ────────────────────────────────────────────────────────
+    elems.append(Spacer(1, 3 * mm))
+    interp_block = [_P("Interpretation", F_BOLD, 13, C_TITLE, TA_LEFT),
+                    Spacer(1, 1 * mm)]
+    interp_override = (case.get("ngs_photo_interpretation") or "").strip()
+    if interp_override:
+        interp_block.append(Paragraph(interp_override, S["body"]))
+    else:
+        p_name = _norm(patient.get("name", ""))
+        for d in donors:
+            d_name = _norm(d.get("name", ""))
+            match  = re.sub(r"\s*\(\d+%\)", "", _clean_display(d.get("match", "")).strip()).strip()
+            if match and match != "—":
+                sentence = (f"The HLA typing of {p_name} (Patient) and {d_name} "
+                            f"(Potential donor) shows allele match. The patient had showed "
+                            f"about {match} match at High Resolution with the donor.")
+            else:
+                sentence = (f"The HLA typing of {p_name} (Patient) and {d_name} "
+                            f"(Potential donor) is reported above.")
+            interp_block.append(Paragraph(sentence, S["body"]))
+    # Keep the Interpretation together with the methodology block so it never sits
+    # orphaned at the foot of page 1 while the methodology spills onto page 2 — the
+    # two move to the next page together when they don't both fit below the tables.
+    elems.append(KeepTogether(interp_block + _methodology_block(case, S)))
+
+    sig_items = _signature_block(signatories, S)
+    if sig_items:
+        elems.append(KeepTogether(sig_items))
+
+    return elems
+
+
 def _build_rpl_couple(case: dict, S: dict) -> list:
     """
     rpl_couple — multi-page layout with natural page breaks:
@@ -1719,12 +2012,20 @@ def _kir_calc_genotype(genes: dict) -> str:
     return "AB" if any(genes.get(g, "-") == "+" for g in KIR_B_GENES) else "AA"
 
 
+# The closing disclaimer is constant for every KIR report; only the opening
+# "KIR <genotype> was detected …" line varies with the genotype.
+KIR_INTERP_DISCLAIMER = (
+    "KIR AB or BB genotypes have not been associated with implantation failure or pregnancy "
+    "complications due to an altered maternal immune response."
+)
+
+
+def _kir_interp_first_line(genotype: str) -> str:
+    return f"KIR {genotype} was detected in the sample analysed."
+
+
 def _kir_auto_interp(genotype: str) -> str:
-    return (
-        f"KIR {genotype} was detected in the sample analysed.\n\n"
-        "KIR AB or BB genotypes have not been associated with implantation failure or pregnancy "
-        "complications due to an altered maternal immune response."
-    )
+    return f"{_kir_interp_first_line(genotype)}\n\n{KIR_INTERP_DISCLAIMER}"
 
 SAB_NOTE = (
     "List of allele specificities included in the panel tested are given in the table attached."
@@ -2860,12 +3161,12 @@ def _build_sab_report(case: dict, S: dict) -> list:
     elems.append(Spacer(1, 3*mm))
     _test_name   = f"HLA SINGLE ANTIGEN BEAD ASSAY FOR CLASS {sab_class} IgG ANTIBODIES"
     _box_p_s     = ParagraphStyle("_sab_bn", fontName=F_BOLD, fontSize=10,
-                                   textColor=BLACK, alignment=TA_CENTER, leading=14)
+                                   textColor=BLACK, alignment=TA_CENTER, leading=11)
     _name_box    = Table([[Paragraph(_test_name, _box_p_s)]], colWidths=[cw * 0.88])
     _name_box.setStyle(TableStyle([
         ("BOX",           (0,0), (-1,-1), 0.8, BLACK),
-        ("TOPPADDING",    (0,0), (-1,-1), 5),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+        ("TOPPADDING",    (0,0), (-1,-1), 2),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 2),
         ("LEFTPADDING",   (0,0), (-1,-1), 8),
         ("RIGHTPADDING",  (0,0), (-1,-1), 8),
     ]))
@@ -2875,7 +3176,7 @@ def _build_sab_report(case: dict, S: dict) -> list:
 
     # â"€â"€ Section styles â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     _sec_s  = ParagraphStyle("_sab_sec",  fontName=F_BOLD, fontSize=13,
-                              textColor=C_SAB_HEADING, leading=16, spaceAfter=2)
+                              textColor=C_NGS_TITLE, leading=16, spaceAfter=2)
     _body_s = ParagraphStyle("_sab_bdy",  fontName=F_REG,  fontSize=10,
                               leading=14, alignment=TA_JUSTIFY)
     _bull_s = ParagraphStyle("_sab_bul",  fontName=F_REG,  fontSize=10,
@@ -2972,20 +3273,27 @@ def _build_sab_report(case: dict, S: dict) -> list:
                                 textColor=BLACK, alignment=TA_CENTER, leading=16)
         try:
             img = Image(io.BytesIO(chart_b))
-            # Stretch the chart to span exactly the demography table width
-            # (CONTENT_W) and fill the available page height below it. Width is
-            # forced to match the demography; height is fitted to the page, so a
-            # tall (rotated) chart is compressed vertically to fit — per request.
+            # The source chart is landscape, so a true-aspect fit at full width
+            # comes out short with whitespace below. Width is pinned to the
+            # demography table width (CONTENT_W); height fills the whole available
+            # block so the chart's bottom edge lands ~1 pt above the page number.
             _spacer_h = 3 * mm
             _title_h  = _ct_s.leading + 2
             _block_h  = case.get("_sab_chart_max_h") or 180 * mm
-            _img_h    = max(60.0, _block_h - _title_h - _spacer_h)
+            _avail_h  = max(60.0, _block_h - _title_h - _spacer_h)
+            # Width spans the full demography-table width (CONTENT_W), flush with
+            # both edges of the table above; height fills the remaining frame so
+            # the chart runs down to just above the page number.
             img.drawWidth  = CONTENT_W
-            img.drawHeight = _img_h
+            img.drawHeight = _avail_h
             img.hAlign = "LEFT"   # align with the demography table's left edge
-            elems.append(Paragraph("Bead Specificity Chart", _ct_s))
-            elems.append(Spacer(1, _spacer_h))
-            elems.append(img)
+            # Keep the title with its chart so the heading never orphans onto the
+            # previous page when the image fills (almost) the whole frame.
+            elems.append(KeepTogether([
+                Paragraph("Bead Specificity Chart", _ct_s),
+                Spacer(1, _spacer_h),
+                img,
+            ]))
         except Exception:
             elems.append(Paragraph("Bead Specificity Chart", _ct_s))
 
@@ -3018,7 +3326,7 @@ def _build_sab_report(case: dict, S: dict) -> list:
     elems.append(Spacer(1, 6*mm))
 
     _lim_sec_s = ParagraphStyle("_sab_ls", fontName=F_BOLD, fontSize=13,
-                                 textColor=C_SAB_HEADING, leading=16, spaceAfter=2)
+                                 textColor=C_NGS_TITLE, leading=16, spaceAfter=2)
     _disc_s    = ParagraphStyle("_sab_ds", fontName=F_REG,  fontSize=10, leading=14,
                                  leftIndent=12, firstLineIndent=-10,
                                  alignment=TA_JUSTIFY, spaceBefore=3)
@@ -3049,7 +3357,7 @@ def _build_pra_report(case: dict, S: dict) -> list:
     F_BOLD = _f("SegoeUI-Bold", "Helvetica-Bold")
     F_REG  = _f("SegoeUI",      "Helvetica")
     cw   = CONTENT_W
-    BLUE = colors.HexColor("#1F6FB5")
+    BLUE = C_NGS_TITLE   # shared report blue for section headings
 
     def _raw(v):  return _clean_display(v) or "NA"
     def _norm(v): return _title_case(_clean_display(v)) or "NA"
@@ -3137,7 +3445,8 @@ def _build_pra_report(case: dict, S: dict) -> list:
          Paragraph(pct, _td_s),
          Paragraph(result, _td_s)],
     ]
-    _res_t = Table(_res_data, colWidths=[cw*0.40, cw*0.30, cw*0.30], hAlign="CENTER")
+    # Narrower than full width and centred, to match the reference layout.
+    _res_t = Table(_res_data, colWidths=[cw*0.28, cw*0.21, cw*0.21], hAlign="CENTER")
     _res_t.setStyle(TableStyle([
         ("BACKGROUND",    (0,0), (-1,0), C_HLA_HDR),
         ("BACKGROUND",    (0,1), (-1,-1), C_HLA_ROW),
@@ -3157,7 +3466,7 @@ def _build_pra_report(case: dict, S: dict) -> list:
     _int_t = Table(_int_data, colWidths=[cw*0.46, cw*0.34], hAlign="CENTER")
     _int_t.setStyle(TableStyle([
         ("BACKGROUND",     (0,0), (-1,0), C_HLA_HDR),
-        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, C_HLA_ROW]),
+        ("BACKGROUND",     (0,1), (-1,-1), C_HLA_ROW),
         ("INNERGRID",      (0,0), (-1,-1), 1.0, colors.white),
         ("VALIGN",         (0,0), (-1,-1), "MIDDLE"),
         ("TOPPADDING",     (0,0), (-1,-1), 6), ("BOTTOMPADDING", (0,0), (-1,-1), 6),
@@ -3533,7 +3842,7 @@ def _build_kir_report(case: dict, S: dict) -> list:
 
     # ── Section styles ─────────────────────────────────────────────────────────
     _sec_s  = ParagraphStyle("_kir_sec",  fontName=F_BOLD, fontSize=13,
-                              textColor=C_KIR_HEADING, leading=16, spaceAfter=2)
+                              textColor=C_NGS_TITLE, leading=16, spaceAfter=2)
     _body_s = ParagraphStyle("_kir_bdy",  fontName=F_REG,  fontSize=10,
                               leading=14, alignment=TA_JUSTIFY)
     _note_s = ParagraphStyle("_kir_note", fontName=F_REG,  fontSize=9,
@@ -3579,6 +3888,9 @@ def _build_kir_report(case: dict, S: dict) -> list:
         ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
         ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
         ("TOPPADDING",    (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        # Tight side padding so each 4-char gene name (e.g. "2DL1") fits on one
+        # line within its narrow column instead of wrapping to "2DL" + "1".
+        ("LEFTPADDING",   (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 2),
     ]))
     elems.append(gene_tbl)
     elems.append(Spacer(1, 2*mm))
@@ -3588,13 +3900,20 @@ def _build_kir_report(case: dict, S: dict) -> list:
     # ── Interpretation ─────────────────────────────────────────────────────────
     elems.append(Paragraph("<b>Interpretation of the result</b>", _sec_s))
     elems.append(HRFlowable(width=cw, thickness=0.8, color=colors.grey, spaceAfter=4))
+    # Opening line follows the genotype (or a custom override); the closing
+    # disclaimer is always the same constant, appended once below.
     custom_interp = case.get("kir_interpretation", "").strip()
-    interp_text   = custom_interp if custom_interp else _kir_auto_interp(genotype)
-    for para in interp_text.split("\n\n"):
-        para = para.strip()
-        if para:
-            elems.append(Paragraph(para, _body_s))
-            elems.append(Spacer(1, 3*mm))
+    if custom_interp:
+        # Drop a trailing copy of the disclaimer so it is never duplicated.
+        if custom_interp.endswith(KIR_INTERP_DISCLAIMER):
+            custom_interp = custom_interp[:-len(KIR_INTERP_DISCLAIMER)].strip()
+        interp_paras = [p.strip() for p in custom_interp.split("\n\n") if p.strip()]
+    else:
+        interp_paras = [_kir_interp_first_line(genotype)]
+    interp_paras.append(KIR_INTERP_DISCLAIMER)
+    for para in interp_paras:
+        elems.append(Paragraph(para, _body_s))
+        elems.append(Spacer(1, 3*mm))
 
     # ── Page 2: Test Details + Signatures ──────────────────────────────────────
     elems.append(PageBreak())
@@ -3633,6 +3952,7 @@ def generate_pdf(case: dict, output_path: str) -> str:
     TITLES = {
         "single_hla":       "HLA Typing High Resolution",
         "transplant_donor": "HLA Typing High Resolution",
+        "ngs_photo":        "HLA Typing High Resolution",
         "rpl_couple":       "HLA Typing \u2013 NGS High Resolution Typing",
         "cdc_crossmatch":   "Complement Dependent Cytotoxicity (CDC) Cross match",
         "dsa_crossmatch":   "Donor Specific Antibody Crossmatch",
@@ -3682,14 +4002,32 @@ def generate_pdf(case: dict, output_path: str) -> str:
     # the last table row doesn't land inside the ITdose QR overlay zone.
     # Paired with -6 mm spacer trims inside the builders so the page still fits.
     _cdc_dsa_extra = 6 * mm if report_type in ("cdc_crossmatch", "dsa_crossmatch") else 0
-    # QR_ZONE: blank strip above footer+page-number reserved for external QR-code overlay
-    bottom_margin = MARGIN_B + footer_h + _PAGE_NUM_AREA + 2 * mm + QR_ZONE + _cdc_dsa_extra
+    # QR_ZONE: blank strip above footer+page-number reserved for external QR-code
+    # overlay. NGS-with-Photo reclaims half of it (see _qr_reserve) so long remarks
+    # don't push the donor locus table onto the next page.
+    bottom_margin = (MARGIN_B + footer_h + _PAGE_NUM_AREA + 2 * mm
+                     + _qr_reserve(report_type) + _cdc_dsa_extra)
 
-    # Tell the SAB builder how tall the chart block (title + chart) may be on a
-    # content page. Kept conservatively below the true frame so the chart page
-    # never overflows; the builder shrinks the chart to fit this if needed.
+    # SAB: let the content frame run down to ~1 pt above the "Page X of N" line so
+    # the bead-specificity chart can fill the page vertically. The page number sits
+    # at the top of the reserved bottom strip (see _HFCanvas) and the external QR
+    # overlay sits *below* it, so reclaiming the strip above the page number is safe.
+    _FRAME_PAD = 6   # SimpleDocTemplate's default Frame inset (top & bottom)
     if _is_sab:
-        case["_sab_chart_max_h"] = (PAGE_H - top_margin - bottom_margin) - 15 * mm
+        # Page number's visual top above the page bottom (9 pt font ≈ 9 pt ascent).
+        _pageno_top   = MARGIN_B + footer_h + QR_ZONE - 3 * mm + 9
+        # Flowables stop at bottom_margin + _FRAME_PAD, so set the margin a frame
+        # pad lower than the target (1 pt above the page number) — content then
+        # bottoms out ~1 pt above the "Page X of N" line.
+        bottom_margin = _pageno_top + 1 - _FRAME_PAD
+
+    # Tell the SAB builder how tall the chart block (title + chart) may be on one
+    # page. The builder reserves ~2 pt more for the title than it actually renders,
+    # so pass the frame's usable height (less both 6 pt pads) plus that 2 pt back,
+    # making the rendered title + chart fill the frame exactly and the chart bottom
+    # land ~1 pt above the page number without splitting across pages.
+    if _is_sab:
+        case["_sab_chart_max_h"] = (PAGE_H - top_margin - bottom_margin) - 2 * _FRAME_PAD + 2
 
     doc = SimpleDocTemplate(
         output_path,
@@ -3704,6 +4042,8 @@ def generate_pdf(case: dict, output_path: str) -> str:
         body = _build_ngs_single(case, S)
     elif report_type == "transplant_donor":
         body = _build_ngs_transplant(case, S)
+    elif report_type == "ngs_photo":
+        body = _build_ngs_photo(case, S)
     elif report_type == "rpl_couple":
         body = _build_rpl_couple(case, S)
     elif report_type == "cdc_crossmatch":
@@ -3778,6 +4118,7 @@ def make_filename(case: dict) -> str:
         if str(d.get("name", "")).strip()
     )
     rtype = {"single_hla": "HLA_NGS", "transplant_donor": "HLA_NGS",
+             "ngs_photo": "HLA_NGS_PHOTO",
              "rpl_couple": "RPL", "cdc_crossmatch": "CDC",
              "dsa_crossmatch": "DSA", "sab_class1": "SAB_C1", "sab_class2": "SAB_C2",
              "flow_crossmatch": "FLOW", "luminex_typing": "HLA_LUMINEX",
