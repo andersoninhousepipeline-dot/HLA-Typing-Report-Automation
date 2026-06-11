@@ -198,12 +198,21 @@ def read_sig_count(qsettings, rtype):
 # differently-laid-out Excel workbook. The user picks the kit before importing so
 # the matching parser branch is used. SAB_KIT_NAMES feeds the UI dropdowns;
 # sab_kit_id() maps the display label to the stable internal id ("kit1"/"kit2").
-SAB_KIT_NAMES = ["Kit 1", "Kit 2"]
+#   kit1 = Immucor   (.xlsx; patient/report/chart sheets, Antigens + Raw Value)
+#   kit2 = One Lambda (LABScreen Crystal Reports .xls; Allele Equiv + Raw MFI)
+SAB_KIT_NAMES = ["Immucor", "One Lambda"]
 
 
 def sab_kit_id(name):
-    """Map a Kit dropdown label ('Kit 1'/'Kit 2') to the internal id 'kit1'/'kit2'."""
-    return "kit2" if "2" in str(name or "") else "kit1"
+    """Map a Kit dropdown label to the stable internal id 'kit1'/'kit2'.
+
+    Recognises the display names (Immucor / One Lambda) as well as the older
+    'Kit 1'/'Kit 2' labels so saved drafts and any legacy values still resolve.
+    """
+    s = str(name or "").strip().lower()
+    if "lambda" in s or "kit 2" in s or "kit2" in s:
+        return "kit2"
+    return "kit1"
 
 
 # Standard SAB "% PRA" sentence shared by the page-1 Remarks and the page-7
@@ -2011,7 +2020,7 @@ class HLAReportGeneratorApp(QMainWindow):
                              no patient-details sheet).
         """
         kit = (self._sab_kit_combo.currentText()
-               if hasattr(self, "_sab_kit_combo") else "Kit 1")
+               if hasattr(self, "_sab_kit_combo") else "Immucor")
         path, _ = QFileDialog.getOpenFileName(
             self, f"Select SAB Excel Workbook ({kit})", str(Path.home()),
             "Excel Workbooks (*.xlsx *.xlsm *.xls)")
@@ -3768,7 +3777,7 @@ class HLAReportGeneratorApp(QMainWindow):
     def _bulk_import_sab_excel(self):
         """Add a single-patient SAB Class I/II Excel workbook as a bulk case."""
         kit = (self._bulk_sab_kit_combo.currentText()
-               if hasattr(self, "_bulk_sab_kit_combo") else "Kit 1")
+               if hasattr(self, "_bulk_sab_kit_combo") else "Immucor")
         path, _ = QFileDialog.getOpenFileName(
             self, f"Select SAB Excel Workbook ({kit})", str(Path.home()),
             "Excel Workbooks (*.xlsx *.xlsm *.xls)")
