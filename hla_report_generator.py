@@ -194,6 +194,18 @@ def read_sig_count(qsettings, rtype):
     return qsettings.value(legacy, default, type=int)
 
 
+# SAB kits — the HLA team runs two different SAB softwares, each exporting a
+# differently-laid-out Excel workbook. The user picks the kit before importing so
+# the matching parser branch is used. SAB_KIT_NAMES feeds the UI dropdowns;
+# sab_kit_id() maps the display label to the stable internal id ("kit1"/"kit2").
+SAB_KIT_NAMES = ["Kit 1", "Kit 2"]
+
+
+def sab_kit_id(name):
+    """Map a Kit dropdown label ('Kit 1'/'Kit 2') to the internal id 'kit1'/'kit2'."""
+    return "kit2" if "2" in str(name or "") else "kit1"
+
+
 # Standard SAB "% PRA" sentence shared by the page-1 Remarks and the page-7
 # Comments box (matches the reference report wording). The "% PRA" form field
 # auto-fills both, so it only ever has to be entered once per case.
@@ -966,6 +978,18 @@ class HLAReportGeneratorApp(QMainWindow):
         self._sab_pat_group = _sab_pat_group
         _spf = QFormLayout(); _sab_pat_group.setLayout(_spf)
         _spf.setSpacing(1); _spf.setContentsMargins(4, 2, 4, 2)
+        # Kit selector — the HLA team runs two different SAB softwares, each of
+        # which exports a differently-laid-out Excel workbook. Choose the kit that
+        # produced the file *before* importing so the right parser is used.
+        _sab_kit_row = QHBoxLayout()
+        _sab_kit_lbl = QLabel("Kit:")
+        self._sab_kit_combo = ClickOnlyComboBox()
+        self._sab_kit_combo.addItems(SAB_KIT_NAMES)
+        self._sab_kit_combo.setFixedHeight(24)
+        self._sab_kit_combo.setToolTip("Select which SAB software produced the Excel "
+                                       "you are about to import (different layouts).")
+        _sab_kit_row.addWidget(_sab_kit_lbl); _sab_kit_row.addWidget(self._sab_kit_combo, 1)
+        _spf.addRow(_sab_kit_row)
         # One-click import of a single-patient SAB Excel workbook (patient
         # details + allele bead-detail + chart sheet) — fills the whole form.
         _sab_xl_btn = QPushButton("📥  Import from SAB Excel (auto-fill)")
@@ -1649,8 +1673,21 @@ class HLAReportGeneratorApp(QMainWindow):
         return sorted(result, key=lambda x: -x[1])
 
     @staticmethod
-    def _parse_sab_excel(path: str) -> dict:
+    def _parse_sab_excel(path: str, kit: str = "kit1") -> dict:
         """Parse a single-patient SAB Class I/II Excel workbook.
+
+        The HLA team runs two SAB softwares that export different layouts, so the
+        caller passes the user-selected kit ('kit1' or 'kit2') and this dispatches
+        to the matching parser. Both return the same shape:
+            {patient, alleles, chart_bytes, pra_pct, sab_class}.
+        """
+        if sab_kit_id(kit) == "kit2":
+            return HLAReportGeneratorApp._parse_sab_excel_kit2(path)
+        return HLAReportGeneratorApp._parse_sab_excel_kit1(path)
+
+    @staticmethod
+    def _parse_sab_excel_kit1(path: str) -> dict:
+        """Parse a Kit 1 single-patient SAB Class I/II Excel workbook.
 
         Sheets are matched loosely by name:
           • 'patient details'  — header row + one value row.
@@ -1837,6 +1874,125 @@ class HLAReportGeneratorApp(QMainWindow):
             "sab_class":   sab_class,
         }
 
+    @staticmethod
+    def _parse_sab_excel_kit2(path: str) -> dict:
+        """Parse a Kit 2 (One Lambda LABScreen / Fusion) SAB Class I/II export.
+
+        Kit 2 is the second SAB software's "LABScreen Report", a single-sheet
+        Crystal Reports export (.xls). Cells are positioned by pixel so columns
+        are not fixed; the parser locates landmarks by their text instead:
+
+          • Allele table — a header row containing 'Allele Equiv' and 'Raw'; each
+            following row gives the allele (Allele Equiv column) and its MFI (Raw
+            column). This is preferred over the upper 'Test Details' bead→allele
+            map because only this lower table carries the MFI values.
+          • '%PRA' figure — first numeric cell to the right of the '%PRA' label.
+          • Class — from the Catalog (LS1A…=I, LS2A…=II) or the 'SAB I/II' Session
+            ID (checked II-before-I since 'SAB I' is a prefix of 'SAB II').
+          • Sample ID — the value beside the 'Sample ID:' label.
+
+        The Crystal export embeds no extractable Bead Specificity Chart image, so
+        chart_bytes is None (upload the chart manually if one is needed). Patient
+        demography (other than Sample ID) is not present in this export and is
+        filled in by hand.
+
+        Returns {patient, alleles, chart_bytes, pra_pct, sab_class}.
+        """
+        import os, re
+
+        def _s(v):
+            if v is None:
+                return ""
+            if isinstance(v, float) and v.is_integer():
+                return str(int(v))
+            return str(v).strip()
+
+        def _num(v):
+            """Return float for a numeric cell or numeric-looking text, else None."""
+            if isinstance(v, bool):
+                return None
+            if isinstance(v, (int, float)):
+                return float(v)
+            s = _s(v)
+            return float(s) if re.fullmatch(r"-?\d+(?:\.\d+)?", s) else None
+
+        # ── load the single worksheet into a value grid (xls → xlrd, else openpyxl)
+        rows = []
+        if os.path.splitext(path)[1].lower() == ".xls":
+            import xlrd
+            sh = xlrd.open_workbook(path).sheet_by_index(0)
+            rows = [[sh.cell_value(r, c) for c in range(sh.ncols)]
+                    for r in range(sh.nrows)]
+        else:
+            import openpyxl
+            sh = openpyxl.load_workbook(path, data_only=True).worksheets[0]
+            rows = [list(r) for r in sh.iter_rows(values_only=True)]
+
+        # ── allele table: header with 'allele equiv' + 'raw' ────────────────────
+        allele_col = raw_col = hdr = None
+        for ri, row in enumerate(rows):
+            labels = {}
+            for ci, v in enumerate(row):
+                s = _s(v).lower()
+                if s and s not in labels:
+                    labels[s] = ci
+            if "allele equiv" in labels and "raw" in labels:
+                allele_col, raw_col, hdr = labels["allele equiv"], labels["raw"], ri
+                break
+
+        alleles = []
+        if hdr is not None:
+            for row in rows[hdr + 1:]:
+                allele = _s(row[allele_col]) if allele_col < len(row) else ""
+                mfi = _num(row[raw_col]) if raw_col < len(row) else None
+                if not allele or mfi is None:
+                    continue
+                alleles.append((allele, int(round(mfi))))
+            alleles.sort(key=lambda x: -x[1])
+
+        # ── class (catalog LS1A/LS2A or 'SAB I/II'; check II before I) ───────────
+        blob = " ".join(_s(v).upper() for row in rows for v in row if _s(v))
+        if "LS2A" in blob or "SAB II" in blob:
+            sab_class = "II"
+        elif "LS1A" in blob or "SAB I" in blob:
+            sab_class = "I"
+        else:
+            sab_class = None
+
+        # ── %PRA: first numeric cell to the right of the '%PRA' label ────────────
+        pra_pct = None
+        for row in rows:
+            hit = next((ci for ci, v in enumerate(row) if "%pra" in _s(v).lower()),
+                       None)
+            if hit is None:
+                continue
+            for v2 in row[hit + 1:]:
+                n = _num(v2)
+                if n is not None:
+                    pra_pct = n
+                    break
+            break
+
+        # ── Sample ID → pin (the report's primary identifier) ───────────────────
+        patient = {}
+        for row in rows:
+            hit = next((ci for ci, v in enumerate(row)
+                        if _s(v).lower().startswith("sample id")), None)
+            if hit is None:
+                continue
+            val = next((_s(v2) for v2 in row[hit + 1:] if _s(v2)), "")
+            if val:
+                patient["pin"] = val
+            break
+
+        return {
+            "patient":     patient,
+            "alleles":     alleles,
+            "chart_bytes": None,
+            "pra_pct":     pra_pct,
+            "sab_class":   sab_class,
+        }
+
     def _load_sab_excel(self):
         """Import a SAB workbook and auto-fill the whole form (patient + results)."""
         self._import_sab_excel(fill_patient=True)
@@ -1854,13 +2010,15 @@ class HLAReportGeneratorApp(QMainWindow):
                              demography is typed by hand (for workbooks that carry
                              no patient-details sheet).
         """
+        kit = (self._sab_kit_combo.currentText()
+               if hasattr(self, "_sab_kit_combo") else "Kit 1")
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select SAB Excel Workbook", str(Path.home()),
-            "Excel Workbooks (*.xlsx *.xlsm)")
+            self, f"Select SAB Excel Workbook ({kit})", str(Path.home()),
+            "Excel Workbooks (*.xlsx *.xlsm *.xls)")
         if not path:
             return
         try:
-            data = self._parse_sab_excel(path)
+            data = self._parse_sab_excel(path, kit=kit)
         except Exception as e:
             QMessageBox.critical(self, "Excel Import Failed",
                                  f"Could not read the SAB Excel file:\n\n{e}")
@@ -3357,10 +3515,19 @@ class HLAReportGeneratorApp(QMainWindow):
         self.chk_nabl.setChecked(True)
         opts_row.addWidget(self.chk_nabl)
         opts_row.addStretch()
+        # Kit selector for SAB imports — pick which SAB software produced the
+        # workbook (two different layouts) before clicking "Import SAB Excel".
+        opts_row.addWidget(QLabel("Kit:"))
+        self._bulk_sab_kit_combo = ClickOnlyComboBox()
+        self._bulk_sab_kit_combo.addItems(SAB_KIT_NAMES)
+        self._bulk_sab_kit_combo.setFixedHeight(24)
+        self._bulk_sab_kit_combo.setToolTip("Select which SAB software produced the "
+                                            "Excel you are about to import (different layouts).")
+        opts_row.addWidget(self._bulk_sab_kit_combo)
         sab_xl_btn = QPushButton("Import SAB Excel")
         sab_xl_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
         sab_xl_btn.setToolTip("Add a single-patient SAB Class I/II Excel workbook as a case "
-                              "(patient details + alleles + chart).")
+                              "(patient details + alleles + chart). Uses the selected Kit's layout.")
         sab_xl_btn.clicked.connect(self._bulk_import_sab_excel)
         opts_row.addWidget(sab_xl_btn)
 
@@ -3600,13 +3767,15 @@ class HLAReportGeneratorApp(QMainWindow):
 
     def _bulk_import_sab_excel(self):
         """Add a single-patient SAB Class I/II Excel workbook as a bulk case."""
+        kit = (self._bulk_sab_kit_combo.currentText()
+               if hasattr(self, "_bulk_sab_kit_combo") else "Kit 1")
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select SAB Excel Workbook", str(Path.home()),
-            "Excel Workbooks (*.xlsx *.xlsm)")
+            self, f"Select SAB Excel Workbook ({kit})", str(Path.home()),
+            "Excel Workbooks (*.xlsx *.xlsm *.xls)")
         if not path:
             return
         try:
-            data = self._parse_sab_excel(path)
+            data = self._parse_sab_excel(path, kit=kit)
         except Exception as e:
             QMessageBox.critical(self, "Excel Import Failed",
                                  f"Could not read the SAB Excel file:\n\n{e}")
@@ -3641,6 +3810,10 @@ class HLAReportGeneratorApp(QMainWindow):
         case["sab_chart_bytes"] = data.get("chart_bytes")
         case["sab_class"]       = cls
 
+        # Each import replaces the list — only the just-imported workbook's case is
+        # shown. Reset only now (after a successful parse) so cancelling the file
+        # dialog or a failed parse above leaves the existing list untouched.
+        self._reset_bulk_session()
         self.cases.append(case)
         self._populate_bulk_list()
         self.bulk_list.setCurrentRow(len(self.cases) - 1)

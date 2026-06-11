@@ -448,25 +448,18 @@ def _normalize_age(gender_age: str) -> str:
 
 def _fit_one_line(text: str, avail_pts: float, base_style: ParagraphStyle,
                   min_size: float = 6.5) -> Paragraph:
-    """Render *text* on a single line, auto-shrinking the font (down to
-    *min_size*) when it would otherwise wrap to a second line.
+    """Render *text* at full font, wrapping onto extra lines when it is too wide.
 
-    Used for free-text demography values such as a lengthy Hospital/Clinic
-    name: wrapping a value to two lines makes the demography table one row
-    taller, which can push the rest of the report onto a new page.  Keeping
-    the value on one line holds the table height constant and prevents that
-    page break.
+    Used for free-text demography values such as a lengthy Hospital/Clinic name.
+    The value keeps its normal font size and is allowed to wrap to a second line
+    rather than being shrunk to fit on one line; the demography row simply grows
+    taller to accommodate the extra line (the rows top-align, so the label stays
+    anchored to the first wrapped line).
+
+    (*avail_pts* and *min_size* are retained for call-site compatibility; the
+    Paragraph wraps to its cell width on its own, so they are no longer used.)
     """
-    display = text or ""
-    avail = max(1.0, avail_pts - 6)  # leave room for cell padding
-    fs = base_style.fontSize
-    w = pdfmetrics.stringWidth(display, base_style.fontName, fs)
-    if w > avail:
-        fit = max(min_size, fs * avail / w)
-        style = ParagraphStyle(base_style.name + "_fit1", parent=base_style,
-                               fontSize=fit, leading=fit + 2)
-        return Paragraph(display, style)
-    return Paragraph(display, base_style)
+    return Paragraph(text or "", base_style)
 
 
 def _demography_col_widths(patient: dict, donor: dict) -> list:
@@ -2238,10 +2231,9 @@ def _build_cdc_report(case: dict, S: dict) -> list:
         [IL("PIN"),             IC(), IR(patient.get("pin","")),             E(), IL("PIN"),                 IC(), IR(donor.get("pin","NA"))],
         [IL("Sample Number"),   IC(), IR(patient.get("sample_number","")),   E(), IL("Sample Number"),       IC(), IR(donor.get("sample_number","NA"))],
         [IL("Diagnosis"),       IC(), IV(patient.get("diagnosis","")),       E(), IL("Sample receipt date"), IC(), IR(donor.get("receipt_date",""))],
-        # Hospital/Clinic value fits on one line in the widened patient column;
-        # only an exceptionally long name shrinks (see _fit_one_line) — it never
-        # wraps, so the demography table height stays constant and the report
-        # cannot spill onto an extra page.
+        # Hospital/Clinic value renders at full font; a long name wraps onto an
+        # extra line (see _fit_one_line) and the row grows taller rather than the
+        # text being shrunk to fit a single line.
         [IL("Hospital/Clinic"), IC(), _fit_one_line(_norm(patient.get("hospital_clinic","")), info_col_w[2], info_val_style), E(), IL("Report date"), IC(), IR(donor.get("report_date",""))],
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
@@ -2575,10 +2567,9 @@ def _build_dsa_report(case: dict, S: dict) -> list:
         [IL("PIN"),             IC(), IR(patient.get("pin","")),             E(), IL("PIN"),                 IC(), IR(donor.get("pin","NA"))],
         [IL("Sample Number"),   IC(), IR(patient.get("sample_number","")),   E(), IL("Sample Number"),       IC(), IR(donor.get("sample_number","NA"))],
         [IL("Diagnosis"),       IC(), IV(patient.get("diagnosis","")),       E(), IL("Sample receipt date"), IC(), IR(donor.get("receipt_date",""))],
-        # Hospital/Clinic value fits on one line in the widened patient column;
-        # only an exceptionally long name shrinks (see _fit_one_line) — it never
-        # wraps, so the demography table height stays constant and the report
-        # cannot spill onto an extra page.
+        # Hospital/Clinic value renders at full font; a long name wraps onto an
+        # extra line (see _fit_one_line) and the row grows taller rather than the
+        # text being shrunk to fit a single line.
         [IL("Hospital/Clinic"), IC(), _fit_one_line(_norm(patient.get("hospital_clinic","")), info_col_w[2], info_val_style), E(), IL("Report date"), IC(), IR(donor.get("report_date",""))],
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
@@ -3564,10 +3555,9 @@ def _build_flow_report(case: dict, S: dict) -> list:
         [IL("PIN"),             IC(), IR(patient.get("pin","")),             E(), IL("PIN"),                 IC(), IR(donor.get("pin","NA"))],
         [IL("Sample Number"),   IC(), IR(patient.get("sample_number","")),   E(), IL("Sample Number"),       IC(), IR(donor.get("sample_number","NA"))],
         [IL("Diagnosis"),       IC(), IV(patient.get("diagnosis","")),       E(), IL("Sample receipt date"), IC(), IR(donor.get("receipt_date",""))],
-        # Hospital/Clinic value fits on one line in the widened patient column;
-        # only an exceptionally long name shrinks (see _fit_one_line) — it never
-        # wraps, so the demography table height stays constant and the report
-        # cannot spill onto an extra page.
+        # Hospital/Clinic value renders at full font; a long name wraps onto an
+        # extra line (see _fit_one_line) and the row grows taller rather than the
+        # text being shrunk to fit a single line.
         [IL("Hospital/Clinic"), IC(), _fit_one_line(_norm(patient.get("hospital_clinic","")), info_col_w[2], val_s), E(), IL("Report date"), IC(), IR(donor.get("report_date",""))],
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
