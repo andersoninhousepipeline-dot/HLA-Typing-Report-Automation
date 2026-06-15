@@ -488,7 +488,7 @@ def _demography_col_widths(patient: dict, donor: dict) -> list:
     # Widest donor value that lands in val_R.  The donor name is capped because
     # it auto-shrinks to fit (see IV_name), so an unusually long name should not
     # claim more than ~120 pt and starve the patient column.
-    donor_name_w = min(_w(_title_case(_clean_display(donor.get("name", "")))), 120.0)
+    donor_name_w = min(_w(_title_case(_clean_display(donor.get("name", "")), is_name=True)), 120.0)
     donor_vals = [
         donor_name_w,
         _w(_normalize_age(donor.get("gender_age", ""))),
@@ -546,11 +546,19 @@ _ABBREV_SET = {"edta", "dna", "rna", "pcr", "bmt", "hla", "rpl", "rif", "nips", 
 _PREFIX_MAP_TC = {"mr": "Mr", "mrs": "Mrs", "ms": "Ms", "master": "Master", "dr": "Dr"}
 
 
-def _title_case(text: str) -> str:
+def _title_case(text: str, is_name: bool = False) -> str:
     """Render-layer smart title case for names, degrees, and specimen types.
 
+    When `is_name` is True (patient/donor names, hospital/clinic names), an
+    ALL-CAPS word is NOT preserved as-is — it falls through to the other rules,
+    so a name typed in full caps (e.g. "JEEVA JAGAN") renders as "Jeeva Jagan",
+    while genuine acronyms (no vowels, e.g. "KMCH") still render upper-case via
+    rule 6b and known abbreviations (e.g. "HLA") still render upper-case via
+    rule 6a / the degree map.
+
     Rules (applied per token, where tokens split on whitespace and commas):
-    - Already ALL-CAPS words of length > 1 are preserved as-is (e.g. HLA, NGS).
+    - Already ALL-CAPS words of length > 1 are preserved as-is (e.g. HLA, NGS),
+      unless `is_name` is True.
     - Known degrees (mbbs, md, ms, dm, dnb, phd, dgo, frcs, mrcp) → fixed uppercase/mixed form.
     - Known abbreviations (edta, bmt, hla, rpl, rif, etc.) → always uppercase.
     - Short forms enclosed in parentheses → always uppercase (e.g. (hbii) → (HBII)).
@@ -599,8 +607,10 @@ def _title_case(text: str) -> str:
         7. Short word (≤4 chars, alpha-only) → uppercase (catches BMT, CKD, HD, IDD, etc.).
         8. Default → title-case.
         """
-        # Rule 1: Preserve all-uppercase words of length > 1 (already in caps)
-        if len(token) > 1 and token == token.upper() and token.isalpha():
+        # Rule 1: Preserve all-uppercase words of length > 1 (already in caps),
+        # unless this is a name/place field (is_name=True), where ALL-CAPS input
+        # should be re-cased like any other word.
+        if not is_name and len(token) > 1 and token == token.upper() and token.isalpha():
             if token.lower() in _DEGREE_MAP:
                 return _DEGREE_MAP[token.lower()] + "."
             return token
@@ -819,13 +829,16 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
     def L(text): return Paragraph(f"<b>{text}</b>", S["lbl"])
     def C():     return Paragraph("<b>:</b>", S["lbl"])
     def V(text): return Paragraph(_title_case(_clean_display(text)), S["val"])
+    # Name/place fields (patient/donor name, hospital/clinic) are always re-cased
+    # even when typed in ALL CAPS — see _title_case(is_name=True).
+    def VN(text): return Paragraph(_title_case(_clean_display(text), is_name=True), S["val"])
     # Fix 4: ID/code fields must NOT be title-cased — use R() for PIN, Sample Number, MR No.
     def R(text): return Paragraph(_clean_display(text), S["val"])
     def E():     return Paragraph("", S["lbl"])
 
     def V_name(text):
         """Render name on one line; auto-shrink font (min 8pt) if it would wrap."""
-        display = _title_case(_clean_display(text))
+        display = _title_case(_clean_display(text), is_name=True)
         avail = col_w[2] - 4  # col 2 = left-val in both NABL and plain layouts
         fn, fs = S["val"].fontName, S["val"].fontSize
         if pdfmetrics.stringWidth(display, fn, fs) > avail:
@@ -847,7 +860,7 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
 
     left_rows.extend([
         [L("Referred By"), C(), V(person.get("referred_by", ""))],
-        [L("Hospital / Clinic"), C(), V(person.get("hospital_clinic", ""))],
+        [L("Hospital / Clinic"), C(), VN(person.get("hospital_clinic", ""))],
     ])
     # On the patient/NABL table the Referred By and Hospital rows sit below the
     # seal, so their value cells span across the (freed) logo column for extra
@@ -1114,11 +1127,17 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict, comment_text: str = "
     col_w = [_label_w, _data_w, _data_w, _data_w, _data_w]
 
     def RL(t): return Paragraph(f"<b>{t}</b>", S["rpl_lbl"])
-    def RV(t): return Paragraph(_title_case(_clean_display(t)), S["rpl_val"])
+    def RV(t, is_name=False): return Paragraph(_title_case(_clean_display(t), is_name=is_name), S["rpl_val"])
     # Fix 4: ID/code fields (PIN, Sample Number) must NOT be title-cased.
     def RR(t): return Paragraph(_clean_display(t), S["rpl_val"])
     _RAW_LABELS = {"PIN", "Sample Number"}
-    def RVC(label, val): return RR(val) if label in _RAW_LABELS else RV(val)
+    # Name/place fields (patient/donor name, hospital/clinic) are always re-cased
+    # even when typed in ALL CAPS — see _title_case(is_name=True).
+    _NAME_LABELS = {"Name", "Hospital/Clinic"}
+    def RVC(label, val):
+        if label in _RAW_LABELS:
+            return RR(val)
+        return RV(val, is_name=label in _NAME_LABELS)
     def HL(t): return Paragraph(f"<b>{t}</b>", S["rpl_hla_lbl"])
     def HV(t): return Paragraph(_clean_display(t), S["rpl_hla_val"])
     def HDR(t): return Paragraph(f"<b>{t}</b>", S["rpl_hdr_name"])
@@ -1267,7 +1286,7 @@ def _rpl_reference_section(rpl_ref: dict, patient: dict, donor: dict, S: dict,
             Paragraph("<b>HLA sharing for Recurrent miscarriage/RIF</b>",     S["lbl_center"]),
         ],
         [
-            Paragraph(_clean_display(f"{_title_case(_capitalize_initials(p_name))} / {_title_case(_capitalize_initials(d_name))}"), S["rpl_val"]),
+            Paragraph(_clean_display(f"{_title_case(_capitalize_initials(p_name), is_name=True)} / {_title_case(_capitalize_initials(d_name), is_name=True)}"), S["rpl_val"]),
             Paragraph(_clean_display(hla_matching_text),      S["rpl_val"]),
             Paragraph(_clean_display(rpl_ref.get("hla_sharing_rif", ">50%")), S["rpl_val"]),
         ],
@@ -1511,6 +1530,11 @@ def _build_ngs_photo(case: dict, S: dict) -> list:
     def _norm(val):
         return _title_case(_clean_display(val)) or "NA"
 
+    # Name/place fields (patient/donor name, hospital/clinic) are always re-cased
+    # even when typed in ALL CAPS — see _title_case(is_name=True).
+    def _norm_name(val):
+        return _title_case(_clean_display(val), is_name=True) or "NA"
+
     def _raw(val):
         return _clean_display(val) or "NA"
 
@@ -1531,7 +1555,7 @@ def _build_ngs_photo(case: dict, S: dict) -> list:
     info_col_w = _demography_col_widths(patient, donor)
 
     def IV_name(text, col_w_pts):
-        display = _norm(text)
+        display = _norm_name(text)
         avail = col_w_pts - 6
         fn, fs = info_val_style.fontName, info_val_style.fontSize
         w = pdfmetrics.stringWidth(display, fn, fs)
@@ -1548,7 +1572,7 @@ def _build_ngs_photo(case: dict, S: dict) -> list:
         [IL("PIN"),             IC(), IR(patient.get("pin", "")),            E(), IL("PIN"),                 IC(), IR(donor.get("pin", "NA"))],
         [IL("Sample Number"),   IC(), IR(patient.get("sample_number", "")),  E(), IL("Sample Number"),       IC(), IR(donor.get("sample_number", "NA"))],
         [IL("Specimen"),        IC(), IV(patient.get("specimen") or "Blood - EDTA"), E(), IL("Sample receipt date"), IC(), IR(donor.get("receipt_date", ""))],
-        [IL("Hospital/Clinic"), IC(), _fit_one_line(_norm(patient.get("hospital_clinic", "")), info_col_w[2], info_val_style), E(), IL("Report date"), IC(), IR(donor.get("report_date", ""))],
+        [IL("Hospital/Clinic"), IC(), _fit_one_line(_norm_name(patient.get("hospital_clinic", "")), info_col_w[2], info_val_style), E(), IL("Report date"), IC(), IR(donor.get("report_date", ""))],
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
     info_t.setStyle(TableStyle([
@@ -1592,8 +1616,8 @@ def _build_ngs_photo(case: dict, S: dict) -> list:
 
     photo_rows = [
         [E(),
-         _P(_norm(patient.get("name", "")), F_BOLD, 11, BLACK, TA_CENTER),
-         _P(_norm(donor.get("name", "")),   F_BOLD, 11, BLACK, TA_CENTER)],
+         _P(_norm_name(patient.get("name", "")), F_BOLD, 11, BLACK, TA_CENTER),
+         _P(_norm_name(donor.get("name", "")),   F_BOLD, 11, BLACK, TA_CENTER)],
         [E(), pat_photo, don_photo],
         [_P("Relation:",          F_BOLD, 10, BLACK, TA_LEFT),
          _P("Patient",            F_REG, 10, BLACK, TA_CENTER),
@@ -1702,14 +1726,14 @@ def _build_ngs_photo(case: dict, S: dict) -> list:
     # page with the patient remarks between them. Donor remarks are emitted
     # *after* this unit so they may overflow to the next page on their own without
     # splitting the two tables.
-    combined = [_person_table(f"{_norm(patient.get('name', ''))} (Patient)", patient, True)]
+    combined = [_person_table(f"{_norm_name(patient.get('name', ''))} (Patient)", patient, True)]
     _rp = _remarks_para(patient)
     if _rp:
         combined.append(_rp)
     # Patient remarks (grey cell) and the donor table(s) follow flush — no spacers —
     # so the patient table, remarks and donor table read as one continuous table.
     for d in donors:
-        combined.append(_person_table(f"{_norm(d.get('name', ''))} (Donor)", d, False))
+        combined.append(_person_table(f"{_norm_name(d.get('name', ''))} (Donor)", d, False))
     elems.append(KeepTogether(combined))
 
     for d in donors:
@@ -1725,9 +1749,9 @@ def _build_ngs_photo(case: dict, S: dict) -> list:
     if interp_override:
         interp_block.append(Paragraph(interp_override, S["body"]))
     else:
-        p_name = _norm(patient.get("name", ""))
+        p_name = _norm_name(patient.get("name", ""))
         for d in donors:
-            d_name = _norm(d.get("name", ""))
+            d_name = _norm_name(d.get("name", ""))
             match  = re.sub(r"\s*\(\d+%\)", "", _clean_display(d.get("match", "")).strip()).strip()
             if match and match != "—":
                 sentence = (f"The HLA typing of {p_name} (Patient) and {d_name} "
@@ -2175,6 +2199,11 @@ def _build_cdc_report(case: dict, S: dict) -> list:
         """Title-case for names/text; 'NA' fallback for empty."""
         return _title_case(_clean_display(val)) or "NA"
 
+    # Name/place fields (patient/donor name, hospital/clinic) are always re-cased
+    # even when typed in ALL CAPS — see _title_case(is_name=True).
+    def _norm_name(val):
+        return _title_case(_clean_display(val), is_name=True) or "NA"
+
     def _raw(val):
         """No case change â€" for PIN, sample numbers, dates."""
         return _clean_display(val) or "NA"
@@ -2214,7 +2243,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
 
     def IV_name(text, col_w_pts):
         """Render a name on one line; auto-shrink font (min 8pt) if it would wrap."""
-        display = _norm(text)
+        display = _norm_name(text)
         avail = col_w_pts - 6  # leave room for cell padding
         fn, fs = info_val_style.fontName, info_val_style.fontSize
         w = pdfmetrics.stringWidth(display, fn, fs)
@@ -2234,7 +2263,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
         # Hospital/Clinic value renders at full font; a long name wraps onto an
         # extra line (see _fit_one_line) and the row grows taller rather than the
         # text being shrunk to fit a single line.
-        [IL("Hospital/Clinic"), IC(), _fit_one_line(_norm(patient.get("hospital_clinic","")), info_col_w[2], info_val_style), E(), IL("Report date"), IC(), IR(donor.get("report_date",""))],
+        [IL("Hospital/Clinic"), IC(), _fit_one_line(_norm_name(patient.get("hospital_clinic","")), info_col_w[2], info_val_style), E(), IL("Report date"), IC(), IR(donor.get("report_date",""))],
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
     info_t.setStyle(TableStyle([
@@ -2503,6 +2532,11 @@ def _build_dsa_report(case: dict, S: dict) -> list:
         """Title-case for names/text; 'NA' fallback for empty."""
         return _title_case(_clean_display(val)) or "NA"
 
+    # Name/place fields (patient/donor name, hospital/clinic) are always re-cased
+    # even when typed in ALL CAPS — see _title_case(is_name=True).
+    def _norm_name(val):
+        return _title_case(_clean_display(val), is_name=True) or "NA"
+
     def _raw(val):
         """No case change â€" for PIN, sample numbers, dates."""
         return _clean_display(val) or "NA"
@@ -2550,7 +2584,7 @@ def _build_dsa_report(case: dict, S: dict) -> list:
 
     def IV_name(text, col_w_pts):
         """Render a name on one line; auto-shrink font (min 8pt) if it would wrap."""
-        display = _norm(text)
+        display = _norm_name(text)
         avail = col_w_pts - 6  # leave room for cell padding
         fn, fs = info_val_style.fontName, info_val_style.fontSize
         w = pdfmetrics.stringWidth(display, fn, fs)
@@ -2570,7 +2604,7 @@ def _build_dsa_report(case: dict, S: dict) -> list:
         # Hospital/Clinic value renders at full font; a long name wraps onto an
         # extra line (see _fit_one_line) and the row grows taller rather than the
         # text being shrunk to fit a single line.
-        [IL("Hospital/Clinic"), IC(), _fit_one_line(_norm(patient.get("hospital_clinic","")), info_col_w[2], info_val_style), E(), IL("Report date"), IC(), IR(donor.get("report_date",""))],
+        [IL("Hospital/Clinic"), IC(), _fit_one_line(_norm_name(patient.get("hospital_clinic","")), info_col_w[2], info_val_style), E(), IL("Report date"), IC(), IR(donor.get("report_date",""))],
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
     info_t.setStyle(TableStyle([
@@ -2800,11 +2834,16 @@ def _build_luminex_report(case: dict, S: dict) -> list:
     cw = CONTENT_W
 
     def _norm(v): return _title_case(_clean_display(v)) or "NA"
+    # Name/place fields (patient/donor name, hospital/clinic) are always re-cased
+    # even when typed in ALL CAPS — see _title_case(is_name=True).
+    def _norm_name(v): return _title_case(_clean_display(v), is_name=True) or "NA"
     def _raw(v):  return _clean_display(v) or "NA"
     def _IL(t):   return Paragraph(f"<b>{t}</b>",
                     ParagraphStyle("_lil", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
     def _IV(t):   return Paragraph(_norm(t),
                     ParagraphStyle("_liv", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
+    def _IVN(t):  return Paragraph(_norm_name(t),
+                    ParagraphStyle("_livn", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
     def _IR(t):   return Paragraph(_raw(t),
                     ParagraphStyle("_lir", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
     def _IC():    return Paragraph("<b>:</b>",
@@ -2832,14 +2871,14 @@ def _build_luminex_report(case: dict, S: dict) -> list:
     _gap                = cw*0.075
     _lblR, _colR, _valR = cw*0.200, cw*0.016, cw*0.183
     _PAD, _MIN_GAP = 8, cw*0.024
-    _dn_w = pdfmetrics.stringWidth(_norm(donor.get("name","")), F_BOLD, 10)
+    _dn_w = pdfmetrics.stringWidth(_norm_name(donor.get("name","")), F_BOLD, 10)
     _need = _dn_w + _PAD
     if _need > _valR:
         _deficit = _need - _valR
         _take = min(_deficit, _gap - _MIN_GAP)           # 1) shrink the gap
         _gap -= _take; _valR += _take; _deficit -= _take
         if _deficit > 0:                                 # 2) borrow from val_L
-            _pn_w    = pdfmetrics.stringWidth(_norm(patient.get("name","")), F_BOLD, 10)
+            _pn_w    = pdfmetrics.stringWidth(_norm_name(patient.get("name","")), F_BOLD, 10)
             _floor_L = max(_pn_w + _PAD, cw*0.22)         # keep patient name on one line
             _take = min(_deficit, max(0.0, _valL - _floor_L))
             _valL -= _take; _valR += _take
@@ -2847,8 +2886,8 @@ def _build_luminex_report(case: dict, S: dict) -> list:
     info_rows = [
         # Names render at full font size and wrap to a second line when long
         # (no auto-shrink) so a lengthy donor name stays legible.
-        [_IL("Patient name"),    _IC(), _IV(patient.get("name","")),
-         _E(), _IL("Donor name"),            _IC(), _IV(donor.get("name",""))],
+        [_IL("Patient name"),    _IC(), _IVN(patient.get("name","")),
+         _E(), _IL("Donor name"),            _IC(), _IVN(donor.get("name",""))],
         [_IL("Gender/ Age"),     _IC(), _IR(_normalize_age(patient.get("gender_age",""))),
          _E(), _IL("Gender/ Age"),           _IC(), _IR(_normalize_age(donor.get("gender_age","")))],
         [_IL("PIN"),             _IC(), _IR(patient.get("pin","")),
@@ -2857,7 +2896,7 @@ def _build_luminex_report(case: dict, S: dict) -> list:
          _E(), _IL("Sample Number"),         _IC(), _IR(donor.get("sample_number",""))],
         [_IL("Diagnosis"),       _IC(), _IV(patient.get("diagnosis","") or "NA"),
          _E(), _IL("Sample receipt date"),   _IC(), _IR(patient.get("receipt_date",""))],
-        [_IL("Hospital/Clinic"), _IC(), _IV(patient.get("hospital_clinic","")),
+        [_IL("Hospital/Clinic"), _IC(), _IVN(patient.get("hospital_clinic","")),
          _E(), _IL("Report date"),           _IC(), _IR(patient.get("report_date",""))],
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
@@ -2978,8 +3017,8 @@ def _build_luminex_report(case: dict, S: dict) -> list:
         v2 = _clean_display(a[1]) if len(a) > 1 else ""
         return (v1 or "—", v2 or "—")
 
-    pat_name_d = _title_case(_clean_display(patient.get("name", ""))) or "Patient"
-    don_name_d = _title_case(_clean_display(donor.get("name",  ""))) or "Donor"
+    pat_name_d = _title_case(_clean_display(patient.get("name", "")), is_name=True) or "Patient"
+    don_name_d = _title_case(_clean_display(donor.get("name",  "")), is_name=True) or "Donor"
     pat_pairs  = [_pair(pat_hla, l) for l in LOCI]
     don_pairs  = [_pair(don_hla, l) for l in LOCI]
 
@@ -3075,10 +3114,15 @@ def _sab_info_table(case: dict) -> Table:
 
     def _raw(v):  return _clean_display(v) or "NA"
     def _norm(v): return _title_case(_clean_display(v)) or "NA"
+    # Name/place fields (patient name, hospital/clinic) are always re-cased
+    # even when typed in ALL CAPS — see _title_case(is_name=True).
+    def _norm_name(v): return _title_case(_clean_display(v), is_name=True) or "NA"
     def _IL(t):   return Paragraph(f"<b>{t}</b>",
                     ParagraphStyle("_sil", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
     def _IV(t):   return Paragraph(_norm(t),
                     ParagraphStyle("_siv", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
+    def _IVN(t):  return Paragraph(_norm_name(t),
+                    ParagraphStyle("_sivn", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
     def _IR(t):   return Paragraph(_raw(t),
                     ParagraphStyle("_sir", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
     def _IC():    return Paragraph("<b>:</b>",
@@ -3089,7 +3133,7 @@ def _sab_info_table(case: dict) -> Table:
     cw = CONTENT_W
     info_col_w = [cw*0.167, cw*0.016, cw*0.340, cw*0.020, cw*0.225, cw*0.016, cw*0.216]
     info_rows = [
-        [_IL("Patient name"),    _IC(), _IV(patient.get("name","")),
+        [_IL("Patient name"),    _IC(), _IVN(patient.get("name","")),
          _E(), _IL("PIN"),                    _IC(), _IR(patient.get("pin",""))],
         [_IL("Gender/ Age"),     _IC(), _IR(_normalize_age(patient.get("gender_age",""))),
          _E(), _IL("Sample Number"),          _IC(), _IR(patient.get("sample_number",""))],
@@ -3097,7 +3141,7 @@ def _sab_info_table(case: dict) -> Table:
          _E(), _IL("Sample collection date"), _IC(), _IR(patient.get("collection_date",""))],
         [_IL("Specimen"),        _IC(), _IV(patient.get("specimen","") or "Serum"),
          _E(), _IL("Sample receipt date"),    _IC(), _IR(patient.get("receipt_date",""))],
-        [_IL("Hospital/Clinic"), _IC(), _IV(patient.get("hospital_clinic","")),
+        [_IL("Hospital/Clinic"), _IC(), _IVN(patient.get("hospital_clinic","")),
          _E(), _IL("Report date"),            _IC(), _IR(patient.get("report_date",""))],
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
@@ -3352,10 +3396,15 @@ def _build_pra_report(case: dict, S: dict) -> list:
 
     def _raw(v):  return _clean_display(v) or "NA"
     def _norm(v): return _title_case(_clean_display(v)) or "NA"
+    # Name/place fields (patient name, hospital/clinic) are always re-cased
+    # even when typed in ALL CAPS — see _title_case(is_name=True).
+    def _norm_name(v): return _title_case(_clean_display(v), is_name=True) or "NA"
     def _IL(t):   return Paragraph(f"<b>{t}</b>",
                     ParagraphStyle("_pil", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
     def _IV(t):   return Paragraph(_norm(t),
                     ParagraphStyle("_piv", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
+    def _IVN(t):  return Paragraph(_norm_name(t),
+                    ParagraphStyle("_pivn", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
     def _IR(t):   return Paragraph(_raw(t),
                     ParagraphStyle("_pir", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
     def _IC():    return Paragraph("<b>:</b>",
@@ -3371,7 +3420,7 @@ def _build_pra_report(case: dict, S: dict) -> list:
     # entries (PIN, dates) are short — this shifts the right block rightward.
     info_col_w = [cw*0.150, cw*0.016, cw*0.380, cw*0.020, cw*0.232, cw*0.016, cw*0.186]
     info_rows = [
-        [_IL("Patient name"),    _IC(), _IV(patient.get("name","")),
+        [_IL("Patient name"),    _IC(), _IVN(patient.get("name","")),
          _E(), _IL("PIN"),                    _IC(), _IR(patient.get("pin",""))],
         [_IL("Gender"),          _IC(), _IV(patient.get("gender","")),
          _E(), _IL("Sample Number"),          _IC(), _IR(patient.get("sample_number",""))],
@@ -3379,7 +3428,7 @@ def _build_pra_report(case: dict, S: dict) -> list:
          _E(), _IL("Sample collection date"), _IC(), _IR(patient.get("collection_date",""))],
         [_IL("Specimen"),        _IC(), _IV(patient.get("specimen","") or "Serum"),
          _E(), _IL("Sample receipt date"),    _IC(), _IR(patient.get("receipt_date",""))],
-        [_IL("Hospital/Clinic"), _IC(), _IV(patient.get("hospital_clinic","")),
+        [_IL("Hospital/Clinic"), _IC(), _IVN(patient.get("hospital_clinic","")),
          _E(), _IL("Report date"),            _IC(), _IR(patient.get("report_date",""))],
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
@@ -3416,7 +3465,7 @@ def _build_pra_report(case: dict, S: dict) -> list:
 
     # ── Test indication ────────────────────────────────────────────────────────
     _section("Test indication")
-    _pname = _title_case(_clean_display(patient.get("name", ""))) or "The patient"
+    _pname = _title_case(_clean_display(patient.get("name", "")), is_name=True) or "The patient"
     elems.append(Paragraph(
         f"{_pname} has been referred for Panel Reactive Antibodies Class {cls}", _body_s))
     elems.append(Spacer(1, 4*mm))
@@ -3506,6 +3555,9 @@ def _build_flow_report(case: dict, S: dict) -> list:
             textColor=color, alignment=align, leading=leading or size + 2))
 
     def _norm(val): return _title_case(_clean_display(val)) or "NA"
+    # Name/place fields (patient/donor name, hospital/clinic) are always re-cased
+    # even when typed in ALL CAPS — see _title_case(is_name=True).
+    def _norm_name(val): return _title_case(_clean_display(val), is_name=True) or "NA"
     def _raw(val):  return _clean_display(val) or "NA"
 
     def _color_hex(c):
@@ -3538,7 +3590,7 @@ def _build_flow_report(case: dict, S: dict) -> list:
 
     def IV_name(text, col_w_pts):
         """Render a name on one line; auto-shrink font (min 8pt) if it would wrap."""
-        display = _norm(text)
+        display = _norm_name(text)
         avail = col_w_pts - 6  # leave room for cell padding
         fn, fs = val_s.fontName, val_s.fontSize
         w = pdfmetrics.stringWidth(display, fn, fs)
@@ -3558,7 +3610,7 @@ def _build_flow_report(case: dict, S: dict) -> list:
         # Hospital/Clinic value renders at full font; a long name wraps onto an
         # extra line (see _fit_one_line) and the row grows taller rather than the
         # text being shrunk to fit a single line.
-        [IL("Hospital/Clinic"), IC(), _fit_one_line(_norm(patient.get("hospital_clinic","")), info_col_w[2], val_s), E(), IL("Report date"), IC(), IR(donor.get("report_date",""))],
+        [IL("Hospital/Clinic"), IC(), _fit_one_line(_norm_name(patient.get("hospital_clinic","")), info_col_w[2], val_s), E(), IL("Report date"), IC(), IR(donor.get("report_date",""))],
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
     info_t.setStyle(TableStyle([
@@ -3790,10 +3842,15 @@ def _build_kir_report(case: dict, S: dict) -> list:
 
     def _raw(v):  return _clean_display(v) or "NA"
     def _norm(v): return _title_case(_clean_display(v)) or "NA"
+    # Name/place fields (patient name, hospital/clinic) are always re-cased
+    # even when typed in ALL CAPS — see _title_case(is_name=True).
+    def _norm_name(v): return _title_case(_clean_display(v), is_name=True) or "NA"
     def _IL(t):   return Paragraph(f"<b>{t}</b>",
                     ParagraphStyle("_kil", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
     def _IV(t):   return Paragraph(_norm(t),
                     ParagraphStyle("_kiv", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
+    def _IVN(t):  return Paragraph(_norm_name(t),
+                    ParagraphStyle("_kivn", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
     def _IR(t):   return Paragraph(_raw(t),
                     ParagraphStyle("_kir", fontName=F_BOLD, fontSize=10, textColor=BLACK, leading=12))
     def _IC():    return Paragraph("<b>:</b>",
@@ -3806,7 +3863,7 @@ def _build_kir_report(case: dict, S: dict) -> list:
     # ── Info table ─────────────────────────────────────────────────────────────
     info_col_w = [cw*0.167, cw*0.016, cw*0.340, cw*0.020, cw*0.225, cw*0.016, cw*0.216]
     info_rows = [
-        [_IL("Patient name"),    _IC(), _IV(patient.get("name","")),
+        [_IL("Patient name"),    _IC(), _IVN(patient.get("name","")),
          _E(), _IL("PIN"),                    _IC(), _IR(patient.get("pin",""))],
         [_IL("Gender/ Age"),     _IC(), _IR(_normalize_age(patient.get("gender_age",""))),
          _E(), _IL("Sample Number"),          _IC(), _IR(patient.get("sample_number",""))],
@@ -3814,7 +3871,7 @@ def _build_kir_report(case: dict, S: dict) -> list:
          _E(), _IL("Sample collection date"), _IC(), _IR(patient.get("collection_date",""))],
         [_IL("Specimen"),        _IC(), _IV(patient.get("specimen","") or "Blood EDTA"),
          _E(), _IL("Sample receipt date"),    _IC(), _IR(patient.get("receipt_date",""))],
-        [_IL("Hospital/Clinic"), _IC(), _IV(patient.get("hospital_clinic","")),
+        [_IL("Hospital/Clinic"), _IC(), _IVN(patient.get("hospital_clinic","")),
          _E(), _IL("Report date"),            _IC(), _IR(patient.get("report_date",""))],
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
