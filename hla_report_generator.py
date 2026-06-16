@@ -98,6 +98,21 @@ REPORT_TEMPLATES = [
         "default_path": os.path.join(_TEMPLATE_DIR, "HLA fertility _RPL_WITH LOGO.pdf"),
     },
     {
+        "name":         "Single RPL",
+        "report_type":  "single_rpl",
+        "default_path": os.path.join(_TEMPLATE_DIR, ""),
+    },
+    {
+        "name":         "Single Locus",
+        "report_type":  "single_locus",
+        "default_path": os.path.join(_TEMPLATE_DIR, ""),
+    },
+    {
+        "name":         "HLA-C",
+        "report_type":  "hla_c",
+        "default_path": os.path.join(_TEMPLATE_DIR, ""),
+    },
+    {
         "name":         "HLA Typing High Resolution (Transplant Donor)",
         "report_type":  "transplant_donor",
         "default_path": os.path.join(_TEMPLATE_DIR, "Dummy_NGS High Resolution 28.10.2025.pdf"),
@@ -164,6 +179,9 @@ RTYPE_TO_TEMPLATE = {t["report_type"]: t["name"]        for t in REPORT_TEMPLATE
 DEFAULT_SIG_COUNTS = {
     "single_hla":       3,
     "rpl_couple":       2,
+    "single_rpl":       2,
+    "single_locus":     2,
+    "hla_c":            2,
     "transplant_donor": 2,
     "ngs_photo":        2,
     "cdc_crossmatch":   2,
@@ -600,6 +618,7 @@ class HLAReportGeneratorApp(QMainWindow):
         self._std_pat_group = pat_group   # ref for show/hide when switching templates
         pat_form  = QFormLayout(); pat_group.setLayout(pat_form)
         pat_form.setSpacing(1); pat_form.setContentsMargins(4, 2, 4, 2)
+        self._manual_pat_form = pat_form   # ref for label lookups (e.g. Specimen toggle)
         scroll_layout.addWidget(pat_group)
 
         self.f = {}
@@ -627,6 +646,46 @@ class HLAReportGeneratorApp(QMainWindow):
             if key == "diagnosis":
                 w.textChanged.connect(self._auto_detect_manual_template)
             w.textChanged.connect(self._on_manual_field_debounced)
+
+        # Locus selector — only shown for Single Locus template (row 0, before Patient Name)
+        _LOCI = ["A", "B", "C", "DRB1", "DRB3", "DRB4", "DRB5",
+                 "DQA1", "DQB1", "DPA1", "DPB1", "E", "F", "G"]
+        _locus_lbl_w  = QLabel("Locus:")
+        _locus_cmb_w  = ClickOnlyComboBox()
+        _locus_cmb_w.addItems(_LOCI)
+        _locus_cmb_w.setFixedHeight(24)
+        _locus_cmb_w.currentIndexChanged.connect(self._on_manual_field_debounced)
+        _locus_cmb_w.currentIndexChanged.connect(self._update_manual_rpl_visibility)
+        pat_form.insertRow(0, _locus_lbl_w, _locus_cmb_w)
+        self._manual_locus_row = (_locus_lbl_w, _locus_cmb_w)
+        _locus_lbl_w.setVisible(False); _locus_cmb_w.setVisible(False)
+
+        # Relationship stated/Claimed — only shown for Single RPL template
+        _rel_lbl_w = QLabel("Relationship stated/Claimed:")
+        _rel_fld_w = QLineEdit("NA"); _rel_fld_w.setMaximumHeight(24)
+        self.f["relationship"] = _rel_fld_w
+        _rel_fld_w.textChanged.connect(self._on_manual_field_debounced)
+        pat_form.insertRow(2, _rel_lbl_w, _rel_fld_w)
+        self._manual_relationship_row = (_rel_lbl_w, _rel_fld_w)
+        _rel_lbl_w.setVisible(False); _rel_fld_w.setVisible(False)
+
+        # Specimen dropdown — only shown for HLA-C template, replaces the free-text
+        # Specimen field with a fixed choice (keeps self.f["specimen"] in sync so
+        # every existing collect/save/load path that reads it keeps working).
+        _hc_spec_lbl_w = QLabel("Specimen:")
+        _hc_spec_cmb_w = ClickOnlyComboBox()
+        _hc_spec_cmb_w.addItems(["Peripheral blood", "DNA (POC)"])
+        _hc_spec_cmb_w.setFixedHeight(24)
+        def _on_hc_specimen_changed(text):
+            self.f["specimen"].blockSignals(True)
+            self.f["specimen"].setText(text)
+            self.f["specimen"].blockSignals(False)
+            self._on_manual_field_debounced()
+        _hc_spec_cmb_w.currentTextChanged.connect(_on_hc_specimen_changed)
+        _spec_row, _ = pat_form.getWidgetPosition(self.f["specimen"])
+        pat_form.insertRow(_spec_row + 1, _hc_spec_lbl_w, _hc_spec_cmb_w)
+        self._manual_hc_specimen_row = (_hc_spec_lbl_w, _hc_spec_cmb_w)
+        _hc_spec_lbl_w.setVisible(False); _hc_spec_cmb_w.setVisible(False)
 
         # Patient photo upload — only shown for the "HLA (NGS with Photo)" template.
         self._std_pat_photo_bytes = None
@@ -714,6 +773,55 @@ class HLAReportGeneratorApp(QMainWindow):
 
         scroll_layout.addWidget(self._manual_rpl_group)
         self._manual_rpl_group.setVisible(False)
+
+        # ── Single RPL Reference (shown only when Single RPL template selected) ──
+        self._manual_single_rpl_group = QGroupBox("RPL Reference")
+        srpl_form = QFormLayout(); self._manual_single_rpl_group.setLayout(srpl_form)
+        srpl_form.setSpacing(1); srpl_form.setContentsMargins(4, 2, 4, 2)
+        self._manual_srpl_hla_c_w = QLineEdit()
+        self._manual_srpl_hla_c_w.setMaximumHeight(24)
+        srpl_form.addRow("HLA-C Type (Maternal/Paternal):", self._manual_srpl_hla_c_w)
+        self._manual_srpl_hla_c_w.textChanged.connect(self._on_manual_field_debounced)
+        scroll_layout.addWidget(self._manual_single_rpl_group)
+        self._manual_single_rpl_group.setVisible(False)
+
+        # ── Single Locus (shown only when Single Locus template selected) ────────
+        self._manual_single_locus_group = QGroupBox("Single Locus Result")
+        sl_form = QFormLayout(); self._manual_single_locus_group.setLayout(sl_form)
+        sl_form.setSpacing(1); sl_form.setContentsMargins(4, 2, 4, 2)
+        self._sl_allele1_w = QLineEdit(); self._sl_allele1_w.setMaximumHeight(24)
+        self._sl_allele1_w.setPlaceholderText("e.g. 15:18")
+        sl_form.addRow("Allele 1:", self._sl_allele1_w)
+        self._sl_allele1_w.textChanged.connect(self._on_manual_field_debounced)
+        self._sl_allele2_w = QLineEdit(); self._sl_allele2_w.setMaximumHeight(24)
+        self._sl_allele2_w.setPlaceholderText("e.g. 18:01")
+        sl_form.addRow("Allele 2:", self._sl_allele2_w)
+        self._sl_allele2_w.textChanged.connect(self._on_manual_field_debounced)
+        self._sl_note_w = QLineEdit(); self._sl_note_w.setMaximumHeight(24)
+        self._sl_note_w.setPlaceholderText("e.g. Negative for HLA-B*15:02  (optional)")
+        sl_form.addRow("Note (optional):", self._sl_note_w)
+        self._sl_note_w.textChanged.connect(self._on_manual_field_debounced)
+        scroll_layout.addWidget(self._manual_single_locus_group)
+        self._manual_single_locus_group.setVisible(False)
+
+        # ── HLA-C (shown only when HLA-C template selected) ──────────────────────
+        self._manual_hla_c_group = QGroupBox("HLA-C Result")
+        hc_form = QFormLayout(); self._manual_hla_c_group.setLayout(hc_form)
+        hc_form.setSpacing(1); hc_form.setContentsMargins(4, 2, 4, 2)
+        self._hc_allele1_w = QLineEdit(); self._hc_allele1_w.setMaximumHeight(24)
+        self._hc_allele1_w.setPlaceholderText("e.g. 04:01")
+        hc_form.addRow("Allele 1:", self._hc_allele1_w)
+        self._hc_allele1_w.textChanged.connect(self._on_manual_field_debounced)
+        self._hc_allele2_w = QLineEdit(); self._hc_allele2_w.setMaximumHeight(24)
+        self._hc_allele2_w.setPlaceholderText("e.g. 12:03")
+        hc_form.addRow("Allele 2:", self._hc_allele2_w)
+        self._hc_allele2_w.textChanged.connect(self._on_manual_field_debounced)
+        self._hc_remark_w = QLineEdit(); self._hc_remark_w.setMaximumHeight(24)
+        self._hc_remark_w.setPlaceholderText("e.g. C2, C1")
+        hc_form.addRow("Maternal HLA-C Type:", self._hc_remark_w)
+        self._hc_remark_w.textChanged.connect(self._on_manual_field_debounced)
+        scroll_layout.addWidget(self._manual_hla_c_group)
+        self._manual_hla_c_group.setVisible(False)
 
         # ── CDC Patient Information (shown only when CDC template selected) ──────
         self._manual_photo_bytes = {}   # {"patient": bytes, "donor": bytes}
@@ -1495,9 +1603,11 @@ class HLAReportGeneratorApp(QMainWindow):
         hla_form.setSpacing(1); hla_form.setContentsMargins(4, 2, 4, 2)
         scroll_layout.addWidget(hla_group)
         self.hla_pat = {}
+        self._hla_pat_rows = {}   # {locus: (label_widget, row_widget)} — for single-locus filtering
         for locus in HLA_LOCI:
             row_w, a1, a2 = _make_allele_row()
             hla_form.addRow(f"{locus}:", row_w)
+            self._hla_pat_rows[locus] = (hla_form.labelForField(row_w), row_w)
             self.hla_pat[locus] = [a1, a2]
             a1.textChanged.connect(self._on_manual_field_debounced)
             a2.textChanged.connect(self._on_manual_field_debounced)
@@ -2174,6 +2284,36 @@ class HLAReportGeneratorApp(QMainWindow):
                 donors[0]["hla_c_type"]  = new_dc
             case["rpl_reference"] = ref
 
+        # Single RPL: auto-compute Maternal HLA-C Type from patient HLA-C alleles
+        if rtype == "single_rpl":
+            pc = patient["hla"].get("C", [None, None])
+            ct1 = c_supertype(pc[0]) if pc[0] else None
+            ct2 = c_supertype(pc[1]) if pc[1] else None
+            new_pc = ", ".join(filter(None, [ct1, ct2]))
+            # Use manual override if the user typed something; fall back to calculated
+            hla_c_manual = (getattr(self, "_manual_srpl_hla_c_w", None) or QLineEdit()).text().strip()
+            hla_c_val = hla_c_manual or new_pc
+            # Push calculated value back to widget when widget is blank
+            w = getattr(self, "_manual_srpl_hla_c_w", None)
+            if w and not hla_c_manual and new_pc and w.text().strip() != new_pc:
+                w.blockSignals(True); w.setText(new_pc); w.blockSignals(False)
+            patient["hla_c_type"] = hla_c_val
+            case["rpl_reference"] = {"hla_c_patient": hla_c_val}
+
+        # Single Locus: attach locus (from combo), alleles, and optional note
+        if rtype == "single_locus":
+            _lc = getattr(self, "_manual_locus_row", (None, None))[1]
+            case["locus"]      = _lc.currentText() if _lc else "C"
+            case["sl_allele1"] = getattr(self, "_sl_allele1_w", None) and self._sl_allele1_w.text().strip() or ""
+            case["sl_allele2"] = getattr(self, "_sl_allele2_w", None) and self._sl_allele2_w.text().strip() or ""
+            case["sl_note"]    = getattr(self, "_sl_note_w",    None) and self._sl_note_w.text().strip()    or ""
+
+        # HLA-C: attach alleles and maternal HLA-C type remark
+        if rtype == "hla_c":
+            case["hlac_allele1"] = getattr(self, "_hc_allele1_w", None) and self._hc_allele1_w.text().strip() or ""
+            case["hlac_allele2"] = getattr(self, "_hc_allele2_w", None) and self._hc_allele2_w.text().strip() or ""
+            case["hlac_remark"]  = getattr(self, "_hc_remark_w",  None) and self._hc_remark_w.text().strip()  or ""
+
         # Attach CDC-specific fields when applicable
         if rtype == "cdc_crossmatch":
             pf = getattr(self, "_cdc_pat_f",  {})
@@ -2662,14 +2802,69 @@ class HLAReportGeneratorApp(QMainWindow):
         is_lx_check   = rtype == "luminex_typing"
         is_kir_check  = rtype == "kir_genotyping"
         is_pra_check  = rtype in ("pra_class1", "pra_class2")
-        for _grp in ("_std_pat_group", "_std_hla_group", "_std_donors_outer"):
+        # Single Locus / HLA-C use their own dedicated allele fields — the generic
+        # multi-locus "HLA Results — Patient" grid has no use for these templates.
+        is_sl_or_hc   = rtype in ("single_locus", "hla_c")
+        for _grp in ("_std_pat_group", "_std_donors_outer"):
             if hasattr(self, _grp):
                 getattr(self, _grp).setVisible(
                     not is_cdc and not is_dsa and not is_sab_check
                     and not is_flow_check and not is_lx_check and not is_kir_check
                     and not is_pra_check)
-        # RPL reference — only for rpl_couple, only within standard form
+        if hasattr(self, "_std_hla_group"):
+            self._std_hla_group.setVisible(
+                not is_cdc and not is_dsa and not is_sab_check
+                and not is_flow_check and not is_lx_check and not is_kir_check
+                and not is_pra_check and not is_sl_or_hc)
+        # RPL reference — only for rpl_couple (full fields) or single_rpl (HLA-C only)
         self._manual_rpl_group.setVisible(rtype == "rpl_couple")
+        if hasattr(self, "_manual_single_rpl_group"):
+            self._manual_single_rpl_group.setVisible(rtype == "single_rpl")
+        if hasattr(self, "_manual_single_locus_group"):
+            self._manual_single_locus_group.setVisible(rtype == "single_locus")
+        if hasattr(self, "_manual_locus_row"):
+            _ll, _lc = self._manual_locus_row
+            _ll.setVisible(rtype == "single_locus")
+            _lc.setVisible(rtype == "single_locus")
+        if hasattr(self, "_manual_hla_c_group"):
+            self._manual_hla_c_group.setVisible(rtype == "hla_c")
+        # Specimen — HLA-C uses a fixed dropdown instead of the free-text field
+        if hasattr(self, "_manual_hc_specimen_row"):
+            _is_hc = rtype == "hla_c"
+            _hcl, _hcc = self._manual_hc_specimen_row
+            _hcl.setVisible(_is_hc)
+            _hcc.setVisible(_is_hc)
+            _spec_lbl = self._manual_pat_form.labelForField(self.f["specimen"])
+            if _spec_lbl is not None:
+                _spec_lbl.setVisible(not _is_hc)
+            self.f["specimen"].setVisible(not _is_hc)
+            if _is_hc:
+                _cur = self.f["specimen"].text().strip()
+                _idx = _hcc.findText(_cur)
+                _hcc.blockSignals(True)
+                _hcc.setCurrentIndex(_idx if _idx >= 0 else 0)
+                _hcc.blockSignals(False)
+                if _idx < 0:
+                    self.f["specimen"].setText(_hcc.currentText())
+        # HLA Results — Patient: for single-locus-style templates, show only the
+        # row matching the active locus instead of every locus in HLA_LOCI.
+        if hasattr(self, "_hla_pat_rows"):
+            _only_locus = None
+            if rtype == "single_locus":
+                _lc = getattr(self, "_manual_locus_row", (None, None))[1]
+                _only_locus = _lc.currentText() if _lc else None
+            elif rtype == "hla_c":
+                _only_locus = "C"
+            for _locus, (_lbl_w, _row_w) in self._hla_pat_rows.items():
+                _visible = _only_locus is None or _locus == _only_locus
+                if _lbl_w is not None:
+                    _lbl_w.setVisible(_visible)
+                _row_w.setVisible(_visible)
+        # Relationship field — only for single_rpl
+        if hasattr(self, "_manual_relationship_row"):
+            _rl, _rf = self._manual_relationship_row
+            _rl.setVisible(rtype == "single_rpl")
+            _rf.setVisible(rtype == "single_rpl")
         # CDC form groups — only for CDC
         for _grp in ("_cdc_pat_group", "_cdc_don_group", "_cdc_res_group"):
             if hasattr(self, _grp):
@@ -3166,6 +3361,25 @@ class HLAReportGeneratorApp(QMainWindow):
             if entry.get("photo_bytes"):
                 _d["photo_b64"] = base64.b64encode(entry["photo_bytes"]).decode("ascii")
             saved_donors.append(_d)
+        _rpl_ref_save = {k: w.text().strip() for k, w in self._manual_rpl_fields.items()}
+        if rtype == "single_rpl" and hasattr(self, "_manual_srpl_hla_c_w"):
+            _rpl_ref_save["hla_c_patient"] = self._manual_srpl_hla_c_w.text().strip()
+        _sl_save = {}
+        if rtype == "single_locus":
+            _lc = getattr(self, "_manual_locus_row", (None, None))[1]
+            _sl_save = {
+                "locus":      _lc.currentText() if _lc else "C",
+                "sl_allele1": getattr(self, "_sl_allele1_w", None) and self._sl_allele1_w.text().strip() or "",
+                "sl_allele2": getattr(self, "_sl_allele2_w", None) and self._sl_allele2_w.text().strip() or "",
+                "sl_note":    getattr(self, "_sl_note_w",    None) and self._sl_note_w.text().strip()    or "",
+            }
+        _hc_save = {}
+        if rtype == "hla_c":
+            _hc_save = {
+                "hlac_allele1": getattr(self, "_hc_allele1_w", None) and self._hc_allele1_w.text().strip() or "",
+                "hlac_allele2": getattr(self, "_hc_allele2_w", None) and self._hc_allele2_w.text().strip() or "",
+                "hlac_remark":  getattr(self, "_hc_remark_w",  None) and self._hc_remark_w.text().strip()  or "",
+            }
         data = {
             "patient_fields": {k: w.text().strip() for k, w in self.f.items()},
             "report_type": rtype,
@@ -3176,7 +3390,9 @@ class HLAReportGeneratorApp(QMainWindow):
             "sig_name_overrides": {str(k): v for k, v in self._manual_sig_name_overrides.items()},
             "nabl":            self._manual_nabl_chk.isChecked(),
             "report_settings": {k: w.text().strip() for k, w in self._manual_report_settings.items()},
-            "rpl_reference":   {k: w.text().strip() for k, w in self._manual_rpl_fields.items()},
+            "rpl_reference":   _rpl_ref_save,
+            "single_locus":    _sl_save,
+            "hla_c":           _hc_save,
         }
         if getattr(self, "_std_pat_photo_bytes", None):
             data["patient_photo_b64"] = base64.b64encode(self._std_pat_photo_bytes).decode("ascii")
@@ -3374,6 +3590,32 @@ class HLAReportGeneratorApp(QMainWindow):
             for k, v in data.get("rpl_reference", {}).items():
                 if k in self._manual_rpl_fields:
                     self._manual_rpl_fields[k].setText(str(v))
+            # Restore single_rpl HLA-C Type
+            _rpl_ref_loaded = data.get("rpl_reference", {})
+            if data.get("report_type") == "single_rpl" and hasattr(self, "_manual_srpl_hla_c_w"):
+                self._manual_srpl_hla_c_w.setText(str(_rpl_ref_loaded.get("hla_c_patient", "")))
+            # Restore single_locus fields
+            if data.get("report_type") == "single_locus":
+                _sl_loaded = data.get("single_locus", {})
+                _lc = getattr(self, "_manual_locus_row", (None, None))[1]
+                if _lc:
+                    _idx = _lc.findText(_sl_loaded.get("locus", "C"))
+                    if _idx >= 0: _lc.setCurrentIndex(_idx)
+                if hasattr(self, "_sl_allele1_w"):
+                    self._sl_allele1_w.setText(str(_sl_loaded.get("sl_allele1", "")))
+                if hasattr(self, "_sl_allele2_w"):
+                    self._sl_allele2_w.setText(str(_sl_loaded.get("sl_allele2", "")))
+                if hasattr(self, "_sl_note_w"):
+                    self._sl_note_w.setText(str(_sl_loaded.get("sl_note", "")))
+            # Restore hla_c fields
+            if data.get("report_type") == "hla_c":
+                _hc_loaded = data.get("hla_c", {})
+                if hasattr(self, "_hc_allele1_w"):
+                    self._hc_allele1_w.setText(str(_hc_loaded.get("hlac_allele1", "")))
+                if hasattr(self, "_hc_allele2_w"):
+                    self._hc_allele2_w.setText(str(_hc_loaded.get("hlac_allele2", "")))
+                if hasattr(self, "_hc_remark_w"):
+                    self._hc_remark_w.setText(str(_hc_loaded.get("hlac_remark", "")))
             # Restore CDC/DSA/Flow-specific form fields
             _rtype = data.get("report_type", "single_hla")
             if _rtype == "cdc_crossmatch":
@@ -3837,6 +4079,8 @@ class HLAReportGeneratorApp(QMainWindow):
     def _populate_bulk_list(self):
         self.bulk_list.clear()
         colors = {"single_hla": "#E8F5E9", "rpl_couple": "#FFF3E0",
+                  "single_rpl": "#FCE4EC", "single_locus": "#F3E5F5",
+                  "hla_c": "#E0F7FA",
                   "transplant_donor": "#E3F2FD", "ngs_photo": "#E1F5FE"}
         for i, case in enumerate(self.cases):
             p      = case["patient"]
@@ -3952,12 +4196,31 @@ class HLAReportGeneratorApp(QMainWindow):
         ]
         for key, lbl in PAT_FIELDS:
             _def = "NA" if key == "hospital_mr_no" else ""
+            if key == "specimen" and case.get("report_type") == "hla_c":
+                w = ClickOnlyComboBox()
+                w.addItems(["Peripheral blood", "DNA (POC)"])
+                _cur_spec = str(p.get(key, "") or "Peripheral blood")
+                _si = w.findText(_cur_spec)
+                w.setCurrentIndex(_si if _si >= 0 else 0)
+                w.setFixedHeight(24)
+                w.currentTextChanged.connect(self._on_bulk_field_debounced)
+                self._bulk_fields[key] = w
+                pat_form.addRow(lbl + ":", w)
+                continue
             w = QLineEdit(str(p.get(key, _def) or _def))
             w.setFixedHeight(24)
             if "date" in key.lower(): w.setPlaceholderText("DD-MM-YYYY")
             w.textChanged.connect(self._on_bulk_field_debounced)
             self._bulk_fields[key] = w
             pat_form.addRow(lbl + ":", w)
+
+        # Relationship stated/Claimed — only for Single RPL
+        if case.get("report_type") == "single_rpl":
+            _rel_w = QLineEdit(str(p.get("relationship", "NA") or "NA"))
+            _rel_w.setFixedHeight(24)
+            _rel_w.textChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_fields["relationship"] = _rel_w
+            pat_form.addRow("Relationship stated/Claimed:", _rel_w)
 
         _nabl_default = case.get("nabl", self.qsettings.value("nabl_stamp", True, type=bool))
         self._bulk_nabl_chk = QCheckBox("NABL Accreditation")
@@ -4075,20 +4338,27 @@ class HLAReportGeneratorApp(QMainWindow):
 
         # ── RPL Reference Section (Conditional) ─────────────────────────────
         self._bulk_rpl_fields = {}
-        if case.get("report_type") == "rpl_couple":
-            rpl_group = QGroupBox("RPL / Fertility Reference (calculated, editable)")
+        _rtype_now = case.get("report_type", "")
+        if _rtype_now in ("rpl_couple", "single_rpl"):
+            _is_srpl = _rtype_now == "single_rpl"
+            rpl_group = QGroupBox(
+                "RPL Reference — Maternal HLA-C Type" if _is_srpl
+                else "RPL / Fertility Reference (calculated, editable)")
             rpl_form  = QFormLayout(); rpl_group.setLayout(rpl_form)
             rpl_form.setSpacing(1)
             rpl_form.setContentsMargins(4, 4, 4, 2)
             ref = case.get("rpl_reference", {})
-            RPL_FIELDS = [
-                ("match_str",        "Match (Overall)"),
-                ("match_pct",        "Overall %"),
-                ("class2_pct",       "Class-II %"),
-                ("hla_sharing_rif",  "HLA Sharing (RIF)"),
-                ("hla_c_patient",    "Maternal HLA-C Type"),
-                ("hla_c_donor",      "Paternal HLA-C Type"),
-            ]
+            RPL_FIELDS = (
+                [("hla_c_patient", "HLA-C Type (Maternal/Paternal)")]
+                if _is_srpl else [
+                    ("match_str",       "Match (Overall)"),
+                    ("match_pct",       "Overall %"),
+                    ("class2_pct",      "Class-II %"),
+                    ("hla_sharing_rif", "HLA Sharing (RIF)"),
+                    ("hla_c_patient",   "Maternal HLA-C Type"),
+                    ("hla_c_donor",     "Paternal HLA-C Type"),
+                ]
+            )
             for key, lbl in RPL_FIELDS:
                 w = QLineEdit(str(ref.get(key, "")))
                 w.setFixedHeight(24)
@@ -4096,20 +4366,70 @@ class HLAReportGeneratorApp(QMainWindow):
                 self._bulk_rpl_fields[key] = w
                 rpl_form.addRow(lbl + ":", w)
 
-            # Auto-calculate Overall % whenever Match (Overall) changes
-            def _on_match_str_changed(text, _fields=self._bulk_rpl_fields):
-                import re as _re
-                m = _re.search(r'(\d+)\s+of\s+(\d+)', text, _re.I)
-                pct_w = _fields.get("match_pct")
-                if m and pct_w:
-                    n, total = int(m.group(1)), int(m.group(2))
-                    pct = round(n / total * 100) if total else 0
-                    pct_w.blockSignals(True)
-                    pct_w.setText(f"{pct}%")
-                    pct_w.blockSignals(False)
-            self._bulk_rpl_fields["match_str"].textChanged.connect(_on_match_str_changed)
+            if not _is_srpl:
+                # Auto-calculate Overall % whenever Match (Overall) changes
+                def _on_match_str_changed(text, _fields=self._bulk_rpl_fields):
+                    import re as _re
+                    m = _re.search(r'(\d+)\s+of\s+(\d+)', text, _re.I)
+                    pct_w = _fields.get("match_pct")
+                    if m and pct_w:
+                        n, total = int(m.group(1)), int(m.group(2))
+                        pct = round(n / total * 100) if total else 0
+                        pct_w.blockSignals(True)
+                        pct_w.setText(f"{pct}%")
+                        pct_w.blockSignals(False)
+                self._bulk_rpl_fields["match_str"].textChanged.connect(_on_match_str_changed)
 
             self._bulk_editor_layout.addWidget(rpl_group)
+
+        # ── Single Locus result fields ────────────────────────────────────────
+        self._bulk_sl_fields = {}
+        if _rtype_now == "single_locus":
+            sl_group = QGroupBox("Single Locus Result")
+            sl_form  = QFormLayout(); sl_group.setLayout(sl_form)
+            sl_form.setSpacing(1); sl_form.setContentsMargins(4, 4, 4, 2)
+            # Locus — dropdown
+            _LOCI_BULK = ["A", "B", "C", "DRB1", "DRB3", "DRB4", "DRB5",
+                          "DQA1", "DQB1", "DPA1", "DPB1", "E", "F", "G"]
+            _sl_locus_combo = ClickOnlyComboBox()
+            _sl_locus_combo.addItems(_LOCI_BULK)
+            _cur_locus = str(case.get("locus", "C"))
+            _li = _sl_locus_combo.findText(_cur_locus)
+            if _li >= 0: _sl_locus_combo.setCurrentIndex(_li)
+            _sl_locus_combo.setFixedHeight(24)
+            _sl_locus_combo.currentIndexChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_sl_fields["locus"] = _sl_locus_combo
+            sl_form.addRow("Locus:", _sl_locus_combo)
+            # Alleles and optional note — plain text fields
+            for key, lbl, default in [
+                ("sl_allele1", "Allele 1", case.get("sl_allele1", "")),
+                ("sl_allele2", "Allele 2", case.get("sl_allele2", "")),
+                ("sl_note",    "Note (optional)", case.get("sl_note", "")),
+            ]:
+                w = QLineEdit(str(default))
+                w.setFixedHeight(24)
+                w.textChanged.connect(self._on_bulk_field_debounced)
+                self._bulk_sl_fields[key] = w
+                sl_form.addRow(lbl + ":", w)
+            self._bulk_editor_layout.addWidget(sl_group)
+
+        # ── HLA-C result fields ─────────────────────────────────────────────────
+        self._bulk_hc_fields = {}
+        if _rtype_now == "hla_c":
+            hc_group = QGroupBox("HLA-C Result")
+            hc_form  = QFormLayout(); hc_group.setLayout(hc_form)
+            hc_form.setSpacing(1); hc_form.setContentsMargins(4, 4, 4, 2)
+            for key, lbl, default in [
+                ("hlac_allele1", "Allele 1", case.get("hlac_allele1", "")),
+                ("hlac_allele2", "Allele 2", case.get("hlac_allele2", "")),
+                ("hlac_remark",  "Maternal HLA-C Type", case.get("hlac_remark", "")),
+            ]:
+                w = QLineEdit(str(default))
+                w.setFixedHeight(24)
+                w.textChanged.connect(self._on_bulk_field_debounced)
+                self._bulk_hc_fields[key] = w
+                hc_form.addRow(lbl + ":", w)
+            self._bulk_editor_layout.addWidget(hc_group)
 
         self._bulk_editor_layout.addWidget(hla_pat_group)
 
@@ -5332,9 +5652,9 @@ class HLAReportGeneratorApp(QMainWindow):
 
         if not self._bulk_fields: return
 
-        # Patient fields — write every text widget back to case["patient"]
+        # Patient fields — write every text/combo widget back to case["patient"]
         for key, w in self._bulk_fields.items():
-            p[key] = w.text().strip()
+            p[key] = self._widget_value(w)
 
         # Patient HLA
         if not isinstance(p.get("hla"), dict): p["hla"] = {}
@@ -5374,15 +5694,25 @@ class HLAReportGeneratorApp(QMainWindow):
                 if v1 or v2: d["hla"][locus] = [v1, v2]
                 else:        d["hla"].pop(locus, None)
 
+        # Single Locus manual fields
+        if case["report_type"] == "single_locus" and hasattr(self, "_bulk_sl_fields"):
+            for key, w in self._bulk_sl_fields.items():
+                case[key] = w.currentText() if isinstance(w, QComboBox) else w.text().strip()
+
+        # HLA-C manual fields
+        if case["report_type"] == "hla_c" and hasattr(self, "_bulk_hc_fields"):
+            for key, w in self._bulk_hc_fields.items():
+                case[key] = w.text().strip()
+
         # RPL / Fertility manual overrides
-        if case["report_type"] == "rpl_couple" and hasattr(self, "_bulk_rpl_fields"):
+        if case["report_type"] in ("rpl_couple", "single_rpl") and hasattr(self, "_bulk_rpl_fields"):
             if "rpl_reference" not in case: case["rpl_reference"] = {}
             ref = case["rpl_reference"]
             for key, w in self._bulk_rpl_fields.items():
                 ref[key] = w.text().strip()
             # Also sync patient-level hla_c_type used by template
             case["patient"]["hla_c_type"] = ref.get("hla_c_patient", "")
-            if case.get("donors"):
+            if case.get("donors") and case["report_type"] == "rpl_couple":
                 case["donors"][0]["hla_c_type"] = ref.get("hla_c_donor", "")
 
         # ── Real-time Recalculation Logic ───────────────────────────────────
@@ -5401,18 +5731,18 @@ class HLAReportGeneratorApp(QMainWindow):
                 ct1 = c_supertype(pc[0]) if pc[0] else None
                 ct2 = c_supertype(pc[1]) if pc[1] else None
                 new_pc_type = ",".join(filter(None, [ct1, ct2]))
-                
+
                 # Recalculate donor C-type
                 dc = case["donors"][0]["hla"].get("C", [None, None])
                 dt1 = c_supertype(dc[0]) if dc[0] else None
                 dt2 = c_supertype(dc[1]) if dc[1] else None
                 new_dc_type = ",".join(filter(None, [dt1, dt2]))
-                
+
                 # Recalculate Match Stats
                 new_ref = compute_rpl_reference(case["patient"], case["donors"][0])
                 new_ref["hla_c_patient"] = new_pc_type
                 new_ref["hla_c_donor"]   = new_dc_type
-                
+
                 # Update UI fields and data (triggers debounce again, which is fine)
                 if hasattr(self, "_bulk_rpl_fields"):
                     for key, val in new_ref.items():
@@ -5425,6 +5755,19 @@ class HLAReportGeneratorApp(QMainWindow):
                                 case["rpl_reference"][key] = val
                 case["patient"]["hla_c_type"] = new_pc_type
                 case["donors"][0]["hla_c_type"] = new_dc_type
+            elif case["report_type"] == "single_rpl":
+                # Recalculate maternal HLA-C type only
+                pc = case["patient"]["hla"].get("C", [None, None])
+                ct1 = c_supertype(pc[0]) if pc[0] else None
+                ct2 = c_supertype(pc[1]) if pc[1] else None
+                new_pc_type = ", ".join(filter(None, [ct1, ct2]))
+                if hasattr(self, "_bulk_rpl_fields"):
+                    w = self._bulk_rpl_fields.get("hla_c_patient")
+                    if w and w.text().strip() != new_pc_type:
+                        w.blockSignals(True); w.setText(new_pc_type); w.blockSignals(False)
+                if "rpl_reference" not in case: case["rpl_reference"] = {}
+                case["rpl_reference"]["hla_c_patient"] = new_pc_type
+                case["patient"]["hla_c_type"] = new_pc_type
 
         # self._bulk_log(f"Edits applied to case {idx+1}: {case['patient'].get('name','')}")
         # Message removed as per user request (Image 2)
