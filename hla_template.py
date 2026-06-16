@@ -458,6 +458,26 @@ def _merged_drb345(hla: dict) -> list:
     return [None, None]
 
 
+def _split_drb345(hla: dict) -> dict:
+    """Route DRB3/4/5 alleles to correct sub-key for separate column display.
+
+    The manual form stores all three under the 'DRB3' slot with an explicit
+    prefix (e.g. 'DRB5*01:01:01'). Bulk imports store under the correct key
+    already. Parse the allele prefix so the value always lands in the right
+    column ('DRB3', 'DRB4', or 'DRB5') regardless of where it was stored.
+    """
+    out: dict = {}
+    for k in ("DRB3", "DRB4", "DRB5"):
+        v = hla.get(k)
+        if not v or not any(x for x in v if x and str(x).strip()):
+            continue
+        a1 = next((x for x in v if x and str(x).strip()), "")
+        m = re.match(r"(DRB[345])\*", str(a1).strip(), re.IGNORECASE)
+        dest = m.group(1).upper() if m else k
+        out[dest] = v
+    return out
+
+
 def _clean_display(val) -> str:
     """Render layer: replace empty / N/A / any value containing 'Insufficient Data' with em-dash.
     'Insufficient Data' is a substring match (mirrors /insufficient data/i.test(val)).
@@ -1085,13 +1105,18 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
 # Header row → C_HLA_HDR (#F9BE8F).  Data rows → C_HLA_ROW (#F1F2F1).
 # Row labels: "1" and "2" (Calibri-Bold 11).
 
-def _hla_table(person: dict, S: dict, compact: bool = False) -> Table:
+def _hla_table(person: dict, S: dict, compact: bool = False, loci11: bool = False) -> Table:
     LOCI       = ["A", "B", "C", "DRB1", "DQB1", "DPB1"]
-    EXTRA_LOCI = ["DRB345", "DQA1", "DPA1"]
+    EXTRA_LOCI = ["DRB345", "DQA1", "DPA1"] if loci11 else ["DRB3", "DRB4", "DRB5"]
     hla = person.get("hla", {})
+    _drb_split = {} if loci11 else _split_drb345(hla)
 
     def _val(l):
-        return _merged_drb345(hla) if l == "DRB345" else hla.get(l, [None, None])
+        if l == "DRB345":
+            return _merged_drb345(hla)
+        if l in ("DRB3", "DRB4", "DRB5"):
+            return _drb_split.get(l, [None, None])
+        return hla.get(l, [None, None])
 
     loci = [l for l in LOCI if any(hla.get(l, [None, None]))]
     loci += [l for l in EXTRA_LOCI if any(_val(l))]
@@ -1128,6 +1153,7 @@ def _hla_table(person: dict, S: dict, compact: bool = False) -> Table:
     for l in loci:
         al = _val(l)
         if l == "DRB345":
+            # 11-loci combined column: keep locus prefix so reader knows which of DRB3/4/5 it is
             r1.append(HV(al[0] if al and al[0] else "\u2014"))
             r2.append(HV(al[1] if al and len(al) > 1 and al[1] else "\u2014"))
         else:
@@ -1155,7 +1181,7 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
                       patient_name: str = "", force_compact: bool = False,
                       spacing_scale: float = 1.0, extra_inner_gap: float = 0.0,
                       no_compact: bool = False, nabl: bool = False,
-                      show_relationship: bool = False) -> list:
+                      show_relationship: bool = False, loci11: bool = False) -> list:
     _raw_remarks = person.get("remarks", "")
     _remarks_display = _clean_display(_raw_remarks) if _raw_remarks else ""
     # Normalize HLA allele nomenclature in remarks (capitalize and fix formatting)
@@ -1245,7 +1271,7 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
 
     # HLA table + its remarks/match are kept together as ONE unit so the table
     # never lands at the bottom of a page while its remarks spill onto the next.
-    hla_and_tail = [_hla_table(person, S, compact=compact_info), Spacer(1, post_hla_spacer)] + tail
+    hla_and_tail = [_hla_table(person, S, compact=compact_info, loci11=loci11), Spacer(1, post_hla_spacer)] + tail
     elems.append(KeepTogether(hla_and_tail))
 
 
@@ -1654,20 +1680,20 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
     # whenever there's no donor to spread toward or remarks/match text already
     # needs the room. (IMGT/HLA Release still always lands on its own fresh page
     # regardless of this spacing choice — see PageBreakIfNotEmpty below.)
-    _scale, _extra = (1.0, 0.0) if (any_remarks or not donors
-                                     or case.get("report_type") == "loci11") else (2.0, 4.0)
+    _is_loci11 = case.get("report_type") == "loci11"
+    _scale, _extra = (1.0, 0.0) if (any_remarks or not donors or _is_loci11) else (2.0, 4.0)
 
     elems = []
     elems.extend(_ngs_person_block(patient, is_donor=False, match_str="", S=S,
                                    spacing_scale=_scale, extra_inner_gap=_extra, no_compact=True,
-                                   nabl=case.get("nabl", True)))
+                                   nabl=case.get("nabl", True), loci11=_is_loci11))
 
     _p_name = patient.get("name", "")
     for d in donors:
         elems.extend(_ngs_person_block(d, is_donor=True, match_str=d.get("match", ""), S=S,
                                        patient_name=_p_name,
                                        spacing_scale=_scale, extra_inner_gap=_extra, no_compact=True,
-                                       nabl=case.get("nabl", True)))
+                                       nabl=case.get("nabl", True), loci11=_is_loci11))
 
     # Drop the trailing inter-block Spacer left by the last person block — if it
     # doesn't fit on the current page, ReportLab defers it onto the next page,
@@ -1832,13 +1858,18 @@ def _build_ngs_photo(case: dict, S: dict) -> list:
     elems.append(Spacer(1, 1 * mm))
 
     LOCI       = ["A", "B", "C", "DRB1", "DQB1", "DPB1"]
-    EXTRA_LOCI = ["DRB345", "DQA1", "DPA1"]
+    EXTRA_LOCI = ["DRB3", "DRB4", "DRB5"]
 
-    def _has(h, l):
-        return any(_merged_drb345(h)) if l == "DRB345" else any(h.get(l, [None, None]))
-    all_hla = [patient.get("hla", {})] + [d.get("hla", {}) for d in donors]
-    loci = [l for l in LOCI if any(_has(h, l) for h in all_hla)]
-    loci += [l for l in EXTRA_LOCI if any(_has(h, l) for h in all_hla)]
+    # Pre-split DRB3/4/5 for each person so alleles appear under the correct header
+    all_hla  = [patient.get("hla", {})] + [d.get("hla", {}) for d in donors]
+    all_drb  = [_split_drb345(h) for h in all_hla]
+
+    def _has(h, drb, l):
+        if l in ("DRB3", "DRB4", "DRB5"):
+            return any(drb.get(l, [None, None]))
+        return any(h.get(l, [None, None]))
+    loci = [l for l in LOCI if any(_has(h, drb, l) for h, drb in zip(all_hla, all_drb))]
+    loci += [l for l in EXTRA_LOCI if any(_has(h, drb, l) for h, drb in zip(all_hla, all_drb))]
     if not loci:
         loci = LOCI
 
@@ -1847,10 +1878,11 @@ def _build_ngs_photo(case: dict, S: dict) -> list:
 
     def HH(t): return Paragraph(t, S["hla_hdr"])
     def HV(t): return Paragraph(_clean_display(t), S["hla_val"])
-    def _hdr(l): return "HLA DRB3/4/5*" if l == "DRB345" else f"HLA-{l}*"
+    def _hdr(l): return f"HLA-{l}*"
 
     def _person_table(name_label, person, include_header):
-        h = person.get("hla", {})
+        h   = person.get("hla", {})
+        drb = _split_drb345(h)
         rows, extra = [], []
         r = 0
         if include_header:
@@ -1867,14 +1899,9 @@ def _build_ngs_photo(case: dict, S: dict) -> list:
         cls_label = Paragraph("HLA-CLASS<br/>I , II", S["hla_lbl"])
         row1, row2 = [cls_label], [HV("")]
         for l in loci:
-            if l == "DRB345":
-                al = _merged_drb345(h)
-                row1.append(HV(al[0] if al and al[0] else "—"))
-                row2.append(HV(al[1] if al and len(al) > 1 and al[1] else "—"))
-            else:
-                al = h.get(l, [None, None])
-                row1.append(HV(_strip_prefix(al[0]) if al and al[0] else "—"))
-                row2.append(HV(_strip_prefix(al[1]) if al and len(al) > 1 and al[1] else "—"))
+            al = drb.get(l, [None, None]) if l in ("DRB3", "DRB4", "DRB5") else h.get(l, [None, None])
+            row1.append(HV(_strip_prefix(al[0]) if al and al[0] else "—"))
+            row2.append(HV(_strip_prefix(al[1]) if al and len(al) > 1 and al[1] else "—"))
         rows.append(row1); rows.append(row2)
         extra += [("SPAN",       (0, a_r), (0, a_r + 1)),
                   ("BACKGROUND", (0, a_r), (-1, a_r + 1), C_HLA_ROW),
