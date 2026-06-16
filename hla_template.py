@@ -24,7 +24,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT, TA_JUSTIFY
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    Image, HRFlowable, PageBreak, KeepTogether
+    Image, HRFlowable, PageBreak, PageBreakIfNotEmpty, KeepTogether
 )
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -67,7 +67,7 @@ QR_ZONE   = 30 * mm   # blank strip reserved above footer on every page for exte
 # ─── Colour palette — extracted precisely via PyMuPDF from all Manual-Report PDFs ─
 # NGS
 C_NGS_TITLE     = colors.HexColor("#002060")   # NGS title (GillSansMT-Bold 18pt) — exact
-C_INFO_BG       = colors.HexColor("#F1F1F7")   # Patient info ALL cells — exact
+C_INFO_BG       = colors.HexColor("#E2E2E2")   # Patient info ALL cells — grey
 C_HLA_HDR       = colors.HexColor("#FABF8F")   # HLA table header row — exact
 C_HLA_ROW       = colors.HexColor("#F2F2F2")   # HLA data rows — exact
 C_APPROVAL      = colors.HexColor("#2C6BAA")   # "Reviewed and approved by" line — exact
@@ -139,6 +139,93 @@ RPL_DISCLAIMERS = [
     "Anderson Diagnostics and Labs shall not be held liable for clinical decisions "
     "made solely on the basis of this report without clinical correlation.",
 ]
+
+SINGLE_RPL_BACKGROUND = (
+    "The HLA region comprises several genetic loci located on chromosome 6 and it "
+    "contains the most polymorphic genes known in humans. Genes in most HLA loci are "
+    "involved in interactions in the immune system through various mechanisms. So called "
+    "classical HLA class I genes (HLA-A, -B and C) play important roles in "
+    "transplantation immunology. In addition, class I HLA molecules seem to play a role "
+    "in immune interactions of importance to pregnancy. Fetal HLA-C can interact with "
+    "maternal natural killer (NK) cell receptors that may influence the risk of pregnancy "
+    "loss. HLA antigen (HLA)–DRB1 and -DQB1 polymorphisms are associated with most "
+    "autoimmune disorders and studies of HLA-DRB1 polymorphism in RPL patients are thus "
+    "relevant. In previous studies, the HLA-DRB1*03 allele was found with increased "
+    "prevalence in RPL patients."
+)
+SINGLE_RPL_DISCLAIMERS = [
+    "This immunology report is conducted based on the recommendation of the Doctor and "
+    "has to be viewed along with clinical data for interpretation.",
+    "Baseline normal range values for each ligand, cytokine, cell evaluated is from "
+    "patients with similar age-profile and successful live birth.",
+    "Recommendation to clinician for suitability is purely at the discretion of the "
+    "clinician NOT to be construed as a recommendation for treatment.",
+    "Test results released pertain to the specimen submitted and all test results are "
+    "dependent on the quality of sample received by the laboratory.",
+    "Test results should be interpreted in the context of clinical findings, family "
+    "history, and other laboratory data. Misinterpretation of results may occur if the "
+    "information provided is inaccurate or incomplete. Test results may show "
+    "interlaboratory variations.",
+    "Laboratory investigations are only a tool to facilitate arriving at a diagnosis "
+    "and should be clinically correlated by the referring physician.",
+    "This is not a diagnostic report and therefore should be used for Investigational "
+    "Use Only (IUO) or for Clinical research Use Only (RUO) and should be interpreted "
+    "or used exclusively by or under the guidance of a Professional Practitioners- "
+    "including but not limited to, certified physicians, clinicians, dietitians, "
+    "nutritionists, sports therapists and such other persons in similar profession "
+    "having appropriate validation to undertake such practice.",
+]
+
+# ─── Single Locus (Luminex reverse SSO) text constants ──────────────────────
+SINGLE_LOCUS_METHODOLOGY = (
+    "HLA Typing by Luminex technology applies reverse SSO DNA typing method. Target DNA is PCR-amplified using a "
+    "group-specific primer and the PCR product is biotinylated, which allows it to be detected using R-"
+    "Phycoerythrin conjugated Streptavidin (SAPE).",
+    "The PCR product is denatured and allowed to rehybridize complementary DNA probes conjugated to "
+    "fluorescently coded microspheres. A flow analyzer identifies the fluorescent intensity of PE "
+    "(phycoerythrin) on each microsphere. The assignment of the HLA typing is based on the reaction pattern "
+    "compared to patterns associated with published HLA gene sequences.",
+    "The number of nucleotide mismatches with each allele is determined, as well as the number of "
+    "mismatches with the determined phasing data. Mismatches at exons are treated separately. A list of "
+    "alleles is selected with a limited number of mismatches.",
+)
+SINGLE_LOCUS_DISCLAIMER = (
+    "The occurrence of HLA typing results and the number of different allele combinations by a SSO "
+    "method for an individual may change according to the version of the IMGT/HLA database."
+)
+SINGLE_LOCUS_REFERENCES = [
+    "1. Terasaki, PI, Bernoco, F, Park MS, Ozturk G, Iwaki Y. Microdroplet testing for HLA-A, -B, -C, "
+    "and –D antigens. American Journal of Clinical Pathology 69:103-120, 1978.",
+    "2. Slater RD, Parham P. Mutually exclusive public epitomes of HLA-A, B, C Molecules. Human "
+    "Immunology 26: 85-89, 1989.",
+    "3. The Luminex® 100 User’s Manual, Luminex Corporation, PN 89-00002-00-005 Rev. B.",
+    "4. Luminex® FLEXMAP 3D® Hardware User Manual, Luminex Corporation PN 89-00002-00-187.",
+    "5. Ng J, Hurley CK, Baxter-Lowe LA, et al. Large-scale oligonucleotide typing for HLA-DRB1/3/4 and "
+    "HLA-DQB1 is highly accurate, specific, and reliable. Tissue Antigens. 1993; 42: 473-479.",
+    "6. Bodmer JG, Marsh SGE, Albert E, Bodmer WF, Bontrop RE, Dupont B, Erlich HA, Hansen JA, Mach B, "
+    "Mayr WR, Parham P, Petersdorf EW, Sasasuki T, Schreuder GMT, Strominger JL, Svejgaard A, Terasaki "
+    "PI. Nomenclature for factors of the HLA system, 1998. Tissue Antigens, 53, 407-446, 1999. Human "
+    "Immunology, 60, 361-395, 1999. European Journal of Immunogenetics, 26, 81-116, 1999.",
+    "7. Colinas RJ, Bellisario R et al. Multiplexed genotyping of beta-globin variants from PCR-amplified "
+    "newborn blood spot DNA by hybridization with allele-specific oligo deoxynucleotides coupled to an "
+    "array of fluorescent microspheres. Clinical Chemistry 46: 996-998, 2000.",
+]
+
+# ─── HLA-C (fixed-locus, two-page) report constants ───────────────────────────
+HLA_C_METHODOLOGY = (
+    "HLA Typing by Luminex technology applies SSO DNA typing method. Target DNA is PCR-amplified using a "
+    "group-specific primer and the PCR product is biotinylated, which allows it to be detected using R-"
+    "Phycoerythrin conjugated Streptavidin (SAPE).",
+    "The PCR product is denatured and allowed to rehybridize complementary DNA probes conjugated to "
+    "fluorescently coded microspheres. A flow analyzer identifies the fluorescent intensity of PE "
+    "(phycoerythrin) on each microsphere. The assignment of the HLA typing is based on the reaction pattern "
+    "compared to patterns associated with published HLA gene sequences.",
+    "The number of nucleotide mismatches with each allele is determined, as well as the number of "
+    "mismatches with the determined phasing data. Mismatches at exons are treated separately. A list of "
+    "alleles is selected with a limited number of mismatches.",
+)
+HLA_C_DISCLAIMER = SINGLE_LOCUS_DISCLAIMER
+HLA_C_REFERENCES = SINGLE_LOCUS_REFERENCES
 
 # ─── Font registration ────────────────────────────────────────────────────────
 _FONTS_DIR = os.path.join(os.path.dirname(__file__), "assets", "hla", "fonts")
@@ -710,7 +797,7 @@ def _title_case(text: str, is_name: bool = False) -> str:
 _nabl_seal_bytes_cache: bytes | None = None
 
 def _get_nabl_seal_bytes() -> bytes:
-    """Return NABL seal bytes with white background replaced by the table cell grey (#F1F1F7).
+    """Return NABL seal bytes with white background replaced by the table cell grey (C_INFO_BG).
     Result is cached so pixel processing only runs once per process.
     """
     global _nabl_seal_bytes_cache
@@ -721,9 +808,10 @@ def _get_nabl_seal_bytes() -> bytes:
     raw = hla_assets.get_image_bytes(hla_assets.NABL_SEAL_DEMOG_B64)
     img = PILImage.open(io.BytesIO(raw)).convert("RGB")
     data = np.array(img, dtype=np.uint8)
-    # Replace near-white pixels (all channels > 240) with #F1F1F7 — the table cell background
+    # Replace near-white pixels (all channels > 240) with the table cell background colour
+    bg_rgb = [int(round(c * 255)) for c in (C_INFO_BG.red, C_INFO_BG.green, C_INFO_BG.blue)]
     mask = (data[:, :, 0] > 240) & (data[:, :, 1] > 240) & (data[:, :, 2] > 240)
-    data[mask] = [241, 241, 247]
+    data[mask] = bg_rgb
     buf = io.BytesIO()
     PILImage.fromarray(data, "RGB").save(buf, format="JPEG", quality=95)
     _nabl_seal_bytes_cache = buf.getvalue()
@@ -836,7 +924,9 @@ def _ngs_section_bar(text: str, S: dict) -> Table:
 # Widths proportioned from PGTA reference: [108, 12, 161, 108, 12, 89] on 490pt
 # Scaled to CONTENT_W ≈ 510pt: [112, 13, 168, 112, 13, 92]
 
-def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name: str = "", compact: bool = False, nabl: bool = False) -> Table:
+def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name: str = "",
+                    compact: bool = False, nabl: bool = False,
+                    show_relationship: bool = False) -> Table:
     pf = "Donor" if is_donor else "Patient"
     cw = CONTENT_W
 
@@ -897,6 +987,11 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
     if is_donor:
         rel_display = _format_relationship(person.get("relationship", ""), patient_name)
         left_rows.insert(2, [L("Relationship"), C(), V(rel_display)])
+    elif show_relationship:
+        rel_val = person.get("relationship", "") or "NA"
+        left_rows.insert(1, [L("Relationship stated/\nClaimed"), C(), V(rel_val)])
+        hosp_idx     += 1
+        referred_idx += 1
 
     right_rows = [
         [L("PIN"), C(), R(person.get("pin", ""))],
@@ -1059,7 +1154,8 @@ def _hla_table(person: dict, S: dict, compact: bool = False) -> Table:
 def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
                       patient_name: str = "", force_compact: bool = False,
                       spacing_scale: float = 1.0, extra_inner_gap: float = 0.0,
-                      no_compact: bool = False, nabl: bool = False) -> list:
+                      no_compact: bool = False, nabl: bool = False,
+                      show_relationship: bool = False) -> list:
     _raw_remarks = person.get("remarks", "")
     _remarks_display = _clean_display(_raw_remarks) if _raw_remarks else ""
     # Normalize HLA allele nomenclature in remarks (capitalize and fix formatting)
@@ -1123,7 +1219,8 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
     # if it doesn't fit, independent of the HLA table that follows.
     elems = [
         KeepTogether([_ngs_info_table(person, S, is_donor=is_donor, patient_name=patient_name,
-                                      compact=compact_info, nabl=nabl)]),
+                                      compact=compact_info, nabl=nabl,
+                                      show_relationship=show_relationship)]),
         Spacer(1, inner_gap),
     ]
 
@@ -1269,7 +1366,6 @@ def _rpl_couple_table(patient: dict, donor: dict, S: dict, comment_text: str = "
     hosp_row_rpl = next(
         (i for i, lbl in enumerate(p_labels) if "Hospital" in lbl), None)
     style_cmds = [
-        # All cells: plain white, black 0.5pt grid (confirmed by fitz audit — no fills)
         ("BACKGROUND",    (0, 0), (-1, -1),             WHITE),
         ("TEXTCOLOR",     (0, 0), (-1, 0),              BLACK),
         ("ALIGN",         (0, 0), (-1, 0),              "CENTER"),
@@ -1557,7 +1653,8 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
     # like the standard table leaves the patient+donor blocks no longer fitting
     # page 1 together. Use tight spacing for loci11 always, and otherwise
     # whenever there's no donor to spread toward or remarks/match text already
-    # needs the room.
+    # needs the room. (IMGT/HLA Release still always lands on its own fresh page
+    # regardless of this spacing choice — see PageBreakIfNotEmpty below.)
     _scale, _extra = (1.0, 0.0) if (any_remarks or not donors
                                      or case.get("report_type") == "loci11") else (2.0, 4.0)
 
@@ -1573,6 +1670,19 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
                                        spacing_scale=_scale, extra_inner_gap=_extra, no_compact=True,
                                        nabl=case.get("nabl", True)))
 
+    # Drop the trailing inter-block Spacer left by the last person block — if it
+    # doesn't fit on the current page, ReportLab defers it onto the next page,
+    # which then counts as "non-empty" by the time PageBreakIfNotEmpty below is
+    # reached (even though nothing visible was drawn), causing it to force a
+    # second, truly blank page instead of recognizing we're already at the top.
+    while elems and isinstance(elems[-1], Spacer):
+        elems.pop()
+
+    # IMGT/HLA Release + Coverage always starts on a fresh page. PageBreakIfNotEmpty
+    # (unlike a bare PageBreak()) is a no-op when the frame is already empty — so it
+    # won't advance an extra blank page if the patient/donor content already
+    # overflowed onto a new page on its own.
+    elems.append(PageBreakIfNotEmpty())
     elems.extend(_methodology_block(case, S))
     sig_items = _signature_block(signatories, S)
     if sig_items:
@@ -1651,7 +1761,7 @@ def _build_ngs_photo(case: dict, S: dict) -> list:
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
     info_t.setStyle(TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#E8E8E8")),
+        ("BACKGROUND",    (0, 0), (-1, -1), C_INFO_BG),
         ("VALIGN",        (0, 0), (-1, -1), "TOP"),
         ("TOPPADDING",    (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
@@ -1687,7 +1797,7 @@ def _build_ngs_photo(case: dict, S: dict) -> list:
     rel_display = _norm(donor.get("relationship", "")) if donor else "NA"
     p_collect   = _clean(patient.get("collection_date", ""))
     d_collect   = _clean(donor.get("collection_date", ""))
-    _GREY = colors.HexColor("#E8E8E8")
+    _GREY = C_INFO_BG
 
     photo_rows = [
         [E(),
@@ -1969,6 +2079,488 @@ def _build_rpl_couple(case: dict, S: dict) -> list:
     elems.extend(disclaimers_items[2:])
 
     elems.append(Spacer(1, 4 * mm))
+    sig_items = _signature_block(signatories, S)
+    if sig_items:
+        elems.append(KeepTogether(sig_items))
+
+    return elems
+
+
+# ─── Single-patient RPL layout ────────────────────────────────────────────────
+
+def _rpl_single_patient_table(patient: dict, S: dict) -> Table:
+    """
+    Unified 3-column patient + HLA table for the single RPL report.
+    Mirrors the RPL couple table format (white background, black 0.5 pt grid)
+    but contains only the patient — no donor columns.
+
+    Column layout:
+      col 0  label          24.6 % of CONTENT_W
+      col 1  allele-1/val   37.7 %
+      col 2  allele-2       37.7 %
+    Demographic rows SPAN cols 1–2 so the value fills the whole right area.
+    HLA rows use all three columns (label | allele1 | allele2).
+    """
+    cw = CONTENT_W
+    _label_w = cw * 0.38                     # wider to fit "Relationship stated/ Claimed" on one line
+    _data_w  = (cw * (1 - 0.246)) / 4       # same per-column width as the couple table
+    col_w = [_label_w, _data_w, _data_w]    # total ≈ 76 % of CONTENT_W
+
+    def RL(t): return Paragraph(f"<b>{t}</b>", S["rpl_lbl"])
+    def RV(t): return Paragraph(_title_case(_clean_display(t)), S["rpl_val"])
+    def RR(t): return Paragraph(_clean_display(t), S["rpl_val"])
+    _RAW_LABELS = {"PIN", "Sample Number"}
+    def RVC(label, val): return RR(val) if label in _RAW_LABELS else RV(val)
+    def HL(t): return Paragraph(f"<b>{t}</b>", S["rpl_hla_lbl"])
+    def HV(t): return Paragraph(_clean_display(t), S["rpl_hla_val"])
+    def E():   return Paragraph("", S["rpl_lbl"])
+
+    data   = []
+    spans  = []
+
+    # ── Demographic rows ──────────────────────────────────────────────────────
+    demo_labels = [
+        "Name", "Relationship stated/ Claimed", "Age/Gender",
+        "Hospital MR No",
+        "Diagnosis", "Referred By", "Hospital/Clinic",
+        "PIN", "Sample Number", "Specimen",
+        "Collection Date", "Sample receipt date", "Report date",
+    ]
+    demo_vals = [
+        patient.get("name", ""),
+        patient.get("relationship", "") or "NA",
+        _normalize_age(patient.get("gender_age", "")),
+        patient.get("hospital_mr_no", "") or "NA",
+        patient.get("diagnosis") or "NA",
+        patient.get("referred_by", ""),
+        patient.get("hospital_clinic", ""),
+        patient.get("pin", ""),
+        patient.get("sample_number", ""),
+        patient.get("specimen") or "Blood - EDTA",
+        patient.get("collection_date", ""),
+        patient.get("receipt_date", ""),
+        patient.get("report_date", ""),
+    ]
+
+    for i, (lbl, val) in enumerate(zip(demo_labels, demo_vals)):
+        data.append([RL(lbl), RVC(lbl, val), E()])
+        spans.append(("SPAN", (1, i), (2, i)))
+
+    hla_start = len(data)
+
+    # ── HLA rows ──────────────────────────────────────────────────────────────
+    LOCI = ["A", "B", "C", "DRB1", "DQB1", "DPB1"]
+    p_hla = patient.get("hla", {})
+    for locus in LOCI:
+        pa = p_hla.get(locus, [None, None])
+        a1 = _strip_prefix(pa[0]) if pa and pa[0] else "—"
+        a2 = _strip_prefix(pa[1]) if pa and len(pa) > 1 and pa[1] else "—"
+        data.append([HL(f"HLA-{locus}*"), HV(a1), HV(a2)])
+
+    t = Table(data, colWidths=col_w)
+    style_cmds = [
+        ("BACKGROUND",    (0, 0), (-1, -1),              WHITE),
+        ("TEXTCOLOR",     (0, 0), (-1, -1),  BLACK),
+        ("GRID",          (0, 0), (-1, -1),  0.3, C_RPL_BORDER),
+        ("ALIGN",         (0, 0), (-1, -1),  "CENTER"),
+        ("VALIGN",        (0, 0), (-1, -1),  "MIDDLE"),
+        ("TOPPADDING",    (0, 0), (-1, -1),  4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1),  4),
+        # Left-align the label column
+        ("ALIGN",         (0, 0), (0, -1),   "LEFT"),
+        ("LEFTPADDING",   (0, 0), (0, -1),   6),
+        # HLA allele columns centred (default)
+        ("ALIGN",         (1, hla_start), (2, -1), "CENTER"),
+    ]
+    for sp in spans:
+        style_cmds.append(sp)
+
+    t.setStyle(TableStyle(style_cmds))
+    return t
+
+
+def _build_single_rpl(case: dict, S: dict) -> list:
+    """
+    single_rpl — Single RPL patient layout matching the reference PDF:
+      Page 1: unified patient-info + HLA table (RPL style, no donor)
+              + Reference section (Maternal HLA-C Type only)
+      Page 1+: methodology + BACKGROUND + DISCLAIMERS + signatures
+    """
+    patient     = case["patient"]
+    rpl_ref     = case.get("rpl_reference", {})
+    signatories = case.get("signatories") or hla_assets.get_default_signatories(
+        "single_rpl", case.get("nabl", True))
+
+    elems = []
+
+    # ── Patient table — flows naturally (no KeepTogether so page 1 isn't forced off) ──
+    elems.append(_rpl_single_patient_table(patient, S))
+    elems.append(Spacer(1, 3 * mm))
+
+    # ── Reference section — Maternal or Paternal HLA-C Type based on gender ────
+    hla_c_p = rpl_ref.get("hla_c_patient", "")
+    if not hla_c_p:
+        pc = patient.get("hla", {}).get("C", [None, None])
+        from hla_data_parser import c_supertype as _c_supertype
+        ct1 = _c_supertype(pc[0]) if pc and pc[0] else None
+        ct2 = _c_supertype(pc[1]) if pc and len(pc) > 1 and pc[1] else None
+        hla_c_p = ", ".join(filter(None, [ct1, ct2]))
+
+    _ga = (patient.get("gender_age", "") or "").lower()
+    _is_male = "male" in _ga and "female" not in _ga
+    _hla_c_lbl = "Paternal HLA-C Type" if _is_male else "Maternal HLA-C Type"
+
+    if hla_c_p:
+        c_data = [
+            [Paragraph(f"<b>{_hla_c_lbl}</b>", S["rpl_lbl_center"])],
+            [Paragraph(_clean_display(hla_c_p), S["rpl_val"])],
+        ]
+        c_t = Table(c_data, colWidths=[CONTENT_W * 0.40])
+        c_t.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), WHITE),
+            ("TEXTCOLOR",     (0, 0), (-1, -1), BLACK),
+            ("GRID",          (0, 0), (-1, -1), 0.5, C_RPL_BORDER),
+            ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        # Keep the reference header and table together (won't split between them)
+        elems.append(KeepTogether([
+            Paragraph("<b>Reference:</b>", S["ref_hdr"]),
+            c_t,
+            Spacer(1, 3 * mm),
+        ]))
+
+    elems.append(Spacer(1, 2 * mm))
+
+    # ── Methodology + Background + Disclaimers + Signatures ───────────────────
+    methodology_items = _methodology_block(case, S)
+    elems.extend(methodology_items)
+
+    elems.append(Paragraph("<b>BACKGROUND</b>",      S["section_hdr"]))
+    elems.append(Paragraph(SINGLE_RPL_BACKGROUND,    S["justify"]))
+    elems.append(Spacer(1, 2 * mm))
+    disclaimers_items = [Paragraph("<b>DISCLAIMERS</b>", S["section_hdr"])]
+    for i, disc in enumerate(SINGLE_RPL_DISCLAIMERS, 1):
+        disclaimers_items.append(Paragraph(f"{i}.  {disc}", S["disc_item"]))
+    elems.append(KeepTogether(disclaimers_items[:2]))
+    elems.extend(disclaimers_items[2:])
+
+    elems.append(Spacer(1, 4 * mm))
+    sig_items = _signature_block(signatories, S)
+    if sig_items:
+        elems.append(KeepTogether(sig_items))
+
+    return elems
+
+
+# ─── Single Locus (Luminex reverse SSO) report builder ───────────────────────
+
+def _sl_info_table(patient: dict, S: dict) -> Table:
+    """
+    5-row, 6-column patient info table for Single Locus reports.
+    Separates Gender and Age into distinct rows (unlike the combined NGS table).
+    Column order: label | colon | value || label | colon | value
+    """
+    cw = CONTENT_W
+    # Split combined gender_age → separate Gender / Age display
+    _ga = _normalize_age(patient.get("gender_age", ""))
+    if "/" in _ga:
+        _parts = [p.strip() for p in _ga.split("/", 1)]
+        _gender, _age = _parts[0], _parts[1]
+    else:
+        _gender, _age = _ga, ""
+
+    # Wider right-label column to fit "Sample collection date"
+    col_w = [cw * 0.190, cw * 0.025, cw * 0.285,
+             cw * 0.260, cw * 0.025, cw * 0.215]
+
+    def L(t): return Paragraph(f"<b>{t}</b>", S["lbl"])
+    def C():  return Paragraph("<b>:</b>",     S["lbl"])
+    def V(t): return Paragraph(_title_case(_clean_display(t)), S["val"])
+    def R(t): return Paragraph(_clean_display(t), S["val"])
+
+    rows = [
+        [L("Patient name"),   C(), V(patient.get("name", "")),
+         L("PIN"),                    C(), R(patient.get("pin", ""))],
+        [L("Gender"),         C(), V(_gender),
+         L("Sample Number"),          C(), R(patient.get("sample_number", ""))],
+        [L("Age"),            C(), V(_age),
+         L("Sample collection date"), C(), V(patient.get("collection_date", ""))],
+        [L("Specimen"),       C(), R(patient.get("specimen") or "NA"),
+         L("Sample receipt date"),    C(), V(patient.get("receipt_date", ""))],
+        [L("Hospital/Clinic"), C(), V(patient.get("hospital_clinic", "")),
+         L("Report date"),            C(), V(patient.get("report_date", ""))],
+    ]
+
+    t = Table(rows, colWidths=col_w)
+    t.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), C_INFO_BG),
+        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 2),
+        ("LEFTPADDING",   (1, 0), (1, -1),  0),
+        ("RIGHTPADDING",  (1, 0), (1, -1),  2),
+        ("LEFTPADDING",   (4, 0), (4, -1),  0),
+        ("RIGHTPADDING",  (4, 0), (4, -1),  2),
+    ]))
+    return t
+
+
+def _build_single_locus(case: dict, S: dict) -> list:
+    """
+    Single-locus HLA typing report (Luminex reverse SSO method).
+    Single-page layout:  Title → patient info → Method → Result table → Signatures.
+    Result table has an orange header row (LOCUS | HLA-{locus}*), numbered allele
+    rows, and an optional note row that spans both columns.
+    """
+    patient     = case.get("patient", {})
+    nabl        = case.get("nabl", True)
+    locus       = (case.get("locus", "") or "C").strip()
+    allele1     = (case.get("sl_allele1", "") or "").strip()
+    allele2     = (case.get("sl_allele2", "") or "").strip()
+    sl_note     = (case.get("sl_note",    "") or "").strip()
+    signatories = case.get("signatories") or hla_assets.get_default_signatories(
+        "single_locus", nabl)
+
+    F_BOLD = _f("Calibri-Bold", "Helvetica-Bold")
+    F_REG  = _f("Calibri",      "Helvetica")
+
+    C_SL_SEC  = colors.HexColor("#2C6BAA")   # blue section heading colour (matches approval line)
+
+    _title_s = ParagraphStyle("_sl_title", fontName=F_BOLD, fontSize=20,
+                               textColor=C_NGS_TITLE, alignment=TA_CENTER, leading=26)
+    _hdr_s   = ParagraphStyle("_sl_hdr",   fontName=F_BOLD, fontSize=13,
+                               textColor=C_SL_SEC, leading=16, spaceBefore=2, spaceAfter=0)
+    _body_s  = ParagraphStyle("_sl_body",  fontName=F_REG,  fontSize=11,
+                               textColor=BLACK, leading=14, alignment=TA_JUSTIFY, spaceAfter=2)
+    _cell_s  = ParagraphStyle("_sl_cell",  fontName=F_BOLD, fontSize=11,
+                               textColor=BLACK, leading=14, alignment=TA_CENTER)
+    _val_s   = ParagraphStyle("_sl_val",   fontName=F_REG,  fontSize=11,
+                               textColor=BLACK, leading=14, alignment=TA_CENTER)
+
+    def _sec(text):
+        return [
+            Paragraph(f"<b>{text}</b>", _hdr_s),
+            HRFlowable(width="100%", thickness=0.1, color=colors.grey),
+            Spacer(1, 1 * mm),
+        ]
+
+    elems = []
+
+    # ── Title ─────────────────────────────────────────────────────────────────
+    elems.append(Paragraph(f"<b>HLA-{locus}*</b>", _title_s))
+    elems.append(Spacer(1, 2 * mm))
+
+    # ── Patient info — custom 5-row table with separate Gender / Age rows ─────
+    elems.append(_sl_info_table(patient, S))
+    elems.append(Spacer(1, 2 * mm))
+
+    # ── Method ────────────────────────────────────────────────────────────────
+    elems.extend(_sec("Method"))
+    for para_text in SINGLE_LOCUS_METHODOLOGY:
+        elems.append(Paragraph(para_text, _body_s))
+    elems.append(Spacer(1, 2 * mm))
+
+    # ── Result ────────────────────────────────────────────────────────────────
+    elems.extend(_sec("Result"))
+
+    _col_w = [CONTENT_W * 0.12, CONTENT_W * 0.25]   # total ≈ 37 % of content, centred
+
+    result_rows = [
+        # Header row — orange background
+        [Paragraph("<b>LOCUS</b>",          _cell_s),
+         Paragraph(f"<b>HLA-{locus}*</b>", _cell_s)],
+        # Allele rows
+        [Paragraph("1", _val_s), Paragraph(_clean_display(allele1) or "—", _val_s)],
+        [Paragraph("2", _val_s), Paragraph(_clean_display(allele2) or "—", _val_s)],
+    ]
+    style_cmds = [
+        ("BACKGROUND",    (0, 0), (-1, 0),   C_HLA_HDR),   # orange header
+        ("BACKGROUND",    (0, 1), (-1, -1),  C_INFO_BG),
+        ("TEXTCOLOR",     (0, 0), (-1, -1),  BLACK),
+        ("INNERGRID",     (0, 0), (-1, -1),  0.25, WHITE),
+        ("ALIGN",         (0, 0), (-1, -1),  "CENTER"),
+        ("VALIGN",        (0, 0), (-1, -1),  "MIDDLE"),
+        ("TOPPADDING",    (0, 0), (-1, -1),  5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1),  5),
+    ]
+    if sl_note:
+        note_row_idx = len(result_rows)
+        result_rows.append(
+            [Paragraph(f"({_clean_display(sl_note)})", _val_s),
+             Paragraph("", _val_s)]
+        )
+        style_cmds.append(("SPAN", (0, note_row_idx), (1, note_row_idx)))
+
+    result_t = Table(result_rows, colWidths=_col_w)
+    result_t.hAlign = "CENTER"
+    result_t.setStyle(TableStyle(style_cmds))
+
+    # ── Result table + signatures kept together so they never split across pages ─
+    sig_items = _signature_block(signatories, S)
+    elems.append(KeepTogether(
+        [result_t, Spacer(1, 2 * mm)] + (sig_items or [])
+    ))
+
+    return elems
+
+
+# ─── HLA-C (fixed-locus, two-page) report builder ────────────────────────────
+
+def _build_hla_c(case: dict, S: dict) -> list:
+    """
+    HLA-C report — fixed-locus layout matching the reference PDF:
+    Title → patient info → Test Details → Typing Result → Remarks →
+    [page break] → Disclaimer → Reference → Signatures.
+    """
+    patient     = case.get("patient", {})
+    nabl        = case.get("nabl", True)
+    allele1     = (case.get("hlac_allele1", "") or "").strip()
+    allele2     = (case.get("hlac_allele2", "") or "").strip()
+    remark      = (case.get("hlac_remark",  "") or "").strip()
+    signatories = case.get("signatories") or hla_assets.get_default_signatories(
+        "hla_c", nabl)
+
+    # POC (Products of Conception) samples use a simplified Result layout —
+    # a single Name/Type table instead of the allele-typing + Remarks tables.
+    is_poc = "poc" in (patient.get("specimen", "") or "").lower()
+
+    # Remarks label follows the patient's sex — Paternal for male, Maternal otherwise.
+    _gender_part = _normalize_age(patient.get("gender_age", "")).split("/", 1)[0].strip().lower()
+    _parent_label = "Paternal" if _gender_part.startswith("m") else "Maternal"
+
+    F_BOLD = _f("Calibri-Bold", "Helvetica-Bold")
+    F_REG  = _f("Calibri",      "Helvetica")
+
+    C_HC_SEC = colors.HexColor("#2C6BAA")   # blue section heading colour
+
+    _title_s = ParagraphStyle("_hc_title", fontName=F_BOLD, fontSize=20,
+                               textColor=C_NGS_TITLE, alignment=TA_CENTER, leading=26)
+    _hdr_s   = ParagraphStyle("_hc_hdr",   fontName=F_BOLD, fontSize=13,
+                               textColor=C_HC_SEC, leading=16, spaceBefore=2, spaceAfter=0)
+    _body_s  = ParagraphStyle("_hc_body",  fontName=F_REG,  fontSize=11,
+                               textColor=BLACK, leading=14, alignment=TA_JUSTIFY, spaceAfter=2)
+    _lbl_l_s = ParagraphStyle("_hc_lbl_l", fontName=F_BOLD, fontSize=11,
+                               textColor=BLACK, leading=14, alignment=TA_LEFT)
+    _val_c_s = ParagraphStyle("_hc_val_c", fontName=F_REG,  fontSize=11,
+                               textColor=BLACK, leading=14, alignment=TA_CENTER)
+    _ref_s   = ParagraphStyle("_hc_ref",   fontName=F_REG,  fontSize=9.5,
+                               textColor=BLACK, leading=12.5, alignment=TA_JUSTIFY, spaceAfter=2)
+
+    def _sec(text):
+        return [
+            Paragraph(f"<b>{text}</b>", _hdr_s),
+            HRFlowable(width="100%", thickness=0.1, color=colors.grey),
+            Spacer(1, 1 * mm),
+        ]
+
+    elems = []
+
+    # ── Title ─────────────────────────────────────────────────────────────────
+    elems.append(Paragraph("<b>HLA-C*</b>", _title_s))
+    elems.append(Spacer(1, 2 * mm))
+
+    # ── Patient info — reuse the Single Locus 5-row demography table ──────────
+    elems.append(_sl_info_table(patient, S))
+    elems.append(Spacer(1, 2 * mm))
+
+    # ── Test Details ─────────────────────────────────────────────────────────
+    elems.extend(_sec("Test Details"))
+    for para_text in HLA_C_METHODOLOGY:
+        elems.append(Paragraph(para_text, _body_s))
+    elems.append(Spacer(1, 2 * mm))
+
+    if is_poc:
+        # ── Result (POC layout) — combined Name / POC HLA-C Type table ─────────
+        elems.extend(_sec("Result"))
+        elems.append(Spacer(1, 3 * mm))
+
+        _poc_name = _clean_display(_title_case(patient.get("name", "")))
+        _poc_name_val = f"POC of {_poc_name}" if _poc_name else "—"
+        _col_w = [CONTENT_W * 0.20, CONTENT_W * 0.30]
+
+        result_rows = [
+            [Paragraph("<b>Name</b>", _val_c_s),
+             Paragraph(_poc_name_val, _val_c_s)],
+            [Paragraph("<b>POC HLA-C<br/>Type</b>", _val_c_s),
+             Paragraph(_clean_display(remark) or "—", _val_c_s)],
+        ]
+        result_t = Table(result_rows, colWidths=_col_w)
+        result_t.hAlign = "CENTER"
+        result_t.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), WHITE),
+            ("GRID",          (0, 0), (-1, -1), 0.5, colors.grey),
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        elems.append(result_t)
+    else:
+        # ── Typing Result ────────────────────────────────────────────────────
+        elems.extend(_sec("Typing Result"))
+
+        _col_w = [CONTENT_W * 0.18, CONTENT_W * 0.18, CONTENT_W * 0.18]
+
+        result_rows = [
+            [Paragraph("Name", _lbl_l_s),
+             Paragraph(_clean_display(_title_case(patient.get("name", ""))) or "—", _val_c_s),
+             ""],
+            [Paragraph("<b>HLA-C*</b>", _lbl_l_s),
+             Paragraph(_clean_display(allele1) or "—", _val_c_s),
+             Paragraph(_clean_display(allele2) or "—", _val_c_s)],
+        ]
+        result_t = Table(result_rows, colWidths=_col_w)
+        result_t.hAlign = "CENTER"
+        result_t.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), WHITE),
+            ("GRID",          (0, 0), (-1, -1), 0.5, colors.grey),
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("SPAN",          (1, 0), (2, 0)),
+        ]))
+        elems.append(result_t)
+        elems.append(Spacer(1, 2 * mm))
+
+        # ── Remarks ──────────────────────────────────────────────────────────
+        elems.extend(_sec("Remarks"))
+
+        _rem_w = [CONTENT_W * 0.40]
+        rem_t = Table([
+            [Paragraph(f"<b>{_parent_label} HLA-C Type</b>", _val_c_s)],
+            [Paragraph(_clean_display(remark) or "—", _val_c_s)],
+        ], colWidths=_rem_w)
+        rem_t.hAlign = "CENTER"
+        rem_t.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), WHITE),
+            ("GRID",          (0, 0), (-1, -1), 0.5, colors.grey),
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        elems.append(rem_t)
+
+    # ── Disclaimer + Reference + Signatures ─────────────────────────────────
+    # POC's Result table is much shorter than the standard Typing Result +
+    # Remarks tables, leaving plenty of room — let Disclaimer flow onto the
+    # same page instead of forcing a page break.
+    if not is_poc:
+        elems.append(PageBreak())
+    else:
+        elems.append(Spacer(1, 4 * mm))
+    elems.extend(_sec("Disclaimer"))
+    elems.append(Paragraph(HLA_C_DISCLAIMER, _body_s))
+    elems.append(Spacer(1, 2 * mm))
+
+    elems.extend(_sec("Reference"))
+    for ref_text in HLA_C_REFERENCES:
+        elems.append(Paragraph(ref_text, _ref_s))
+    elems.append(Spacer(1, 4 * mm))
+
     sig_items = _signature_block(signatories, S)
     if sig_items:
         elems.append(KeepTogether(sig_items))
@@ -2344,7 +2936,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
     info_t.setStyle(TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#E8E8E8")),
+        ("BACKGROUND",    (0, 0), (-1, -1), C_INFO_BG),
         ("VALIGN",        (0, 0), (-1, -1), "TOP"),
         ("TOPPADDING",    (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
@@ -2387,7 +2979,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     p_collect     = _clean(patient.get("collection_date", ""))
     d_collect     = _clean(donor.get("collection_date", ""))
 
-    _GREY = colors.HexColor("#E8E8E8")
+    _GREY = C_INFO_BG
 
     photo_rows = [
         # Row 1: header â€" empty | PATIENT DETAILS | DONOR DETAILS
@@ -2685,7 +3277,7 @@ def _build_dsa_report(case: dict, S: dict) -> list:
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
     info_t.setStyle(TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#E8E8E8")),
+        ("BACKGROUND",    (0, 0), (-1, -1), C_INFO_BG),
         ("VALIGN",        (0, 0), (-1, -1), "TOP"),
         ("TOPPADDING",    (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
@@ -2717,7 +3309,7 @@ def _build_dsa_report(case: dict, S: dict) -> list:
     p_collect     = _clean(patient.get("collection_date", ""))
     d_collect     = _clean(donor.get("collection_date", ""))
 
-    _GREY = colors.HexColor("#E8E8E8")
+    _GREY = C_INFO_BG
 
     photo_rows = [
         [Paragraph("", info_lbl_style),
@@ -3044,7 +3636,7 @@ def _build_luminex_report(case: dict, S: dict) -> list:
         ("TOPPADDING",    (0,0), (-1,-1), 3), ("BOTTOMPADDING", (0,0), (-1,-1), 3),
         ("LEFTPADDING",   (0,0), (-1,-1), 4), ("RIGHTPADDING",  (0,0), (-1,-1), 4),
         # Uniform light-grey fill with white gridlines (matches reference report).
-        ("BACKGROUND",    (0,0), (-1,-1), colors.HexColor("#E8E8E8")),
+        ("BACKGROUND",    (0,0), (-1,-1), C_INFO_BG),
         ("BOX",           (0,0), (-1,-1), 1.0, colors.white),
         ("INNERGRID",     (0,0), (-1,-1), 1.0, colors.white),
         # Keep the photo row a proper height even before photos are uploaded.
@@ -3224,7 +3816,7 @@ def _sab_info_table(case: dict) -> Table:
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
     info_t.setStyle(TableStyle([
-        ("BACKGROUND",    (0,0), (-1,-1), colors.HexColor("#E8E8E8")),
+        ("BACKGROUND",    (0,0), (-1,-1), C_INFO_BG),
         ("VALIGN",        (0,0), (-1,-1), "TOP"),
         ("TOPPADDING",    (0,0), (-1,-1), 5),
         ("BOTTOMPADDING", (0,0), (-1,-1), 5),
@@ -3847,7 +4439,7 @@ def _build_flow_report(case: dict, S: dict) -> list:
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
     info_t.setStyle(TableStyle([
-        ("BACKGROUND",    (0,0), (-1,-1), colors.HexColor("#E8E8E8")),
+        ("BACKGROUND",    (0,0), (-1,-1), C_INFO_BG),
         ("VALIGN",        (0,0), (-1,-1), "TOP"),
         ("TOPPADDING",    (0,0), (-1,-1), 5), ("BOTTOMPADDING", (0,0), (-1,-1), 5),
         ("LEFTPADDING",   (0,0), (-1,-1), 4), ("RIGHTPADDING",  (0,0), (-1,-1), 2),
@@ -3861,7 +4453,7 @@ def _build_flow_report(case: dict, S: dict) -> list:
     # ── Photo / sample-type table ─────────────────────────────────────────────
     # ── Photo / sample-type table ─────────────────────────────────────────
     _ph_w = 30*mm; _ph_h = 36*mm; _pc_w = 54*mm; _lbl_w = 38*mm
-    _GREY = colors.HexColor("#E8E8E8")
+    _GREY = C_INFO_BG
 
     def _photo_cell(pb):
         if pb:
@@ -4109,7 +4701,7 @@ def _build_kir_report(case: dict, S: dict) -> list:
     ]
     info_t = Table(info_rows, colWidths=info_col_w)
     info_t.setStyle(TableStyle([
-        ("BACKGROUND",    (0,0), (-1,-1), colors.HexColor("#E8E8E8")),
+        ("BACKGROUND",    (0,0), (-1,-1), C_INFO_BG),
         ("VALIGN",        (0,0), (-1,-1), "TOP"),
         ("TOPPADDING",    (0,0), (-1,-1), 5), ("BOTTOMPADDING", (0,0), (-1,-1), 5),
         ("LEFTPADDING",   (0,0), (-1,-1), 4), ("RIGHTPADDING",  (0,0), (-1,-1), 2),
@@ -4235,6 +4827,7 @@ def generate_pdf(case: dict, output_path: str) -> str:
         "ngs_photo":        "HLA Typing High Resolution",
         "loci11":           "HLA Typing High Resolution",
         "rpl_couple":       "HLA Typing \u2013 NGS High Resolution Typing",
+        "single_rpl":       "HLA Typing \u2013 NGS High Resolution Typing",
         "cdc_crossmatch":   "Complement Dependent Cytotoxicity (CDC) Cross match",
         "dsa_crossmatch":   "Donor Specific Antibody Crossmatch",
         "sab_class1":       "",
@@ -4244,12 +4837,14 @@ def generate_pdf(case: dict, output_path: str) -> str:
         "kir_genotyping":   "KIR Genotyping",
         "pra_class1":       "Panel Reactive Antibodies (PRA) Class I Quantitative",
         "pra_class2":       "Panel Reactive Antibodies (PRA) Class II Quantitative",
+        "single_locus":     "",    # builder draws its own locus-specific title
+        "hla_c":            "",    # builder draws its own title
         "mixed_pra":        "Panel Reactive Antibodies (PRA) Class I & II  Quantitative",
     }
     title = TITLES.get(report_type, "HLA Typing Report")
 
     # Title paragraph (font differs between NGS and RPL)
-    title_style = S["title_rpl"] if report_type == "rpl_couple" else S["title_ngs"]
+    title_style = S["title_rpl"] if report_type in ("rpl_couple", "single_rpl") else S["title_ngs"]
     title_para  = Paragraph(title, title_style)
 
     # Compute header/footer heights — always use real image dimensions so the
@@ -4266,9 +4861,9 @@ def generate_pdf(case: dict, output_path: str) -> str:
     fw, fh   = pil_f.size
     footer_h = (fh / fw) * CONTENT_W
 
-    # Luminex draws its own title right at the frame top — use a tighter banner
-    # clearance so "HLA Typing" sits closer to the header.
-    _top_gap      = 1.5 * mm if report_type == "luminex_typing" else 4 * mm
+    # Luminex and Single Locus draw their own titles right at the frame top —
+    # use a tighter banner clearance so the title sits closer to the header.
+    _top_gap      = 1.5 * mm if report_type in ("luminex_typing", "single_locus", "hla_c") else 4 * mm
     top_margin    = MARGIN_T + banner_h + _top_gap
 
     # SAB reports repeat the patient demography table on every page (drawn by
@@ -4330,6 +4925,8 @@ def generate_pdf(case: dict, output_path: str) -> str:
         body = _build_ngs_transplant(case, S)
     elif report_type == "rpl_couple":
         body = _build_rpl_couple(case, S)
+    elif report_type == "single_rpl":
+        body = _build_single_rpl(case, S)
     elif report_type == "cdc_crossmatch":
         body = _build_cdc_report(case, S)
     elif report_type == "dsa_crossmatch":
@@ -4344,6 +4941,10 @@ def generate_pdf(case: dict, output_path: str) -> str:
         body = _build_kir_report(case, S)
     elif report_type in ("pra_class1", "pra_class2"):
         body = _build_pra_report(case, S)
+    elif report_type == "single_locus":
+        body = _build_single_locus(case, S)
+    elif report_type == "hla_c":
+        body = _build_hla_c(case, S)
     elif report_type == "mixed_pra":
         body = _build_mixed_pra_report(case, S)
     else:
@@ -4410,11 +5011,12 @@ def make_filename(case: dict) -> str:
     )
     rtype = {"single_hla": "HLA_NGS", "transplant_donor": "HLA_NGS",
              "ngs_photo": "HLA_NGS_PHOTO", "loci11": "HLA_NGS",
-             "rpl_couple": "RPL", "cdc_crossmatch": "CDC",
+             "rpl_couple": "RPL", "single_rpl": "RPL_SINGLE", "cdc_crossmatch": "CDC",
              "dsa_crossmatch": "DSA", "sab_class1": "SAB_C1", "sab_class2": "SAB_C2",
              "flow_crossmatch": "FLOW", "luminex_typing": "HLA_LUMINEX",
              "kir_genotyping": "KIR", "pra_class1": "PRA_C1",
-             "pra_class2": "PRA_C2", "mixed_pra": "PRA_MIXED"}.get(report_type, "HLA")
+             "pra_class2": "PRA_C2", "single_locus": "SINGLE_LOCUS",
+             "hla_c": "HLA_C", "mixed_pra": "PRA_MIXED"}.get(report_type, "HLA")
     logo  = "WITH_LOGO" if case.get("with_logo", True) else "WITHOUT_LOGO"
     parts = [p] + ([donors] if donors else []) + [rtype, logo]
     if report_type == "loci11":

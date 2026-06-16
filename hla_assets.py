@@ -9170,6 +9170,18 @@ SIGNATORIES_RPL = [
 ]
 
 
+SIGNATORIES_HLA_C = [
+
+
+    {"name": "Ms. S Aruna Devi",    "title": "Team Lead– Transplant Immunogenetics", "sign_b64": SIGN_1_B64,  "is_png": False},
+
+
+    {"name": "Nikhala Shree S, Ph.D","title": "Molecular Biologist",    "sign_b64": SIGN_2_B64,  "is_png": True},
+
+
+]
+
+
 # 11-Loci report — same first two as transplant_donor, plus a third pathologist
 # signatory specific to this template (see reference: Mrs_Nupur_Mondal_..._11_loci.pdf).
 SIGNATORIES_LOCI11 = [
@@ -9195,7 +9207,13 @@ def get_default_signatories(report_type: str, nabl: bool) -> list:
         return SIGNATORIES_SINGLE
 
 
-    elif report_type == "rpl_couple":
+    elif report_type == "hla_c":
+
+
+        return SIGNATORIES_HLA_C
+
+
+    elif report_type in ("rpl_couple", "single_rpl", "single_locus"):
 
 
         return SIGNATORIES_RPL
