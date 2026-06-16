@@ -1421,9 +1421,16 @@ def _methodology_block(case: dict, S: dict) -> list:
     ]
 
     # Group 2: Methodology + HR + Typing Status (~40 pt)
+    # 11-Loci's reference layout puts the "Methodology:" label on its own line,
+    # with the method sentence on the line below — other report types keep the
+    # label and sentence on one line (their reference layouts use that style).
+    if case.get("report_type") == "loci11":
+        methodology_para = Paragraph(f"<b>Methodology:</b><br/>{method}", S["body"])
+    else:
+        methodology_para = Paragraph(f"<b>Methodology:</b>  {method}", S["body"])
     method_block = [
         Spacer(1, 1 * mm),
-        Paragraph(f"<b>Methodology:</b>  {method}", S["body"]),
+        methodology_para,
         Spacer(1, 1 * mm),
         HRFlowable(width="100%", thickness=0.5, color=BLACK),
         Spacer(1, 1 * mm),
