@@ -198,7 +198,7 @@ DEFAULT_SIG_COUNTS = {
     "rpl_couple":       2,
     "transplant_donor": 2,
     "ngs_photo":        2,
-    "loci11":           2,
+    "loci11":           3,
     "cdc_crossmatch":   2,
     "dsa_crossmatch":   2,
     "sab_class1":       2,
@@ -336,8 +336,13 @@ class GenerateWorker(QThread):
             rtype = c.get("report_type", "single_hla")
             nabl  = c.get("nabl", True)
             n = self.sig_counts.get(rtype, DEFAULT_SIG_COUNTS.get(rtype, 2))
+            # 11-Loci has its own fixed 3rd signatory (Dr. Indumathi. K) that isn't
+            # part of the user-editable global signatories list/order — pull its
+            # defaults directly rather than slicing self.signatories.
+            sig_source = (hla_assets.get_default_signatories(rtype, nabl) if rtype == "loci11"
+                          else self.signatories)
             c["signatories"] = []
-            for sig in self.signatories[:n]:
+            for sig in sig_source[:n]:
                 sign_info = hla_assets.SIGN_BY_NAME.get(sig["name"])
                 if sign_info is None:
                     # fallback: use first available named sign
@@ -6454,7 +6459,11 @@ case — edits are flushed automatically).</p>
         return copy.deepcopy(DEFAULT_SIGNATORIES)
 
     def _build_case(self, rtype, nabl, with_logo, sig_stamp, patient, donors):
-        sigs_raw   = self._get_signatories()
+        # 11-Loci has its own fixed 3rd signatory (Dr. Indumathi. K) that isn't
+        # part of the user-editable global signatories list/order — pull its
+        # defaults directly rather than slicing the global list.
+        sigs_raw   = (hla_assets.get_default_signatories(rtype, nabl) if rtype == "loci11"
+                      else self._get_signatories())
         n          = read_sig_count(self.qsettings, rtype)
         sigs = []
         for sig in sigs_raw[:n]:
