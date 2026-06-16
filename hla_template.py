@@ -3252,16 +3252,12 @@ def _build_dsa_report(case: dict, S: dict) -> list:
     def E(): return Paragraph("", info_lbl_style)
 
     def IV_name(text, col_w_pts):
-        """Render a name on one line; auto-shrink font (min 8pt) if it would wrap."""
+        # Keep font size constant; let long names wrap to a second line so the
+        # row grows taller rather than the text shrinking to fit one line.
         display = _norm_name(text)
-        avail = col_w_pts - 6  # leave room for cell padding
-        fn, fs = info_val_style.fontName, info_val_style.fontSize
-        w = pdfmetrics.stringWidth(display, fn, fs)
-        if w > avail:
-            fit = max(8.0, fs * avail / w)
-            style = ParagraphStyle("_dsa_val_fit", parent=info_val_style,
-                                   fontSize=fit, leading=fit + 2)
-            return Paragraph(display, style)
+        # Move a trailing parenthetical sample number "(digits)" to its own line
+        # so the name itself wraps at a natural word boundary.
+        display = re.sub(r'\s*(\(\d+\))$', r'<br/>\1', display)
         return Paragraph(display, info_val_style)
 
     info_rows = [
@@ -4414,16 +4410,12 @@ def _build_flow_report(case: dict, S: dict) -> list:
     info_col_w = _demography_col_widths(patient, donor)
 
     def IV_name(text, col_w_pts):
-        """Render a name on one line; auto-shrink font (min 8pt) if it would wrap."""
+        # Keep font size constant; let long names wrap to a second line so the
+        # row grows taller rather than the text shrinking to fit one line.
         display = _norm_name(text)
-        avail = col_w_pts - 6  # leave room for cell padding
-        fn, fs = val_s.fontName, val_s.fontSize
-        w = pdfmetrics.stringWidth(display, fn, fs)
-        if w > avail:
-            fit = max(8.0, fs * avail / w)
-            style = ParagraphStyle("_fi_val_fit", parent=val_s,
-                                   fontSize=fit, leading=fit + 2)
-            return Paragraph(display, style)
+        # Move a trailing parenthetical sample number "(digits)" to its own line
+        # so the name itself wraps at a natural word boundary.
+        display = re.sub(r'\s*(\(\d+\))$', r'<br/>\1', display)
         return Paragraph(display, val_s)
 
     info_rows = [
