@@ -17,7 +17,7 @@ import re
 from typing import Optional
 
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
@@ -1528,6 +1528,7 @@ def _methodology_block(case: dict, S: dict) -> list:
     cov_label = Paragraph("<b>Coverage</b>", S["body"])
     cov_lines = Paragraph("<br/>".join(coverage_lines), S["coverage"])
     cov_table = Table([[cov_label, cov_lines]], colWidths=[60, CONTENT_W - 60])
+    cov_table.hAlign = "LEFT"
     cov_table.setStyle(TableStyle([
         ("VALIGN",        (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING",   (0, 0), (-1, -1), 0),
@@ -4846,15 +4847,6 @@ def generate_pdf(case: dict, output_path: str) -> str:
     nabl        = case.get("nabl", True)
     with_logo   = case.get("with_logo", True)
 
-    # The 11-Loci report's reference layout is A4 (595x842pt) — its wider table
-    # (extra DRB3/4/5, DQA1, DPA1 columns) plus per-person remarks need the ~50pt
-    # of extra page height A4 gives over US Letter to keep the patient and donor
-    # blocks together with their remarks on page 1. Every other report type keeps
-    # Letter — their layouts (incl. the external QR overlay zone) are tuned for it.
-    global PAGE_W, PAGE_H, CONTENT_W
-    PAGE_W, PAGE_H = A4 if report_type == "loci11" else letter
-    CONTENT_W = PAGE_W - MARGIN_L - MARGIN_R
-
     # Title strings per report type
     TITLES = {
         "single_hla":       "HLA Typing High Resolution",
@@ -4943,7 +4935,7 @@ def generate_pdf(case: dict, output_path: str) -> str:
 
     doc = SimpleDocTemplate(
         output_path,
-        pagesize=(PAGE_W, PAGE_H),
+        pagesize=letter,
         leftMargin=MARGIN_L, rightMargin=MARGIN_R,
         topMargin=top_margin,
         bottomMargin=bottom_margin,
