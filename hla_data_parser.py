@@ -240,9 +240,13 @@ def _parse_surfseq_results(df_csv: pd.DataFrame) -> dict:
     Each row = one locus + one allele for a sample.
     For heterozygous loci, the same locus may appear twice (allele1 then allele2).
     """
+    # DRB3/DRB4/DRB5 all map to the same "DRB3" key — only one is biologically
+    # present per genotype, so the report shows them as a single merged column
+    # (see _merged_drb345 in hla_template.py). The allele token itself keeps its
+    # real locus prefix (e.g. "DRB5*01:01:01"), so no information is lost.
     LOCUS_MAP = {
         "HLA_A": "A", "HLA_B": "B", "HLA_C": "C",
-        "DRB1": "DRB1", "DRB3": "DRB3", "DRB4": "DRB4", "DRB5": "DRB5",
+        "DRB1": "DRB1", "DRB3": "DRB3", "DRB4": "DRB3", "DRB5": "DRB3",
         "DQB1": "DQB1", "DPB1": "DPB1",
     }
 
