@@ -1543,12 +1543,15 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
         return bool((p.get("remarks") or "").strip()) or bool((p.get("match") or "").strip())
     any_remarks = _person_has_content(patient) or any(_person_has_content(d) for d in donors)
     # The 2x "spread" spacing exists to fill the page nicely when there's a donor
-    # block to space out from the patient block. With no donors (e.g. the 11-Loci
-    # report, which reuses this builder for a single-patient case) there's nothing
-    # to spread between, and the extra gaps just eat into the room the patient's
-    # own HLA table needs — enough to push the whole table off onto page 2. Skip
-    # the spread in that case and use the tight spacing instead.
-    _scale, _extra = (1.0, 0.0) if (any_remarks or not donors) else (2.0, 4.0)
+    # block to space out from the patient block, using the standard 6-locus table.
+    # The 11-Loci report's table is wider (DRB3/4/5 column) and has a taller,
+    # word-wrapped header, so it needs all the room it can get — spreading it
+    # like the standard table leaves the patient+donor blocks no longer fitting
+    # page 1 together. Use tight spacing for loci11 always, and otherwise
+    # whenever there's no donor to spread toward or remarks/match text already
+    # needs the room.
+    _scale, _extra = (1.0, 0.0) if (any_remarks or not donors
+                                     or case.get("report_type") == "loci11") else (2.0, 4.0)
 
     elems = []
     elems.extend(_ngs_person_block(patient, is_donor=False, match_str="", S=S,
