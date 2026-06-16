@@ -76,7 +76,29 @@ def _filter_valid_cases(cases: list) -> list:
 
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-HLA_LOCI = ["A", "B", "C", "DRB1", "DQB1", "DPB1", "DRB3", "DRB4", "DRB5"]
+# DRB3/DRB4/DRB5 share a single form row/storage key ("DRB3") — only one of the
+# three is ever biologically present per genotype, so typing one combined field
+# (with its own DRB3*/DRB4*/DRB5* prefix) is enough; see HLA_LOCUS_LABELS and
+# hla_get() below for the row label and backward-compatible value lookup.
+HLA_LOCI = ["A", "B", "C", "DRB1", "DQB1", "DPB1", "DRB3", "DPA1", "DQA1"]
+HLA_LOCUS_LABELS = {"DRB3": "DRB3/4/5"}
+
+
+def hla_locus_label(locus: str) -> str:
+    """Form-row label for a locus key — "DRB3" displays as "DRB3/4/5"."""
+    return HLA_LOCUS_LABELS.get(locus, locus)
+
+
+def hla_get(hla_data: dict, locus: str) -> list:
+    """Look up a locus's [a1, a2] pair, merging legacy separate DRB4/DRB5 keys
+    (from older bulk imports/drafts) into the combined "DRB3" slot."""
+    if locus == "DRB3":
+        for k in ("DRB3", "DRB4", "DRB5"):
+            v = hla_data.get(k)
+            if v and any(str(x).strip() for x in v if x is not None):
+                return v
+        return ["", ""]
+    return hla_data.get(locus, ["", ""])
 MANUAL_DRAFT_FILE   = os.path.join(os.path.dirname(__file__), "hla_manual_draft.json")
 BULK_DRAFT_FILE     = os.path.join(os.path.dirname(__file__), "hla_bulk_draft.json")
 TEMP_PREVIEW_PATH   = os.path.join(os.path.dirname(__file__), "temp_hla_preview.pdf")
@@ -120,6 +142,11 @@ REPORT_TEMPLATES = [
     {
         "name":         "HLA (NGS with Photo)",
         "report_type":  "ngs_photo",
+        "default_path": os.path.join(_TEMPLATE_DIR, "Dummy_NGS High Resolution 28.10.2025.pdf"),
+    },
+    {
+        "name":         "HLA Typing High Resolution (11 Loci)",
+        "report_type":  "loci11",
         "default_path": os.path.join(_TEMPLATE_DIR, "Dummy_NGS High Resolution 28.10.2025.pdf"),
     },
     {
@@ -167,6 +194,11 @@ REPORT_TEMPLATES = [
         "report_type":  "pra_class2",
         "default_path": os.path.join(_TEMPLATE_DIR, ""),
     },
+    {
+        "name":         "Mixed PRA",
+        "report_type":  "mixed_pra",
+        "default_path": os.path.join(_TEMPLATE_DIR, ""),
+    },
 ]
 TEMPLATE_NAMES    = [t["name"]        for t in REPORT_TEMPLATES]
 TEMPLATE_TO_RTYPE = {t["name"]:        t["report_type"] for t in REPORT_TEMPLATES}
@@ -184,6 +216,7 @@ DEFAULT_SIG_COUNTS = {
     "hla_c":            2,
     "transplant_donor": 2,
     "ngs_photo":        2,
+    "loci11":           3,
     "cdc_crossmatch":   2,
     "dsa_crossmatch":   2,
     "sab_class1":       2,
@@ -193,6 +226,7 @@ DEFAULT_SIG_COUNTS = {
     "kir_genotyping":   2,
     "pra_class1":       2,
     "pra_class2":       2,
+    "mixed_pra":        2,
 }
 
 
@@ -320,8 +354,13 @@ class GenerateWorker(QThread):
             rtype = c.get("report_type", "single_hla")
             nabl  = c.get("nabl", True)
             n = self.sig_counts.get(rtype, DEFAULT_SIG_COUNTS.get(rtype, 2))
+            # 11-Loci has its own fixed 3rd signatory (Dr. Indumathi. K) that isn't
+            # part of the user-editable global signatories list/order — pull its
+            # defaults directly rather than slicing self.signatories.
+            sig_source = (hla_assets.get_default_signatories(rtype, nabl) if rtype == "loci11"
+                          else self.signatories)
             c["signatories"] = []
-            for sig in self.signatories[:n]:
+            for sig in sig_source[:n]:
                 sign_info = hla_assets.SIGN_BY_NAME.get(sig["name"])
                 if sign_info is None:
                     # fallback: use first available named sign
@@ -1451,7 +1490,7 @@ class HLAReportGeneratorApp(QMainWindow):
                 _ew.textChanged.connect(self._on_manual_field_debounced)
             self._lx_pat_hla[_locus] = [_pa1, _pa2]
             self._lx_don_hla[_locus] = [_da1, _da2]
-            _lhf.addRow(f"{_locus}:", _row_w)
+            _lhf.addRow(f"{hla_locus_label(_locus)}:", _row_w)
         scroll_layout.addWidget(_lx_hla_group)
         _lx_hla_group.setVisible(False)
 
@@ -1596,6 +1635,25 @@ class HLAReportGeneratorApp(QMainWindow):
         scroll_layout.addWidget(_pra_res_group)
         _pra_res_group.setVisible(False)
 
+        # ── Mixed PRA — Both Classes Result ────────────────────────────────────
+        self._mixed_pra_result_f = {}
+        _mixed_pra_res_group = QGroupBox("Mixed PRA Result")
+        self._mixed_pra_res_group = _mixed_pra_res_group
+        _mprf = QFormLayout(); _mixed_pra_res_group.setLayout(_mprf)
+        _mprf.setSpacing(1); _mprf.setContentsMargins(4, 2, 4, 2)
+        for _fk, _fl, _ph in [
+            ("pra_percentage_1", "Class I Percentage",  "e.g. 14  (% sign optional)"),
+            ("pra_result_1",     "Class I Result",       "Leave blank to auto-classify"),
+            ("pra_percentage_2", "Class II Percentage",  "e.g. 22  (% sign optional)"),
+            ("pra_result_2",     "Class II Result",      "Leave blank to auto-classify"),
+        ]:
+            _mw = QLineEdit(); _mw.setFixedHeight(24); _mw.setPlaceholderText(_ph)
+            _mw.textChanged.connect(self._on_manual_field_debounced)
+            self._mixed_pra_result_f[_fk] = _mw
+            _mprf.addRow(_fl + ":", _mw)
+        scroll_layout.addWidget(_mixed_pra_res_group)
+        _mixed_pra_res_group.setVisible(False)
+
         # ── Patient HLA Results ────────────────────────────────────────────────
         hla_group = QGroupBox("HLA Results — Patient")
         self._std_hla_group = hla_group   # ref for show/hide
@@ -1606,7 +1664,7 @@ class HLAReportGeneratorApp(QMainWindow):
         self._hla_pat_rows = {}   # {locus: (label_widget, row_widget)} — for single-locus filtering
         for locus in HLA_LOCI:
             row_w, a1, a2 = _make_allele_row()
-            hla_form.addRow(f"{locus}:", row_w)
+            hla_form.addRow(f"{hla_locus_label(locus)}:", row_w)
             self._hla_pat_rows[locus] = (hla_form.labelForField(row_w), row_w)
             self.hla_pat[locus] = [a1, a2]
             a1.textChanged.connect(self._on_manual_field_debounced)
@@ -1816,7 +1874,7 @@ class HLAReportGeneratorApp(QMainWindow):
 
         Returns {patient, alleles, chart_bytes, pra_pct, sab_class}.
         """
-        import openpyxl
+        import os as _os2
         from datetime import datetime, date
 
         def _fmt(v):
@@ -1828,7 +1886,47 @@ class HLAReportGeneratorApp(QMainWindow):
                 return str(int(v))
             return str(v).strip()
 
-        wb = openpyxl.load_workbook(path, data_only=True)
+        if _os2.path.splitext(path)[1].lower() == ".xls":
+            import xlrd as _xlrd
+
+            class _XlrdCell:
+                def __init__(self, value):
+                    self.value = value
+
+            class _XlrdSheet:
+                """Thin openpyxl-compatible wrapper around an xlrd sheet."""
+                def __init__(self, sh, datemode):
+                    self._sh = sh
+                    self._dm = datemode
+                    self.title = sh.name
+                    self.max_row = sh.nrows
+                    self.max_column = sh.ncols
+                    self._images = []
+
+                def cell(self, row, col):  # openpyxl uses 1-based indexing
+                    r, c = row - 1, col - 1
+                    if r < 0 or r >= self._sh.nrows or c < 0 or c >= self._sh.ncols:
+                        return _XlrdCell(None)
+                    ct  = self._sh.cell_type(r, c)
+                    val = self._sh.cell_value(r, c)
+                    if ct == _xlrd.XL_CELL_DATE:
+                        t   = _xlrd.xldate_as_tuple(val, self._dm)
+                        val = date(*t[:3]) if t[3:] == (0, 0, 0) else datetime(*t)
+                    elif ct == _xlrd.XL_CELL_EMPTY:
+                        val = None
+                    return _XlrdCell(val)
+
+            _xlrd_wb = _xlrd.open_workbook(path)
+
+            class _FakeWb:
+                def __init__(self, sheets):
+                    self.worksheets = sheets
+
+            wb = _FakeWb([_XlrdSheet(_xlrd_wb.sheet_by_index(i), _xlrd_wb.datemode)
+                          for i in range(_xlrd_wb.nsheets)])
+        else:
+            import openpyxl
+            wb = openpyxl.load_workbook(path, data_only=True)
 
         # ── locate sheets ───────────────────────────────────────────────────
         pat_ws = rep_ws = chart_ws = None
@@ -2577,9 +2675,8 @@ class HLAReportGeneratorApp(QMainWindow):
             case["kir_interpretation"] = _kir_ie.toPlainText().strip() if _kir_ie else ""
 
         # Attach PRA-specific fields
-        if rtype in ("pra_class1", "pra_class2"):
+        if rtype in ("pra_class1", "pra_class2", "mixed_pra"):
             pf = getattr(self, "_pra_pat_f", {})
-            rf = getattr(self, "_pra_result_f", {})
             def _tv(d, k, default=""): return d[k].text().strip() if k in d else default
             patient = {
                 "name":            _tv(pf, "patient_name"),
@@ -2598,9 +2695,17 @@ class HLAReportGeneratorApp(QMainWindow):
             nabl      = self._pra_nabl_chk.isChecked() if hasattr(self, "_pra_nabl_chk") else nabl
             sig_stamp = self._pra_seal_chk.isChecked() if hasattr(self, "_pra_seal_chk") else sig_stamp
             case = self._build_case(rtype, nabl, with_logo, sig_stamp, patient, [])
-            case["pra_percentage"] = _tv(rf, "pra_percentage")
-            case["pra_result"]     = _tv(rf, "pra_result")
-            case["pra_class"]      = "II" if rtype == "pra_class2" else "I"
+            if rtype == "mixed_pra":
+                mf = getattr(self, "_mixed_pra_result_f", {})
+                case["pra_percentage_1"] = _tv(mf, "pra_percentage_1")
+                case["pra_result_1"]     = _tv(mf, "pra_result_1")
+                case["pra_percentage_2"] = _tv(mf, "pra_percentage_2")
+                case["pra_result_2"]     = _tv(mf, "pra_result_2")
+            else:
+                rf = getattr(self, "_pra_result_f", {})
+                case["pra_percentage"] = _tv(rf, "pra_percentage")
+                case["pra_result"]     = _tv(rf, "pra_result")
+                case["pra_class"]      = "II" if rtype == "pra_class2" else "I"
 
         self._apply_sig_name_overrides(case, self._manual_sig_name_overrides)
         return case
@@ -2627,7 +2732,7 @@ class HLAReportGeneratorApp(QMainWindow):
         elif rtype == "kir_genotyping":
             name = self._kir_pat_f.get("patient_name", QLineEdit()).text().strip() if hasattr(self, "_kir_pat_f") else ""
             pin  = self._kir_pat_f.get("pin",           QLineEdit()).text().strip() if hasattr(self, "_kir_pat_f") else ""
-        elif rtype in ("pra_class1", "pra_class2"):
+        elif rtype in ("pra_class1", "pra_class2", "mixed_pra"):
             name = self._pra_pat_f.get("patient_name", QLineEdit()).text().strip() if hasattr(self, "_pra_pat_f") else ""
             pin  = self._pra_pat_f.get("pin",           QLineEdit()).text().strip() if hasattr(self, "_pra_pat_f") else ""
         else:
@@ -2636,7 +2741,7 @@ class HLAReportGeneratorApp(QMainWindow):
         if not name:
             QMessageBox.warning(self, "Missing Fields", "Patient Name is required.")
             return
-        if not pin and rtype not in ("cdc_crossmatch", "dsa_crossmatch", "sab_class1", "sab_class2", "flow_crossmatch", "luminex_typing", "pra_class1", "pra_class2"):
+        if not pin and rtype not in ("cdc_crossmatch", "dsa_crossmatch", "sab_class1", "sab_class2", "flow_crossmatch", "luminex_typing", "pra_class1", "pra_class2", "mixed_pra"):
             QMessageBox.warning(self, "Missing Fields", "PIN is required.")
             return
         out_dir = self.manual_output_label.text()
@@ -2801,7 +2906,7 @@ class HLAReportGeneratorApp(QMainWindow):
         is_flow_check = rtype == "flow_crossmatch"
         is_lx_check   = rtype == "luminex_typing"
         is_kir_check  = rtype == "kir_genotyping"
-        is_pra_check  = rtype in ("pra_class1", "pra_class2")
+        is_pra_check  = rtype in ("pra_class1", "pra_class2", "mixed_pra")
         # Single Locus / HLA-C use their own dedicated allele fields — the generic
         # multi-locus "HLA Results — Patient" grid has no use for these templates.
         is_sl_or_hc   = rtype in ("single_locus", "hla_c")
@@ -2898,11 +3003,15 @@ class HLAReportGeneratorApp(QMainWindow):
         for _grp in ("_kir_pat_group", "_kir_genes_group", "_kir_result_group"):
             if hasattr(self, _grp):
                 getattr(self, _grp).setVisible(is_kir)
-        # PRA form groups — only for PRA Class I / II
-        is_pra = rtype in ("pra_class1", "pra_class2")
-        for _grp in ("_pra_pat_group", "_pra_res_group"):
-            if hasattr(self, _grp):
-                getattr(self, _grp).setVisible(is_pra)
+        # PRA form groups
+        is_pra       = rtype in ("pra_class1", "pra_class2")
+        is_mixed_pra = rtype == "mixed_pra"
+        if hasattr(self, "_pra_pat_group"):
+            self._pra_pat_group.setVisible(is_pra or is_mixed_pra)
+        if hasattr(self, "_pra_res_group"):
+            self._pra_res_group.setVisible(is_pra)
+        if hasattr(self, "_mixed_pra_res_group"):
+            self._mixed_pra_res_group.setVisible(is_mixed_pra)
 
     def _upload_cdc_photo(self, who: str):
         """Open file dialog for CDC patient/donor photo upload."""
@@ -3057,6 +3166,14 @@ class HLAReportGeneratorApp(QMainWindow):
             self._kir_genotype_combo.setCurrentIndex(0)
         if hasattr(self, "_kir_interp_edit"):
             self._kir_interp_edit.clear()
+        # PRA form fields (shared patient info + single-class result)
+        for _w in getattr(self, "_pra_pat_f", {}).values():
+            if isinstance(_w, QLineEdit): _w.clear()
+        for _w in getattr(self, "_pra_result_f", {}).values():
+            if isinstance(_w, QLineEdit): _w.clear()
+        # Mixed PRA result fields
+        for _w in getattr(self, "_mixed_pra_result_f", {}).values():
+            if isinstance(_w, QLineEdit): _w.clear()
         self.manual_status_label.setText("Form cleared.")
 
     # ── Multi-donor helpers ────────────────────────────────────────────────────
@@ -3137,13 +3254,13 @@ class HLAReportGeneratorApp(QMainWindow):
         form.addRow(QLabel("<b>Donor HLA Results</b>"), QLabel(""))
         d_hla = {}
         for locus in HLA_LOCI:
-            alleles = hla_data.get(locus, ["", ""])
+            alleles = hla_get(hla_data, locus)
             a1_val  = _allele_str(alleles[0] if len(alleles) > 0 else None)
             a2_val  = _allele_str(alleles[1] if len(alleles) > 1 else None)
             row_w, a1, a2 = _make_allele_row(a1_val, a2_val)
             a1.textChanged.connect(self._on_manual_field_debounced)
             a2.textChanged.connect(self._on_manual_field_debounced)
-            form.addRow(f"  {locus}:", row_w)
+            form.addRow(f"  {hla_locus_label(locus)}:", row_w)
             d_hla[locus] = [a1, a2]
 
         # Donor photo upload — only shown for the "HLA (NGS with Photo)" template.
@@ -3342,7 +3459,7 @@ class HLAReportGeneratorApp(QMainWindow):
             name_val = getattr(self, "_kir_pat_f", {}).get("patient_name", QLineEdit()).text().strip()
         elif rtype in ("sab_class1", "sab_class2"):
             name_val = getattr(self, "_sab_pat_f", {}).get("patient_name", QLineEdit()).text().strip()
-        elif rtype in ("pra_class1", "pra_class2"):
+        elif rtype in ("pra_class1", "pra_class2", "mixed_pra"):
             name_val = getattr(self, "_pra_pat_f", {}).get("patient_name", QLineEdit()).text().strip()
         else:
             name_val = self.f.get("patient_name", QLineEdit()).text().strip()
@@ -3433,6 +3550,11 @@ class HLAReportGeneratorApp(QMainWindow):
         elif rtype in ("pra_class1", "pra_class2") and hasattr(self, "_pra_pat_f"):
             data["pra_patient_fields"] = {k: w.text().strip() for k, w in self._pra_pat_f.items()}
             data["pra_result_fields"]  = {k: w.text().strip() for k, w in self._pra_result_f.items()}
+            if hasattr(self, "_pra_nabl_chk"):
+                data["nabl"] = self._pra_nabl_chk.isChecked()
+        elif rtype == "mixed_pra" and hasattr(self, "_pra_pat_f"):
+            data["pra_patient_fields"]       = {k: w.text().strip() for k, w in self._pra_pat_f.items()}
+            data["mixed_pra_result_fields"]  = {k: w.text().strip() for k, w in getattr(self, "_mixed_pra_result_f", {}).items()}
             if hasattr(self, "_pra_nabl_chk"):
                 data["nabl"] = self._pra_nabl_chk.isChecked()
         elif rtype == "luminex_typing" and hasattr(self, "_lx_pat_f"):
@@ -3569,8 +3691,10 @@ class HLAReportGeneratorApp(QMainWindow):
                 old_fields = data.get("donor_fields", {})
                 old_hla    = data.get("donor_hla", {})
                 self._add_manual_donor({"fields": old_fields, "hla": old_hla})
-            for locus, vals in data.get("patient_hla", {}).items():
-                if locus in self.hla_pat:
+            _loaded_pat_hla = data.get("patient_hla", {})
+            for locus in self.hla_pat:
+                vals = hla_get(_loaded_pat_hla, locus)
+                if any(vals):
                     self.hla_pat[locus][0].setText(_allele_str(vals[0] if len(vals) > 0 else None))
                     self.hla_pat[locus][1].setText(_allele_str(vals[1] if len(vals) > 1 else None))
             # Restore signature name overrides
@@ -3683,6 +3807,15 @@ class HLAReportGeneratorApp(QMainWindow):
                         self._pra_result_f[k].setText(str(v))
                 if hasattr(self, "_pra_nabl_chk"):
                     self._pra_nabl_chk.setChecked(data.get("nabl", True))
+            elif _rtype == "mixed_pra":
+                for k, v in data.get("pra_patient_fields", {}).items():
+                    if hasattr(self, "_pra_pat_f") and k in self._pra_pat_f:
+                        self._pra_pat_f[k].setText(str(v))
+                for k, v in data.get("mixed_pra_result_fields", {}).items():
+                    if hasattr(self, "_mixed_pra_result_f") and k in self._mixed_pra_result_f:
+                        self._mixed_pra_result_f[k].setText(str(v))
+                if hasattr(self, "_pra_nabl_chk"):
+                    self._pra_nabl_chk.setChecked(data.get("nabl", True))
             elif _rtype == "luminex_typing":
                 for k, v in data.get("luminex_patient_fields", {}).items():
                     if hasattr(self, "_lx_pat_f") and k in self._lx_pat_f:
@@ -3698,14 +3831,20 @@ class HLAReportGeneratorApp(QMainWindow):
                             w.setCurrentText(str(v))
                         else:
                             w.setText(str(v))
-                for locus, vals in data.get("luminex_patient_hla", {}).items():
-                    if hasattr(self, "_lx_pat_hla") and locus in self._lx_pat_hla:
-                        self._lx_pat_hla[locus][0].setText(_allele_str(vals[0] if len(vals) > 0 else None))
-                        self._lx_pat_hla[locus][1].setText(_allele_str(vals[1] if len(vals) > 1 else None))
-                for locus, vals in data.get("luminex_donor_hla", {}).items():
-                    if hasattr(self, "_lx_don_hla") and locus in self._lx_don_hla:
-                        self._lx_don_hla[locus][0].setText(_allele_str(vals[0] if len(vals) > 0 else None))
-                        self._lx_don_hla[locus][1].setText(_allele_str(vals[1] if len(vals) > 1 else None))
+                _loaded_lx_pat_hla = data.get("luminex_patient_hla", {})
+                if hasattr(self, "_lx_pat_hla"):
+                    for locus in self._lx_pat_hla:
+                        vals = hla_get(_loaded_lx_pat_hla, locus)
+                        if any(vals):
+                            self._lx_pat_hla[locus][0].setText(_allele_str(vals[0] if len(vals) > 0 else None))
+                            self._lx_pat_hla[locus][1].setText(_allele_str(vals[1] if len(vals) > 1 else None))
+                _loaded_lx_don_hla = data.get("luminex_donor_hla", {})
+                if hasattr(self, "_lx_don_hla"):
+                    for locus in self._lx_don_hla:
+                        vals = hla_get(_loaded_lx_don_hla, locus)
+                        if any(vals):
+                            self._lx_don_hla[locus][0].setText(_allele_str(vals[0] if len(vals) > 0 else None))
+                            self._lx_don_hla[locus][1].setText(_allele_str(vals[1] if len(vals) > 1 else None))
                 _ie = getattr(self, "_lx_interp_edit", None)
                 if _ie is not None:
                     _ie.setPlainText(data.get("luminex_interpretation", ""))
@@ -4081,7 +4220,8 @@ class HLAReportGeneratorApp(QMainWindow):
         colors = {"single_hla": "#E8F5E9", "rpl_couple": "#FFF3E0",
                   "single_rpl": "#FCE4EC", "single_locus": "#F3E5F5",
                   "hla_c": "#E0F7FA",
-                  "transplant_donor": "#E3F2FD", "ngs_photo": "#E1F5FE"}
+                  "transplant_donor": "#E3F2FD", "ngs_photo": "#E1F5FE",
+                  "loci11": "#E3F2FD"}
         for i, case in enumerate(self.cases):
             p      = case["patient"]
             donors = case.get("donors", [])
@@ -4289,13 +4429,13 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_hla_pat = {}
         hla_data = p.get("hla", {})
         for locus in HLA_LOCI:
-            alleles = hla_data.get(locus, ["", ""])
+            alleles = hla_get(hla_data, locus)
             a1_val  = _allele_str(alleles[0] if len(alleles) > 0 else None)
             a2_val  = _allele_str(alleles[1] if len(alleles) > 1 else None)
             row_w, a1, a2 = _make_allele_row(a1_val, a2_val)
             a1.textChanged.connect(self._on_bulk_field_debounced)
             a2.textChanged.connect(self._on_bulk_field_debounced)
-            hla_pat_form.addRow(f"{locus}:", row_w)
+            hla_pat_form.addRow(f"{hla_locus_label(locus)}:", row_w)
             self._bulk_hla_pat[locus] = [a1, a2]
 
         # ── SAB branch ──────────────────────────────────────────────────────────
@@ -4479,7 +4619,7 @@ class HLAReportGeneratorApp(QMainWindow):
             d_hla  = {}
             d_hla_data = d.get("hla", {})
             for locus in HLA_LOCI:
-                alleles = d_hla_data.get(locus, ["", ""])
+                alleles = hla_get(d_hla_data, locus)
                 a1_raw  = alleles[0] if len(alleles) > 0 else None
                 a2_raw  = alleles[1] if len(alleles) > 1 else None
                 a1_val  = str(a1_raw) if a1_raw is not None else ""
@@ -4487,7 +4627,7 @@ class HLAReportGeneratorApp(QMainWindow):
                 row_w, a1, a2 = _make_allele_row(a1_val, a2_val)
                 a1.textChanged.connect(self._on_bulk_field_debounced)
                 a2.textChanged.connect(self._on_bulk_field_debounced)
-                d_form.addRow(f"  {locus}:", row_w)
+                d_form.addRow(f"  {hla_locus_label(locus)}:", row_w)
                 d_hla[locus] = [a1, a2]
 
             # Donor photo upload — only for "HLA (NGS with Photo)" cases
@@ -5251,8 +5391,8 @@ class HLAReportGeneratorApp(QMainWindow):
         for locus in HLA_LOCI:
             row_w = QWidget(); row_l = QHBoxLayout(row_w)
             row_l.setContentsMargins(0,0,0,0); row_l.setSpacing(4)
-            pa = pat_hla.get(locus, ["",""])
-            da = don_hla.get(locus, ["",""])
+            pa = hla_get(pat_hla, locus)
+            da = hla_get(don_hla, locus)
             pa1 = QLineEdit(pa[0] if pa else ""); pa1.setFixedWidth(72); pa1.setFixedHeight(22)
             pa2 = QLineEdit(pa[1] if len(pa)>1 else ""); pa2.setFixedWidth(72); pa2.setFixedHeight(22)
             sep = QLabel("|"); sep.setStyleSheet("color:gray;")
@@ -5263,7 +5403,7 @@ class HLAReportGeneratorApp(QMainWindow):
             for ew in (pa1, pa2, da1, da2): ew.textChanged.connect(self._on_bulk_field_debounced)
             self._bulk_lx_pat_hla[locus] = [pa1, pa2]
             self._bulk_lx_don_hla[locus] = [da1, da2]
-            lhf.addRow(f"{locus}:", row_w)
+            lhf.addRow(f"{hla_locus_label(locus)}:", row_w)
 
         lx_interp_grp = QGroupBox("Interpretation")
         lif = QVBoxLayout(); lx_interp_grp.setLayout(lif)
@@ -6662,7 +6802,11 @@ case — edits are flushed automatically).</p>
         return copy.deepcopy(DEFAULT_SIGNATORIES)
 
     def _build_case(self, rtype, nabl, with_logo, sig_stamp, patient, donors):
-        sigs_raw   = self._get_signatories()
+        # 11-Loci has its own fixed 3rd signatory (Dr. Indumathi. K) that isn't
+        # part of the user-editable global signatories list/order — pull its
+        # defaults directly rather than slicing the global list.
+        sigs_raw   = (hla_assets.get_default_signatories(rtype, nabl) if rtype == "loci11"
+                      else self._get_signatories())
         n          = read_sig_count(self.qsettings, rtype)
         sigs = []
         for sig in sigs_raw[:n]:
