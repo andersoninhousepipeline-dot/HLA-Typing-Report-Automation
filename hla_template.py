@@ -1796,12 +1796,7 @@ def _build_ngs_photo(case: dict, S: dict) -> list:
     info_col_w = _demography_col_widths(patient, donor)
 
     def IV_name(text, col_w_pts):
-        display = _norm_name(text)
-        # Only move trailing "(digits)" to its own line when the full name is too
-        # wide for the column — short names render on one line, long names wrap cleanly.
-        if pdfmetrics.stringWidth(display, F_BOLD, 10) > col_w_pts - 6:
-            display = re.sub(r'\s*(\(\d+\))$', r'<br/>\1', display)
-        return Paragraph(display, info_val_style)
+        return Paragraph(_norm_name(text), info_val_style)
 
     info_rows = [
         [IL("Patient name"),    IC(), IV_name(patient.get("name", ""), info_col_w[2]), E(), IL("Donor name"),           IC(), IV_name(donor.get("name", ""), info_col_w[6])],
@@ -2968,12 +2963,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     def E(): return Paragraph("", info_lbl_style)
 
     def IV_name(text, col_w_pts):
-        display = _norm_name(text)
-        # Only move trailing "(digits)" to its own line when the full name is too
-        # wide for the column — short names render on one line, long names wrap cleanly.
-        if pdfmetrics.stringWidth(display, F_BOLD, 10) > col_w_pts - 6:
-            display = re.sub(r'\s*(\(\d+\))$', r'<br/>\1', display)
-        return Paragraph(display, info_val_style)
+        return Paragraph(_norm_name(text), info_val_style)
 
     info_rows = [
         [IL("Patient name"),    IC(), IV_name(patient.get("name",""), info_col_w[2]), E(), IL("Donor name"),          IC(), IV_name(donor.get("name",""), info_col_w[6])],
@@ -3304,12 +3294,7 @@ def _build_dsa_report(case: dict, S: dict) -> list:
     def E(): return Paragraph("", info_lbl_style)
 
     def IV_name(text, col_w_pts):
-        display = _norm_name(text)
-        # Only move trailing "(digits)" to its own line when the full name is too
-        # wide for the column — short names render on one line, long names wrap cleanly.
-        if pdfmetrics.stringWidth(display, F_BOLD, 10) > col_w_pts - 6:
-            display = re.sub(r'\s*(\(\d+\))$', r'<br/>\1', display)
-        return Paragraph(display, info_val_style)
+        return Paragraph(_norm_name(text), info_val_style)
 
     info_rows = [
         [IL("Patient name"),    IC(), IV_name(patient.get("name",""), info_col_w[2]), E(), IL("Donor name"),          IC(), IV_name(donor.get("name",""), info_col_w[6])],
@@ -4461,12 +4446,7 @@ def _build_flow_report(case: dict, S: dict) -> list:
     info_col_w = _demography_col_widths(patient, donor)
 
     def IV_name(text, col_w_pts):
-        display = _norm_name(text)
-        # Only move trailing "(digits)" to its own line when the full name is too
-        # wide for the column — short names render on one line, long names wrap cleanly.
-        if pdfmetrics.stringWidth(display, F_BOLD, 10) > col_w_pts - 6:
-            display = re.sub(r'\s*(\(\d+\))$', r'<br/>\1', display)
-        return Paragraph(display, val_s)
+        return Paragraph(_norm_name(text), val_s)
 
     info_rows = [
         [IL("Patient name"),    IC(), IV_name(patient.get("name",""), info_col_w[2]), E(), IL("Donor name"),          IC(), IV_name(donor.get("name",""), info_col_w[6])],
