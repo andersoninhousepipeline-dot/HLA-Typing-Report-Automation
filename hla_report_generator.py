@@ -1669,6 +1669,17 @@ class HLAReportGeneratorApp(QMainWindow):
             self.hla_pat[locus] = [a1, a2]
             a1.textChanged.connect(self._on_manual_field_debounced)
             a2.textChanged.connect(self._on_manual_field_debounced)
+            if locus == "DRB3":
+                for _sep in ("DRB4", "DRB5"):
+                    _rw, _a1, _a2 = _make_allele_row()
+                    hla_form.addRow(f"{_sep}:", _rw)
+                    _lw = hla_form.labelForField(_rw)
+                    self._hla_pat_rows[_sep] = (_lw, _rw)
+                    self.hla_pat[_sep] = [_a1, _a2]
+                    _a1.textChanged.connect(self._on_manual_field_debounced)
+                    _a2.textChanged.connect(self._on_manual_field_debounced)
+                    _rw.setVisible(False)
+                    if _lw: _lw.setVisible(False)
 
         # ── Donors section — supports multiple donors ──────────────────────
         self._manual_donors  = []   # list of {container, fields, hla}
@@ -2953,6 +2964,7 @@ class HLAReportGeneratorApp(QMainWindow):
                     self.f["specimen"].setText(_hcc.currentText())
         # HLA Results — Patient: for single-locus-style templates, show only the
         # row matching the active locus instead of every locus in HLA_LOCI.
+        _is_sep_drb = rtype in ("ngs_photo", "transplant_donor")
         if hasattr(self, "_hla_pat_rows"):
             _only_locus = None
             if rtype == "single_locus":
@@ -2961,10 +2973,33 @@ class HLAReportGeneratorApp(QMainWindow):
             elif rtype == "hla_c":
                 _only_locus = "C"
             for _locus, (_lbl_w, _row_w) in self._hla_pat_rows.items():
+                if _locus in ("DRB4", "DRB5"):
+                    continue
                 _visible = _only_locus is None or _locus == _only_locus
                 if _lbl_w is not None:
                     _lbl_w.setVisible(_visible)
+                    if _locus == "DRB3" and _visible:
+                        _lbl_w.setText("DRB3:" if _is_sep_drb else "DRB3/4/5:")
                 _row_w.setVisible(_visible)
+            for _sep in ("DRB4", "DRB5"):
+                _lbl_w, _row_w = self._hla_pat_rows.get(_sep, (None, None))
+                _show = _is_sep_drb and _only_locus is None
+                if _row_w is not None:
+                    _row_w.setVisible(_show)
+                if _lbl_w is not None:
+                    _lbl_w.setVisible(_show)
+        # Donor DRB4/DRB5 row visibility (separate rows for ngs_photo/transplant_donor)
+        for _entry in getattr(self, "_manual_donors", []):
+            _d_hla_rows = _entry.get("hla_rows", {})
+            _drb3_lbl, _ = _d_hla_rows.get("DRB3", (None, None))
+            if _drb3_lbl is not None:
+                _drb3_lbl.setText("  DRB3:" if _is_sep_drb else "  DRB3/4/5:")
+            for _sep in ("DRB4", "DRB5"):
+                _lbl, _row = _d_hla_rows.get(_sep, (None, None))
+                if _row is not None:
+                    _row.setVisible(_is_sep_drb)
+                if _lbl is not None:
+                    _lbl.setVisible(_is_sep_drb)
         # Relationship field — only for single_rpl
         if hasattr(self, "_manual_relationship_row"):
             _rl, _rf = self._manual_relationship_row
@@ -3124,6 +3159,9 @@ class HLAReportGeneratorApp(QMainWindow):
         for w in self.f.values(): w.clear()
         for locus in HLA_LOCI:
             self.hla_pat[locus][0].clear(); self.hla_pat[locus][1].clear()
+        for _sep in ("DRB4", "DRB5"):
+            if _sep in self.hla_pat:
+                self.hla_pat[_sep][0].clear(); self.hla_pat[_sep][1].clear()
         for w in self._manual_report_settings.values(): w.clear()
         self._manual_report_settings.get("typing_status", QLineEdit()).setText("Complete")
         for w in self._manual_rpl_fields.values(): w.clear()
@@ -3253,15 +3291,39 @@ class HLAReportGeneratorApp(QMainWindow):
 
         form.addRow(QLabel("<b>Donor HLA Results</b>"), QLabel(""))
         d_hla = {}
+        d_hla_rows = {}  # {locus: (label_widget, row_widget)} for DRB4/DRB5 visibility
+        _eff_rtype = TEMPLATE_TO_RTYPE.get(
+            self._manual_rtype_combo.currentText() if hasattr(self, "_manual_rtype_combo") else "",
+            "single_hla")
+        _don_sep_drb = _eff_rtype in ("ngs_photo", "transplant_donor")
         for locus in HLA_LOCI:
-            alleles = hla_get(hla_data, locus)
+            if locus == "DRB3":
+                alleles = hla_data.get("DRB3", ["", ""])
+            else:
+                alleles = hla_get(hla_data, locus)
             a1_val  = _allele_str(alleles[0] if len(alleles) > 0 else None)
             a2_val  = _allele_str(alleles[1] if len(alleles) > 1 else None)
             row_w, a1, a2 = _make_allele_row(a1_val, a2_val)
             a1.textChanged.connect(self._on_manual_field_debounced)
             a2.textChanged.connect(self._on_manual_field_debounced)
-            form.addRow(f"  {hla_locus_label(locus)}:", row_w)
+            _lbl_text = ("  DRB3:" if _don_sep_drb else f"  {hla_locus_label(locus)}:") if locus == "DRB3" else f"  {hla_locus_label(locus)}:"
+            form.addRow(_lbl_text, row_w)
             d_hla[locus] = [a1, a2]
+            d_hla_rows[locus] = (form.labelForField(row_w), row_w)
+            if locus == "DRB3":
+                for _sep in ("DRB4", "DRB5"):
+                    _sal = hla_data.get(_sep, ["", ""])
+                    _a1v = _allele_str(_sal[0] if len(_sal) > 0 else None)
+                    _a2v = _allele_str(_sal[1] if len(_sal) > 1 else None)
+                    _rw, _a1, _a2 = _make_allele_row(_a1v, _a2v)
+                    _a1.textChanged.connect(self._on_manual_field_debounced)
+                    _a2.textChanged.connect(self._on_manual_field_debounced)
+                    form.addRow(f"  {_sep}:", _rw)
+                    _lw = form.labelForField(_rw)
+                    d_hla[_sep] = [_a1, _a2]
+                    d_hla_rows[_sep] = (_lw, _rw)
+                    _rw.setVisible(_don_sep_drb)
+                    if _lw: _lw.setVisible(_don_sep_drb)
 
         # Donor photo upload — only shown for the "HLA (NGS with Photo)" template.
         _dp_row = QWidget()
@@ -3281,8 +3343,8 @@ class HLAReportGeneratorApp(QMainWindow):
         c_lay.addWidget(group)
         c_lay.addWidget(remove_btn)
 
-        entry = {"container": container, "fields": d_fields, "hla": d_hla, "group": group,
-                 "photo_bytes": None, "photo_row": _dp_row, "photo_lbl": _dp_lbl}
+        entry = {"container": container, "fields": d_fields, "hla": d_hla, "hla_rows": d_hla_rows,
+                 "group": group, "photo_bytes": None, "photo_row": _dp_row, "photo_lbl": _dp_lbl}
         # Restore a photo saved in a draft (base64) if present
         _pb64 = (donor_data or {}).get("photo_b64") if isinstance(donor_data, dict) else None
         if _pb64:
@@ -3692,8 +3754,12 @@ class HLAReportGeneratorApp(QMainWindow):
                 old_hla    = data.get("donor_hla", {})
                 self._add_manual_donor({"fields": old_fields, "hla": old_hla})
             _loaded_pat_hla = data.get("patient_hla", {})
+            _load_sep_drb = data.get("report_type") in ("ngs_photo", "transplant_donor")
             for locus in self.hla_pat:
-                vals = hla_get(_loaded_pat_hla, locus)
+                if locus == "DRB3" and _load_sep_drb:
+                    vals = _loaded_pat_hla.get("DRB3", ["", ""])
+                else:
+                    vals = hla_get(_loaded_pat_hla, locus)
                 if any(vals):
                     self.hla_pat[locus][0].setText(_allele_str(vals[0] if len(vals) > 0 else None))
                     self.hla_pat[locus][1].setText(_allele_str(vals[1] if len(vals) > 1 else None))
@@ -4428,15 +4494,30 @@ class HLAReportGeneratorApp(QMainWindow):
 
         self._bulk_hla_pat = {}
         hla_data = p.get("hla", {})
+        _bulk_sep_drb = case.get("report_type") in ("ngs_photo", "transplant_donor")
         for locus in HLA_LOCI:
-            alleles = hla_get(hla_data, locus)
+            if locus == "DRB3":
+                alleles = hla_data.get("DRB3", ["", ""])
+            else:
+                alleles = hla_get(hla_data, locus)
             a1_val  = _allele_str(alleles[0] if len(alleles) > 0 else None)
             a2_val  = _allele_str(alleles[1] if len(alleles) > 1 else None)
             row_w, a1, a2 = _make_allele_row(a1_val, a2_val)
             a1.textChanged.connect(self._on_bulk_field_debounced)
             a2.textChanged.connect(self._on_bulk_field_debounced)
-            hla_pat_form.addRow(f"{hla_locus_label(locus)}:", row_w)
+            _lbl = ("DRB3:" if _bulk_sep_drb else f"{hla_locus_label(locus)}:") if locus == "DRB3" else f"{hla_locus_label(locus)}:"
+            hla_pat_form.addRow(_lbl, row_w)
             self._bulk_hla_pat[locus] = [a1, a2]
+            if locus == "DRB3" and _bulk_sep_drb:
+                for _sep in ("DRB4", "DRB5"):
+                    _sal = hla_data.get(_sep, ["", ""])
+                    _a1v = _allele_str(_sal[0] if len(_sal) > 0 else None)
+                    _a2v = _allele_str(_sal[1] if len(_sal) > 1 else None)
+                    _rw, _a1, _a2 = _make_allele_row(_a1v, _a2v)
+                    _a1.textChanged.connect(self._on_bulk_field_debounced)
+                    _a2.textChanged.connect(self._on_bulk_field_debounced)
+                    hla_pat_form.addRow(f"{_sep}:", _rw)
+                    self._bulk_hla_pat[_sep] = [_a1, _a2]
 
         # ── SAB branch ──────────────────────────────────────────────────────────
         if case.get("report_type") in ("sab_class1", "sab_class2"):
@@ -4619,7 +4700,10 @@ class HLAReportGeneratorApp(QMainWindow):
             d_hla  = {}
             d_hla_data = d.get("hla", {})
             for locus in HLA_LOCI:
-                alleles = hla_get(d_hla_data, locus)
+                if locus == "DRB3":
+                    alleles = d_hla_data.get("DRB3", ["", ""])
+                else:
+                    alleles = hla_get(d_hla_data, locus)
                 a1_raw  = alleles[0] if len(alleles) > 0 else None
                 a2_raw  = alleles[1] if len(alleles) > 1 else None
                 a1_val  = str(a1_raw) if a1_raw is not None else ""
@@ -4627,8 +4711,19 @@ class HLAReportGeneratorApp(QMainWindow):
                 row_w, a1, a2 = _make_allele_row(a1_val, a2_val)
                 a1.textChanged.connect(self._on_bulk_field_debounced)
                 a2.textChanged.connect(self._on_bulk_field_debounced)
-                d_form.addRow(f"  {hla_locus_label(locus)}:", row_w)
+                _dlbl = ("  DRB3:" if _bulk_sep_drb else f"  {hla_locus_label(locus)}:") if locus == "DRB3" else f"  {hla_locus_label(locus)}:"
+                d_form.addRow(_dlbl, row_w)
                 d_hla[locus] = [a1, a2]
+                if locus == "DRB3" and _bulk_sep_drb:
+                    for _sep in ("DRB4", "DRB5"):
+                        _dsal = d_hla_data.get(_sep, ["", ""])
+                        _da1v = str(_dsal[0]) if _dsal and _dsal[0] else ""
+                        _da2v = str(_dsal[1]) if _dsal and len(_dsal) > 1 and _dsal[1] else ""
+                        _drw, _da1, _da2 = _make_allele_row(_da1v, _da2v)
+                        _da1.textChanged.connect(self._on_bulk_field_debounced)
+                        _da2.textChanged.connect(self._on_bulk_field_debounced)
+                        d_form.addRow(f"  {_sep}:", _drw)
+                        d_hla[_sep] = [_da1, _da2]
 
             # Donor photo upload — only for "HLA (NGS with Photo)" cases
             _bd_row = QWidget()

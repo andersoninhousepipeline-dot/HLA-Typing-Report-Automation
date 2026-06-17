@@ -1105,17 +1105,18 @@ def _ngs_info_table(person: dict, S: dict, is_donor: bool = False, patient_name:
 # Header row → C_HLA_HDR (#F9BE8F).  Data rows → C_HLA_ROW (#F1F2F1).
 # Row labels: "1" and "2" (Calibri-Bold 11).
 
-def _hla_table(person: dict, S: dict, compact: bool = False, loci11: bool = False) -> Table:
+def _hla_table(person: dict, S: dict, compact: bool = False, separate_drb: bool = False) -> Table:
     LOCI       = ["A", "B", "C", "DRB1", "DQB1", "DPB1"]
-    EXTRA_LOCI = ["DRB345", "DQA1", "DPA1"] if loci11 else ["DRB3", "DRB4", "DRB5"]
+    EXTRA_LOCI = (["DRB3", "DRB4", "DRB5", "DQA1", "DPA1"]
+                  if separate_drb else ["DRB345", "DQA1", "DPA1"])
     hla = person.get("hla", {})
-    _drb_split = {} if loci11 else _split_drb345(hla)
+    _drb_split = _split_drb345(hla) if separate_drb else {}
 
     def _val(l):
         if l == "DRB345":
             return _merged_drb345(hla)
         if l in ("DRB3", "DRB4", "DRB5"):
-            return _drb_split.get(l, [None, None])
+            return _drb_split.get(l, hla.get(l, [None, None]))
         return hla.get(l, [None, None])
 
     loci = [l for l in LOCI if any(hla.get(l, [None, None]))]
@@ -1125,20 +1126,45 @@ def _hla_table(person: dict, S: dict, compact: bool = False, loci11: bool = Fals
 
     def _hdr(l): return "HLA DRB3/4/5*" if l == "DRB345" else f"HLA-{l}*"
 
-    n = len(loci)
-    col_w = [CONTENT_W * 0.10] + [CONTENT_W * 0.90 / n] * n
+    F_HDR = S["hla_hdr"].fontName
+    F_VAL = S["hla_val"].fontName
+    _CELL_PAD = 8  # total horizontal cell padding per column
 
-    # With 7+ data columns (DRB3/4/5, DQA1, DPA1 all present) the header text no
-    # longer fits at the base 11pt and wraps to two lines, inflating the row
-    # height enough to push content onto an extra page. Shrink just the header
-    # font \u2014 never the allele values \u2014 only as much as needed so the widest
-    # header ("HLA DRB3/4/5*") fits on one line within its column.
-    hdr_texts  = ["LOCUS"] + [_hdr(l) for l in loci]
-    F_HDR      = S["hla_hdr"].fontName
-    max_hdr_w  = max(pdfmetrics.stringWidth(t, F_HDR, 11) for t in hdr_texts)
-    avail_w    = col_w[1] - 6   # smallest data column minus cell padding
-    hdr_size   = 11.0 if max_hdr_w <= avail_w else max(7.5, 11.0 * avail_w / max_hdr_w)
-    hdr_style  = S["hla_hdr"] if hdr_size >= 11.0 else ParagraphStyle(
+    # Compute minimum column width for each data column so that both the header
+    # text and the widest allele value in that column fit on a single line.
+    def _disp(l, v):
+        if l == "DRB345":
+            return _clean_display(str(v)) if v and str(v).strip() else "\u2014"
+        s = _clean_display(str(v)) if v and str(v).strip() else ""
+        return _strip_prefix(s) if s else "\u2014"
+
+    _min_widths = []
+    for l in loci:
+        al = _val(l)
+        v1 = al[0] if al and al[0] else "\u2014"
+        v2 = al[1] if al and len(al) > 1 and al[1] else "\u2014"
+        _min_widths.append(max(
+            pdfmetrics.stringWidth(_hdr(l), F_HDR, 11),
+            pdfmetrics.stringWidth(_disp(l, v1), F_VAL, 10),
+            pdfmetrics.stringWidth(_disp(l, v2), F_VAL, 10),
+        ) + _CELL_PAD)
+
+    lbl_w = CONTENT_W * 0.10
+    _avail = CONTENT_W - lbl_w
+    _total_min = sum(_min_widths)
+
+    if _total_min <= _avail:
+        col_w = [lbl_w] + _min_widths
+    else:
+        _scale = _avail / _total_min
+        col_w = [lbl_w] + [w * _scale for w in _min_widths]
+
+    # Scale header font only when the smallest column can't fit its header at 11pt.
+    _hdr_texts  = ["LOCUS"] + [_hdr(l) for l in loci]
+    _max_hdr_w  = max(pdfmetrics.stringWidth(t, F_HDR, 11) for t in _hdr_texts)
+    avail_w     = min(col_w[1:]) - 6
+    hdr_size    = 11.0 if _max_hdr_w <= avail_w else max(7.5, 11.0 * avail_w / _max_hdr_w)
+    hdr_style   = S["hla_hdr"] if hdr_size >= 11.0 else ParagraphStyle(
         "hla_hdr_fit", parent=S["hla_hdr"], fontSize=hdr_size, leading=hdr_size + 2)
 
     def HH(t): return Paragraph(t, hdr_style)
@@ -1181,7 +1207,7 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
                       patient_name: str = "", force_compact: bool = False,
                       spacing_scale: float = 1.0, extra_inner_gap: float = 0.0,
                       no_compact: bool = False, nabl: bool = False,
-                      show_relationship: bool = False, loci11: bool = False) -> list:
+                      show_relationship: bool = False, separate_drb: bool = False) -> list:
     _raw_remarks = person.get("remarks", "")
     _remarks_display = _clean_display(_raw_remarks) if _raw_remarks else ""
     # Normalize HLA allele nomenclature in remarks (capitalize and fix formatting)
@@ -1271,7 +1297,7 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
 
     # HLA table + its remarks/match are kept together as ONE unit so the table
     # never lands at the bottom of a page while its remarks spill onto the next.
-    hla_and_tail = [_hla_table(person, S, compact=compact_info, loci11=loci11), Spacer(1, post_hla_spacer)] + tail
+    hla_and_tail = [_hla_table(person, S, compact=compact_info, separate_drb=separate_drb), Spacer(1, post_hla_spacer)] + tail
     elems.append(KeepTogether(hla_and_tail))
 
 
@@ -1684,17 +1710,19 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
     _is_loci11 = case.get("report_type") == "loci11"
     _scale, _extra = (1.0, 0.0) if (any_remarks or not donors or _is_loci11) else (2.0, 4.0)
 
+    _sep_drb = case.get("report_type") != "loci11"
+
     elems = []
     elems.extend(_ngs_person_block(patient, is_donor=False, match_str="", S=S,
                                    spacing_scale=_scale, extra_inner_gap=_extra, no_compact=True,
-                                   nabl=case.get("nabl", True), loci11=_is_loci11))
+                                   nabl=case.get("nabl", True), separate_drb=_sep_drb))
 
     _p_name = patient.get("name", "")
     for d in donors:
         elems.extend(_ngs_person_block(d, is_donor=True, match_str=d.get("match", ""), S=S,
                                        patient_name=_p_name,
                                        spacing_scale=_scale, extra_inner_gap=_extra, no_compact=True,
-                                       nabl=case.get("nabl", True), loci11=_is_loci11))
+                                       nabl=case.get("nabl", True), separate_drb=_sep_drb))
 
     # Drop the trailing inter-block Spacer left by the last person block — if it
     # doesn't fit on the current page, ReportLab defers it onto the next page,
@@ -1860,15 +1888,15 @@ def _build_ngs_photo(case: dict, S: dict) -> list:
     elems.append(Spacer(1, 1 * mm))
 
     LOCI       = ["A", "B", "C", "DRB1", "DQB1", "DPB1"]
-    EXTRA_LOCI = ["DRB3", "DRB4", "DRB5"]
+    EXTRA_LOCI = ["DRB3", "DRB4", "DRB5", "DQA1", "DPA1"]
 
     # Pre-split DRB3/4/5 for each person so alleles appear under the correct header
-    all_hla  = [patient.get("hla", {})] + [d.get("hla", {}) for d in donors]
-    all_drb  = [_split_drb345(h) for h in all_hla]
+    all_hla = [patient.get("hla", {})] + [d.get("hla", {}) for d in donors]
+    all_drb = [_split_drb345(h) for h in all_hla]
 
     def _has(h, drb, l):
         if l in ("DRB3", "DRB4", "DRB5"):
-            return any(drb.get(l, [None, None]))
+            return any(drb.get(l, h.get(l, [None, None])))
         return any(h.get(l, [None, None]))
     loci = [l for l in LOCI if any(_has(h, drb, l) for h, drb in zip(all_hla, all_drb))]
     loci += [l for l in EXTRA_LOCI if any(_has(h, drb, l) for h, drb in zip(all_hla, all_drb))]
@@ -1901,7 +1929,7 @@ def _build_ngs_photo(case: dict, S: dict) -> list:
         cls_label = Paragraph("HLA-CLASS<br/>I , II", S["hla_lbl"])
         row1, row2 = [cls_label], [HV("")]
         for l in loci:
-            al = drb.get(l, [None, None]) if l in ("DRB3", "DRB4", "DRB5") else h.get(l, [None, None])
+            al = drb.get(l, h.get(l, [None, None])) if l in ("DRB3", "DRB4", "DRB5") else h.get(l, [None, None])
             row1.append(HV(_strip_prefix(al[0]) if al and al[0] else "—"))
             row2.append(HV(_strip_prefix(al[1]) if al and len(al) > 1 and al[1] else "—"))
         rows.append(row1); rows.append(row2)
