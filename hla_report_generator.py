@@ -3445,7 +3445,7 @@ class HLAReportGeneratorApp(QMainWindow):
 
     def _make_lx_interpretation(self, patient_name: str, donor_name: str, match: str) -> str:
         p = (patient_name or "Patient").strip()
-        d = (donor_name or "Potential donor").strip()
+        d = (donor_name or "Donor").strip()
         m = (match or "").strip()
         # Normalize match to simple X/10 if user entered just a number
         if m and "/" not in m and "of" not in m:
@@ -3455,10 +3455,8 @@ class HLAReportGeneratorApp(QMainWindow):
                 m = f"{m}/10"
             except Exception:
                 pass
-        sentence1 = f"The HLA typing of {p} (Patient) and {d} (Potential donor) shows allele match."
-        sentence2 = f"The patient had showed about {m} match with the donor." if m else ""
-        out = sentence1 + (" " + sentence2 if sentence2 else "")
-        return out
+        m = m or "—"
+        return f"The Patient ({p}) had showed about {m} match with the Donor ({d})."
 
     def _auto_fill_manual_lx_interpretation(self):
         try:
@@ -4539,8 +4537,8 @@ class HLAReportGeneratorApp(QMainWindow):
             self._rebuild_bulk_kir_editor(idx, case, pat_group, meta_group)
             return
 
-        # ── PRA Class I / II branch ──────────────────────────────────────────
-        if case.get("report_type") in ("pra_class1", "pra_class2"):
+        # ── PRA Class I / II / Mixed branch ──────────────────────────────────
+        if case.get("report_type") in ("pra_class1", "pra_class2", "mixed_pra"):
             self._rebuild_bulk_pra_editor(idx, case, pat_group, meta_group)
             return
 
@@ -5663,20 +5661,34 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_pra_nabl_chk.stateChanged.connect(self._on_bulk_field_debounced)
         ppf.addRow(self._bulk_pra_nabl_chk)
 
-        pra_res_grp = QGroupBox("PRA Result")
+        _is_mixed = case.get("report_type") == "mixed_pra"
+        pra_res_grp = QGroupBox("Mixed PRA Result" if _is_mixed else "PRA Result")
         prf = QFormLayout(); pra_res_grp.setLayout(prf)
         prf.setSpacing(1); prf.setContentsMargins(4, 2, 4, 2)
-        _w_pct = QLineEdit(str(case.get("pra_percentage", "") or ""))
-        _w_pct.setFixedHeight(24); _w_pct.setPlaceholderText("e.g. 14  (% sign optional)")
-        _w_pct.textChanged.connect(self._on_bulk_field_debounced)
-        self._bulk_pra_result_f["pra_percentage"] = _w_pct
-        prf.addRow("PRA Percentage:", _w_pct)
-        _w_res = QLineEdit(str(case.get("pra_result", "") or ""))
-        _w_res.setFixedHeight(24)
-        _w_res.setPlaceholderText("Leave blank to auto-classify from percentage")
-        _w_res.textChanged.connect(self._on_bulk_field_debounced)
-        self._bulk_pra_result_f["pra_result"] = _w_res
-        prf.addRow("Result:", _w_res)
+        if _is_mixed:
+            for _fk, _fl, _ph in [
+                ("pra_percentage_1", "Class I Percentage",  "e.g. 14  (% sign optional)"),
+                ("pra_result_1",     "Class I Result",      "Leave blank to auto-classify"),
+                ("pra_percentage_2", "Class II Percentage", "e.g. 22  (% sign optional)"),
+                ("pra_result_2",     "Class II Result",     "Leave blank to auto-classify"),
+            ]:
+                _mw = QLineEdit(str(case.get(_fk, "") or ""))
+                _mw.setFixedHeight(24); _mw.setPlaceholderText(_ph)
+                _mw.textChanged.connect(self._on_bulk_field_debounced)
+                self._bulk_pra_result_f[_fk] = _mw
+                prf.addRow(_fl + ":", _mw)
+        else:
+            _w_pct = QLineEdit(str(case.get("pra_percentage", "") or ""))
+            _w_pct.setFixedHeight(24); _w_pct.setPlaceholderText("e.g. 14  (% sign optional)")
+            _w_pct.textChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_pra_result_f["pra_percentage"] = _w_pct
+            prf.addRow("PRA Percentage:", _w_pct)
+            _w_res = QLineEdit(str(case.get("pra_result", "") or ""))
+            _w_res.setFixedHeight(24)
+            _w_res.setPlaceholderText("Leave blank to auto-classify from percentage")
+            _w_res.textChanged.connect(self._on_bulk_field_debounced)
+            self._bulk_pra_result_f["pra_result"] = _w_res
+            prf.addRow("Result:", _w_res)
 
         for grp in (pra_pat_grp, meta_group, pra_res_grp):
             self._bulk_editor_layout.addWidget(grp)
@@ -5868,18 +5880,26 @@ class HLAReportGeneratorApp(QMainWindow):
             return
 
         # ── PRA path ─────────────────────────────────────────────────────────
-        if case.get("report_type") in ("pra_class1", "pra_class2"):
+        if case.get("report_type") in ("pra_class1", "pra_class2", "mixed_pra"):
+            _was_mixed = case.get("report_type") == "mixed_pra"
             if hasattr(self, "_bulk_pra_pat_f"):
                 for key, w in self._bulk_pra_pat_f.items():
                     dest = "name" if key == "patient_name" else key
                     p[dest] = w.text().strip()
             if hasattr(self, "_bulk_pra_result_f"):
-                case["pra_percentage"] = self._bulk_pra_result_f["pra_percentage"].text().strip()
-                case["pra_result"]     = self._bulk_pra_result_f["pra_result"].text().strip()
+                if _was_mixed:
+                    for key in ("pra_percentage_1", "pra_result_1", "pra_percentage_2", "pra_result_2"):
+                        if key in self._bulk_pra_result_f:
+                            case[key] = self._bulk_pra_result_f[key].text().strip()
+                else:
+                    case["pra_percentage"] = self._bulk_pra_result_f["pra_percentage"].text().strip()
+                    case["pra_result"]     = self._bulk_pra_result_f["pra_result"].text().strip()
             if hasattr(self, "_bulk_rtype_combo") and self._bulk_rtype_combo is not None:
                 case["report_type"] = TEMPLATE_TO_RTYPE.get(
-                    self._bulk_rtype_combo.currentText(), "pra_class1")
-            case["pra_class"] = "II" if case.get("report_type") == "pra_class2" else "I"
+                    self._bulk_rtype_combo.currentText(),
+                    "mixed_pra" if _was_mixed else "pra_class1")
+            if case.get("report_type") != "mixed_pra":
+                case["pra_class"] = "II" if case.get("report_type") == "pra_class2" else "I"
             case["with_logo"] = self.logo_combo.currentText() == "With Logo"
             if hasattr(self, "_bulk_pra_nabl_chk") and self._bulk_pra_nabl_chk is not None:
                 case["nabl"] = self._bulk_pra_nabl_chk.isChecked()
@@ -6370,7 +6390,7 @@ class HLAReportGeneratorApp(QMainWindow):
             kpf = data["kir_patient_fields"]
             patient = dict(kpf)
             patient["name"] = patient.pop("patient_name", kpf.get("patient_name", ""))
-        elif rtype in ("pra_class1", "pra_class2") and "pra_patient_fields" in data:
+        elif rtype in ("pra_class1", "pra_class2", "mixed_pra") and "pra_patient_fields" in data:
             ppf = data["pra_patient_fields"]
             patient = dict(ppf)
             patient["name"] = patient.pop("patient_name", ppf.get("patient_name", ""))
@@ -6441,6 +6461,10 @@ class HLAReportGeneratorApp(QMainWindow):
             case["pra_percentage"] = prf.get("pra_percentage", "")
             case["pra_result"]     = prf.get("pra_result", "")
             case["pra_class"]      = "II" if rtype == "pra_class2" else "I"
+        elif rtype == "mixed_pra":
+            mprf = data.get("mixed_pra_result_fields", {})
+            for key in ("pra_percentage_1", "pra_result_1", "pra_percentage_2", "pra_result_2"):
+                case[key] = mprf.get(key, "")
         return case
 
     @staticmethod

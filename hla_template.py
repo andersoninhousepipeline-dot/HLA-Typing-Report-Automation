@@ -629,7 +629,7 @@ def _demography_col_widths(patient: dict, donor: dict) -> list:
         _w(_clean_display(donor.get("report_date", ""))),
     ]
     need6 = max(donor_vals) + 8             # widest donor value + cell padding
-    col6 = max(130.0, min(need6, 280.0))    # wide enough for long donor names
+    col6 = max(58.0, min(need6, 280.0))     # wide enough for long donor names
     col2 = pool - col6
     MIN2 = 120.0                            # never starve the patient value column
     if col2 < MIN2:
@@ -1202,6 +1202,7 @@ def _hla_table(person: dict, S: dict, compact: bool = False, separate_drb: bool 
 def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
                       patient_name: str = "", force_compact: bool = False,
                       spacing_scale: float = 1.0, extra_inner_gap: float = 0.0,
+                      extra_post_hla_gap: float = 0.0, extra_inter_block_gap: float = 0.0,
                       no_compact: bool = False, nabl: bool = False,
                       show_relationship: bool = False, separate_drb: bool = False) -> list:
     _raw_remarks = person.get("remarks", "")
@@ -1228,14 +1229,15 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
     long_content = (has_remarks and len(_remarks_display) > 220) or (has_remarks and has_match)
 
     if no_compact:
-        # Transplant donor: never shrink table font/padding.
-        # When this block has remarks or match, tighten only the within-block gaps
-        # so remarks fit on the same page; keep inter_block_gap generous so the
-        # next donor block does not get pulled up onto this page.
+        # Transplant donor / 11-Loci: never shrink table font/padding.
+        # When this block has remarks or match, keep inner_gap tight (label table
+        # to locus table) but give post_hla_spacer (locus table to Remarks) some
+        # visible room — there's normally slack left on the page below the
+        # remarks, so this still fits without spilling to another page.
         compact_info = False
         if has_remarks or has_match:
             inner_gap       = 1 * mm
-            post_hla_spacer = 0.5 * mm
+            post_hla_spacer = 1 * mm
             inter_block_gap = 3 * mm
         else:
             inner_gap        = 2 * mm
@@ -1261,7 +1263,9 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
         inner_gap       *= spacing_scale
         post_hla_spacer *= spacing_scale
         inter_block_gap *= spacing_scale
-    inner_gap += extra_inner_gap * mm
+    inner_gap       += extra_inner_gap * mm
+    post_hla_spacer += extra_post_hla_gap * mm
+    inter_block_gap += extra_inter_block_gap * mm
 
     # Info table kept together as its own unit — it moves to the next page intact
     # if it doesn't fit, independent of the HLA table that follows.
@@ -1275,9 +1279,12 @@ def _ngs_person_block(person: dict, is_donor: bool, match_str: str, S: dict,
     # Remarks + match kept together so they never split across pages.
     tail = []
     if has_remarks:
+        # Transplant Donor / 11-Loci render remarks 1pt larger than the other
+        # NGS-style templates (single_hla, single_rpl) that share this block.
+        _remarks_size = 11 if no_compact else 10
         tail.append(Paragraph(f"<b>Remarks:</b> {_remarks_display}",
                               ParagraphStyle("remarks_j", parent=S["body_small"],
-                                             fontSize=10, leading=12,
+                                             fontSize=_remarks_size, leading=_remarks_size + 2,
                                              wordWrap='CJK',
                                              alignment=TA_LEFT, spaceAfter=2)))
     if has_match:
@@ -1694,28 +1701,46 @@ def _build_ngs_transplant(case: dict, S: dict) -> list:
     def _person_has_content(p):
         return bool((p.get("remarks") or "").strip()) or bool((p.get("match") or "").strip())
     any_remarks = _person_has_content(patient) or any(_person_has_content(d) for d in donors)
-    # The 2x "spread" spacing exists to fill the page nicely when there's a donor
-    # block to space out from the patient block, using the standard 6-locus table.
-    # The 11-Loci report's table is wider (DRB3/4/5 column) and has a taller,
-    # word-wrapped header, so it needs all the room it can get — spreading it
-    # like the standard table leaves the patient+donor blocks no longer fitting
-    # page 1 together. Use tight spacing for loci11 always, and otherwise
-    # whenever there's no donor to spread toward or remarks/match text already
-    # needs the room. (IMGT/HLA Release still always lands on its own fresh page
-    # regardless of this spacing choice — see PageBreakIfNotEmpty below.)
+    # The 2x/4mm "spread" spacing exists to fill the page nicely when there's a
+    # donor block to space out from the patient block, using the standard 6-locus
+    # table. The 11-Loci report's table is wider (DRB3/4/5 column), has a taller,
+    # word-wrapped header, and renders Remarks 1pt larger (see _remarks_size
+    # below), so the full standard spread risks pushing the patient+donor blocks
+    # off page 1 when both remarks and a match score are present — 1.5x (with no
+    # extra_inner_gap) is the most headroom loci11 can take and still keep that
+    # combination on page 1, so loci11 always uses that (regardless of
+    # remarks/donors) for visible space between the demography table and each
+    # person's locus table. (IMGT/HLA Release still always lands on its own
+    # fresh page regardless of this spacing choice — see PageBreakIfNotEmpty
+    # below.)
     _is_loci11 = case.get("report_type") == "loci11"
-    _scale, _extra = (1.0, 0.0) if (any_remarks or not donors or _is_loci11) else (2.0, 4.0)
+    _post_extra, _inter_extra = 0.0, 0.0
+    if _is_loci11:
+        _scale, _extra = 1.5, 0.0
+    elif any_remarks or not donors:
+        _scale, _extra = 1.0, 0.0
+        # Transplant Donor (6-locus table, no DRB3/4/5 wrap) has much more page-1
+        # headroom than 11-Loci even with remarks+match present, so it can afford
+        # visible space between the locus table/Remarks and the next person's
+        # block without risking a 3rd page.
+        if donors:
+            _post_extra, _inter_extra = 1.5, 1.5
+    else:
+        _scale, _extra = 2.0, 4.0
 
     _sep_drb = case.get("report_type") != "loci11"
 
     elems = []
     elems.extend(_ngs_person_block(patient, is_donor=False, match_str="", S=S,
-                                   spacing_scale=_scale, extra_inner_gap=_extra, no_compact=True,
+                                   spacing_scale=_scale, extra_inner_gap=_extra,
+                                   extra_post_hla_gap=_post_extra, extra_inter_block_gap=_inter_extra,
+                                   no_compact=True,
                                    nabl=case.get("nabl", True), separate_drb=_sep_drb))
 
     _p_name = patient.get("name", "")
     for d in donors:
         elems.extend(_ngs_person_block(d, is_donor=True, match_str=d.get("match", ""), S=S,
+                                       extra_post_hla_gap=_post_extra, extra_inter_block_gap=_inter_extra,
                                        patient_name=_p_name,
                                        spacing_scale=_scale, extra_inner_gap=_extra, no_compact=True,
                                        nabl=case.get("nabl", True), separate_drb=_sep_drb))
