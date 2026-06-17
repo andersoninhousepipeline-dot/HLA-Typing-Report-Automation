@@ -632,7 +632,7 @@ def _demography_col_widths(patient: dict, donor: dict) -> list:
         _w(_clean_display(donor.get("report_date", ""))),
     ]
     need6 = max(donor_vals) + 8             # widest donor value + cell padding
-    col6 = max(58.0, min(need6, 200.0))     # clamp to a sane range
+    col6 = max(130.0, min(need6, 200.0))    # min 130pt so donor name never looks cramped
     col2 = pool - col6
     MIN2 = 120.0                            # never starve the patient value column
     if col2 < MIN2:
@@ -1775,6 +1775,7 @@ def _build_ngs_photo(case: dict, S: dict) -> list:
         # Keep font size constant; let long names wrap to a second line so the
         # row grows taller rather than the text shrinking to fit one line.
         display = _norm_name(text)
+        display = re.sub(r'\s*(\(\d+\))$', r'<br/>\1', display)
         return Paragraph(display, info_val_style)
 
     info_rows = [
