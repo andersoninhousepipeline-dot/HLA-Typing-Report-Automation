@@ -3911,7 +3911,13 @@ class HLAReportGeneratorApp(QMainWindow):
                             self._lx_don_hla[locus][1].setText(_allele_str(vals[1] if len(vals) > 1 else None))
                 _ie = getattr(self, "_lx_interp_edit", None)
                 if _ie is not None:
-                    _ie.setPlainText(data.get("luminex_interpretation", ""))
+                    _loaded_interp = data.get("luminex_interpretation", "")
+                    _ie.setPlainText(_loaded_interp)
+                    # Seed the baseline so a previously-saved interpretation is
+                    # still treated as auto-generated and keeps updating as the
+                    # patient/donor name or match score change, instead of being
+                    # mistaken for a manual edit and frozen forever.
+                    self._lx_last_auto_interp = _loaded_interp
                 if hasattr(self, "_lx_nabl_chk"):
                     self._lx_nabl_chk.setChecked(data.get("nabl", True))
             self._update_manual_rpl_visibility()
@@ -5506,8 +5512,11 @@ class HLAReportGeneratorApp(QMainWindow):
         self._bulk_lx_interp_edit.setFixedHeight(60)
         self._bulk_lx_interp_edit.setPlainText(case.get("luminex_interpretation", ""))
         self._bulk_lx_interp_edit.textChanged.connect(self._on_bulk_field_debounced)
-        # store last auto-generated bulk interp to avoid clobbering user edits
-        self._bulk_lx_last_auto_interp = None
+        # Seed the "last auto" baseline with whatever was loaded so that a saved
+        # interpretation (generated before donor name/match were finalized) is
+        # still treated as auto-generated and keeps updating as fields change,
+        # rather than being mistaken for a manual edit and frozen forever.
+        self._bulk_lx_last_auto_interp = case.get("luminex_interpretation", "")
         lif.addWidget(self._bulk_lx_interp_edit)
 
         for grp in (lx_pat_grp, meta_group, lx_don_grp, lx_hla_grp, lx_interp_grp):
