@@ -1800,10 +1800,11 @@ def _build_ngs_photo(case: dict, S: dict) -> list:
     info_col_w = _demography_col_widths(patient, donor)
 
     def IV_name(text, col_w_pts):
-        # Keep font size constant; let long names wrap to a second line so the
-        # row grows taller rather than the text shrinking to fit one line.
         display = _norm_name(text)
-        display = re.sub(r'\s*(\(\d+\))$', r'<br/>\1', display)
+        # Only move trailing "(digits)" to its own line when the full name is too
+        # wide for the column — short names render on one line, long names wrap cleanly.
+        if pdfmetrics.stringWidth(display, F_BOLD, 10) > col_w_pts - 6:
+            display = re.sub(r'\s*(\(\d+\))$', r'<br/>\1', display)
         return Paragraph(display, info_val_style)
 
     info_rows = [
@@ -2971,12 +2972,11 @@ def _build_cdc_report(case: dict, S: dict) -> list:
     def E(): return Paragraph("", info_lbl_style)
 
     def IV_name(text, col_w_pts):
-        # Keep font size constant; let long names wrap to a second line so the
-        # row grows taller rather than the text shrinking to fit one line.
         display = _norm_name(text)
-        # Move a trailing parenthetical sample number "(digits)" to its own line
-        # so the name itself wraps at a natural word boundary.
-        display = re.sub(r'\s*(\(\d+\))$', r'<br/>\1', display)
+        # Only move trailing "(digits)" to its own line when the full name is too
+        # wide for the column — short names render on one line, long names wrap cleanly.
+        if pdfmetrics.stringWidth(display, F_BOLD, 10) > col_w_pts - 6:
+            display = re.sub(r'\s*(\(\d+\))$', r'<br/>\1', display)
         return Paragraph(display, info_val_style)
 
     info_rows = [
@@ -3004,7 +3004,7 @@ def _build_cdc_report(case: dict, S: dict) -> list:
         ("RIGHTPADDING",  (3, 0), (3, -1), 0),
         ("LEFTPADDING",   (5, 0), (5, -1), 0),
         ("RIGHTPADDING",  (5, 0), (5, -1), 2),
-        # no bottom border â€" demography table sits flush above the photo table
+        # no bottom border — demography table sits flush above the photo table
     ]))
     elems.append(info_t)
     elems.append(Spacer(1, 1 * mm))
@@ -3308,12 +3308,11 @@ def _build_dsa_report(case: dict, S: dict) -> list:
     def E(): return Paragraph("", info_lbl_style)
 
     def IV_name(text, col_w_pts):
-        # Keep font size constant; let long names wrap to a second line so the
-        # row grows taller rather than the text shrinking to fit one line.
         display = _norm_name(text)
-        # Move a trailing parenthetical sample number "(digits)" to its own line
-        # so the name itself wraps at a natural word boundary.
-        display = re.sub(r'\s*(\(\d+\))$', r'<br/>\1', display)
+        # Only move trailing "(digits)" to its own line when the full name is too
+        # wide for the column — short names render on one line, long names wrap cleanly.
+        if pdfmetrics.stringWidth(display, F_BOLD, 10) > col_w_pts - 6:
+            display = re.sub(r'\s*(\(\d+\))$', r'<br/>\1', display)
         return Paragraph(display, info_val_style)
 
     info_rows = [
@@ -3341,12 +3340,12 @@ def _build_dsa_report(case: dict, S: dict) -> list:
         ("RIGHTPADDING",  (3, 0), (3, -1), 0),
         ("LEFTPADDING",   (5, 0), (5, -1), 0),
         ("RIGHTPADDING",  (5, 0), (5, -1), 2),
-        # no bottom border â€" demography table sits flush above the photo table
+        # no bottom border — demography table sits flush above the photo table
     ]))
     elems.append(info_t)
     elems.append(Spacer(1, 2.5 * mm))
 
-    # â"€â"€ Photo / sample-type table â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    # ── Photo / sample-type table ─────────────────────────────────────────────
     _ph_w   = 28 * mm
     _ph_h   = 30 * mm
     _pc_w   = 54 * mm
@@ -4466,12 +4465,11 @@ def _build_flow_report(case: dict, S: dict) -> list:
     info_col_w = _demography_col_widths(patient, donor)
 
     def IV_name(text, col_w_pts):
-        # Keep font size constant; let long names wrap to a second line so the
-        # row grows taller rather than the text shrinking to fit one line.
         display = _norm_name(text)
-        # Move a trailing parenthetical sample number "(digits)" to its own line
-        # so the name itself wraps at a natural word boundary.
-        display = re.sub(r'\s*(\(\d+\))$', r'<br/>\1', display)
+        # Only move trailing "(digits)" to its own line when the full name is too
+        # wide for the column — short names render on one line, long names wrap cleanly.
+        if pdfmetrics.stringWidth(display, F_BOLD, 10) > col_w_pts - 6:
+            display = re.sub(r'\s*(\(\d+\))$', r'<br/>\1', display)
         return Paragraph(display, val_s)
 
     info_rows = [
