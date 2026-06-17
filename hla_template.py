@@ -615,13 +615,10 @@ def _demography_col_widths(patient: dict, donor: dict) -> list:
     def _w(s):
         return pdfmetrics.stringWidth(s or "", F_BOLD, 10)
 
-    # Widest donor value that lands in val_R.  The donor name wraps rather than
-    # shrinks, so we size the column to fit the actual name width (not capped),
-    # letting the row grow taller for long names instead of squeezing the font.
-    # Strip trailing "(digits)" before measuring — it renders on a separate line
-    # in IV_name, so the column is sized for the name text only.
+    # Measure the full donor display name including any trailing phone number in
+    # parentheses — IV_name only inserts a line-break when the text exceeds the
+    # column, so sizing the column for the full string keeps the name on one line.
     _donor_name_display = _title_case(_clean_display(donor.get("name", "")), is_name=True)
-    _donor_name_display = re.sub(r'\s*\(\d+\)$', '', _donor_name_display)
     donor_name_w = _w(_donor_name_display)
     donor_vals = [
         donor_name_w,
@@ -632,7 +629,7 @@ def _demography_col_widths(patient: dict, donor: dict) -> list:
         _w(_clean_display(donor.get("report_date", ""))),
     ]
     need6 = max(donor_vals) + 8             # widest donor value + cell padding
-    col6 = max(130.0, min(need6, 200.0))    # min 130pt so donor name never looks cramped
+    col6 = max(130.0, min(need6, 280.0))    # wide enough for long donor names
     col2 = pool - col6
     MIN2 = 120.0                            # never starve the patient value column
     if col2 < MIN2:
