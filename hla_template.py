@@ -1147,14 +1147,13 @@ def _hla_table(person: dict, S: dict, compact: bool = False, separate_drb: bool 
         ) + _CELL_PAD)
 
     lbl_w = CONTENT_W * 0.10
-    _avail = CONTENT_W - lbl_w
-    _total_min = sum(_min_widths)
+    n = len(loci)
+    _natural_w = (CONTENT_W - lbl_w) / n  # old equal-share formula
 
-    if _total_min <= _avail:
-        col_w = [lbl_w] + _min_widths
-    else:
-        _scale = _avail / _total_min
-        col_w = [lbl_w] + [w * _scale for w in _min_widths]
+    # Each column gets at least its natural equal share so the table looks the same
+    # as before when content is short. If any column needs more space (e.g. a long
+    # DRB3* allele), that column expands and the table grows wider — never wraps.
+    col_w = [lbl_w] + [max(_natural_w, w) for w in _min_widths]
 
     # Scale header font only when the smallest column can't fit its header at 11pt.
     _hdr_texts  = ["LOCUS"] + [_hdr(l) for l in loci]
