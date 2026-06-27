@@ -1703,6 +1703,20 @@ class HLAReportGeneratorApp(QMainWindow):
         self._std_donors_outer = donors_outer   # ref for show/hide
         scroll_layout.addWidget(donors_outer)
 
+        # ── NGS with Photo — editable Interpretation override ─────────────────
+        _ngs_photo_interp_group = QGroupBox("Interpretation")
+        self._ngs_photo_interp_group = _ngs_photo_interp_group
+        _npif = QVBoxLayout(); _ngs_photo_interp_group.setLayout(_npif)
+        _npif.setContentsMargins(4, 2, 4, 2)
+        self._ngs_photo_interp_edit = QTextEdit()
+        self._ngs_photo_interp_edit.setPlaceholderText(
+            "Leave blank to auto-generate from the donor match percentage.")
+        self._ngs_photo_interp_edit.setFixedHeight(72)
+        self._ngs_photo_interp_edit.textChanged.connect(self._on_manual_field_debounced)
+        _npif.addWidget(self._ngs_photo_interp_edit)
+        scroll_layout.addWidget(_ngs_photo_interp_group)
+        _ngs_photo_interp_group.setVisible(False)
+
         # ── Signature Override — select from configured signatories ───────────
         self._manual_sig_name_overrides = {}   # {slot_idx: sig_name_string}
         self._manual_sig_combos         = {}   # {slot_idx: QComboBox}
@@ -2423,6 +2437,11 @@ class HLAReportGeneratorApp(QMainWindow):
             case["hlac_allele2"] = getattr(self, "_hc_allele2_w", None) and self._hc_allele2_w.text().strip() or ""
             case["hlac_remark"]  = getattr(self, "_hc_remark_w",  None) and self._hc_remark_w.text().strip()  or ""
 
+        # NGS with Photo: optional Interpretation override (blank = auto-generate)
+        if rtype == "ngs_photo":
+            _npi = getattr(self, "_ngs_photo_interp_edit", None)
+            case["ngs_photo_interpretation"] = _npi.toPlainText().strip() if _npi else ""
+
         # Attach CDC-specific fields when applicable
         if rtype == "cdc_crossmatch":
             pf = getattr(self, "_cdc_pat_f",  {})
@@ -2910,6 +2929,8 @@ class HLAReportGeneratorApp(QMainWindow):
             _row = _entry.get("photo_row")
             if _row is not None:
                 _row.setVisible(is_ngs_photo)
+        if hasattr(self, "_ngs_photo_interp_group"):
+            self._ngs_photo_interp_group.setVisible(is_ngs_photo)
         is_cdc = rtype == "cdc_crossmatch"
         is_dsa = rtype == "dsa_crossmatch"
         # Standard form groups — hidden for CDC, DSA, SAB, and Luminex
@@ -3557,6 +3578,9 @@ class HLAReportGeneratorApp(QMainWindow):
                 "hlac_allele2": getattr(self, "_hc_allele2_w", None) and self._hc_allele2_w.text().strip() or "",
                 "hlac_remark":  getattr(self, "_hc_remark_w",  None) and self._hc_remark_w.text().strip()  or "",
             }
+        _ngs_photo_interp_save = ""
+        if rtype == "ngs_photo" and hasattr(self, "_ngs_photo_interp_edit"):
+            _ngs_photo_interp_save = self._ngs_photo_interp_edit.toPlainText().strip()
         data = {
             "patient_fields": {k: w.text().strip() for k, w in self.f.items()},
             "report_type": rtype,
@@ -3570,6 +3594,7 @@ class HLAReportGeneratorApp(QMainWindow):
             "rpl_reference":   _rpl_ref_save,
             "single_locus":    _sl_save,
             "hla_c":           _hc_save,
+            "ngs_photo_interpretation": _ngs_photo_interp_save,
         }
         if getattr(self, "_std_pat_photo_bytes", None):
             data["patient_photo_b64"] = base64.b64encode(self._std_pat_photo_bytes).decode("ascii")
@@ -3804,6 +3829,9 @@ class HLAReportGeneratorApp(QMainWindow):
                     self._hc_allele2_w.setText(str(_hc_loaded.get("hlac_allele2", "")))
                 if hasattr(self, "_hc_remark_w"):
                     self._hc_remark_w.setText(str(_hc_loaded.get("hlac_remark", "")))
+            # Restore NGS with Photo Interpretation override
+            if data.get("report_type") == "ngs_photo" and hasattr(self, "_ngs_photo_interp_edit"):
+                self._ngs_photo_interp_edit.setPlainText(str(data.get("ngs_photo_interpretation", "")))
             # Restore CDC/DSA/Flow-specific form fields
             _rtype = data.get("report_type", "single_hla")
             if _rtype == "cdc_crossmatch":
@@ -4762,6 +4790,20 @@ class HLAReportGeneratorApp(QMainWindow):
         add_d_btn.setMaximumHeight(26)
         add_d_btn.clicked.connect(lambda: self._add_bulk_donor(self._bulk_current_row))
         self._bulk_editor_layout.addWidget(add_d_btn)
+
+        # ── NGS with Photo — editable Interpretation override ─────────────────
+        if _rtype_now == "ngs_photo":
+            ngs_interp_group = QGroupBox("Interpretation")
+            ngs_interp_lay = QVBoxLayout(); ngs_interp_group.setLayout(ngs_interp_lay)
+            ngs_interp_lay.setContentsMargins(4, 2, 4, 2)
+            self._bulk_ngs_photo_interp_edit = QTextEdit()
+            self._bulk_ngs_photo_interp_edit.setPlaceholderText(
+                "Leave blank to auto-generate from the donor match percentage.")
+            self._bulk_ngs_photo_interp_edit.setFixedHeight(72)
+            self._bulk_ngs_photo_interp_edit.setPlainText(case.get("ngs_photo_interpretation", ""))
+            self._bulk_ngs_photo_interp_edit.textChanged.connect(self._on_bulk_field_debounced)
+            ngs_interp_lay.addWidget(self._bulk_ngs_photo_interp_edit)
+            self._bulk_editor_layout.addWidget(ngs_interp_group)
 
         # ── Signature Override (select from configured signatories) ──────────
         self._bulk_sig_combos = {}
@@ -5967,6 +6009,10 @@ class HLAReportGeneratorApp(QMainWindow):
         if case["report_type"] == "hla_c" and hasattr(self, "_bulk_hc_fields"):
             for key, w in self._bulk_hc_fields.items():
                 case[key] = w.text().strip()
+
+        # NGS with Photo: optional Interpretation override (blank = auto-generate)
+        if case["report_type"] == "ngs_photo" and hasattr(self, "_bulk_ngs_photo_interp_edit"):
+            case["ngs_photo_interpretation"] = self._bulk_ngs_photo_interp_edit.toPlainText().strip()
 
         # RPL / Fertility manual overrides
         if case["report_type"] in ("rpl_couple", "single_rpl") and hasattr(self, "_bulk_rpl_fields"):

@@ -673,7 +673,12 @@ _DEGREE_MAP = {
     "dnb": "DNB", "phd": "PhD", "dgo": "DGO", "frcs": "FRCS", "mrcp": "MRCP",
 }
 # Fix 2: expanded to include medical/lab abbreviations that must always be uppercased.
-_ABBREV_SET = {"edta", "dna", "rna", "pcr", "bmt", "hla", "rpl", "rif", "nips", "poc", "ngs", "wbc", "rbc", "idd"}
+# Also includes common hospital/organization acronyms (e.g. ESIC, AIIMS) — these
+# contain vowels so the no-vowel abbreviation rule (6b) would otherwise miss them,
+# and Hospital/Clinic name fields re-case ALL-CAPS input (is_name=True) so they'd
+# fall through to default title-casing without this explicit whitelist entry.
+_ABBREV_SET = {"edta", "dna", "rna", "pcr", "bmt", "hla", "rpl", "rif", "nips", "poc", "ngs", "wbc", "rbc", "idd",
+               "esic", "aiims"}
 _PREFIX_MAP_TC = {"mr": "Mr", "mrs": "Mrs", "ms": "Ms", "master": "Master", "dr": "Dr"}
 
 
@@ -740,8 +745,11 @@ def _title_case(text: str, is_name: bool = False) -> str:
         """
         # Rule 1: Preserve all-uppercase words of length > 1 (already in caps),
         # unless this is a name/place field (is_name=True), where ALL-CAPS input
-        # should be re-cased like any other word.
-        if not is_name and len(token) > 1 and token == token.upper() and token.isalpha():
+        # should be re-cased like any other word. Alphanumeric tokens (e.g. gene/
+        # diagnosis abbreviations like PIK3CD, TP53, BRCA1) are included — only
+        # the letters need to already be uppercase; digits are case-invariant.
+        if (not is_name and len(token) > 1 and token == token.upper()
+                and any(c.isalpha() for c in token) and token.isalnum()):
             if token.lower() in _DEGREE_MAP:
                 return _DEGREE_MAP[token.lower()] + "."
             return token
@@ -1672,7 +1680,7 @@ def _build_ngs_single(case: dict, S: dict) -> list:
     elems = []
 
     elems.extend(_ngs_person_block(patient, is_donor=False, match_str="", S=S,
-                                   nabl=case.get("nabl", True)))
+                                   nabl=case.get("nabl", True), separate_drb=True))
 
     elems.extend(_methodology_block(case, S))
     sig_items = _signature_block(signatories, S)
@@ -2124,7 +2132,7 @@ def _build_rpl_couple(case: dict, S: dict) -> list:
     else:
         # Single-person RPL: NGS-style patient block
         patient_block = _ngs_person_block(patient, is_donor=False, match_str="", S=S,
-                                          nabl=case.get("nabl", True))
+                                          nabl=case.get("nabl", True), separate_drb=True)
         elems.append(KeepTogether(patient_block))
         _emit_remarks(patient, "Remarks")
 
@@ -2305,7 +2313,8 @@ def _build_single_rpl(case: dict, S: dict) -> list:
             Spacer(1, 3 * mm),
         ]))
 
-    elems.append(Spacer(1, 2 * mm))
+    # ── Page break: page 1 = patient table + reference only ─────────────────
+    elems.append(PageBreak())
 
     # ── Methodology + Background + Disclaimers + Signatures ───────────────────
     methodology_items = _methodology_block(case, S)
@@ -2407,9 +2416,9 @@ def _build_single_locus(case: dict, S: dict) -> list:
     _title_s = ParagraphStyle("_sl_title", fontName=F_BOLD, fontSize=20,
                                textColor=C_NGS_TITLE, alignment=TA_CENTER, leading=26)
     _hdr_s   = ParagraphStyle("_sl_hdr",   fontName=F_BOLD, fontSize=13,
-                               textColor=C_SL_SEC, leading=16, spaceBefore=2, spaceAfter=0)
-    _body_s  = ParagraphStyle("_sl_body",  fontName=F_REG,  fontSize=11,
-                               textColor=BLACK, leading=14, alignment=TA_JUSTIFY, spaceAfter=2)
+                               textColor=C_SL_SEC, leading=16, spaceBefore=0, spaceAfter=0)
+    _body_s  = ParagraphStyle("_sl_body",  fontName=F_REG,  fontSize=10,
+                               textColor=BLACK, leading=13, alignment=TA_JUSTIFY, spaceAfter=1)
     _cell_s  = ParagraphStyle("_sl_cell",  fontName=F_BOLD, fontSize=11,
                                textColor=BLACK, leading=14, alignment=TA_CENTER)
     _val_s   = ParagraphStyle("_sl_val",   fontName=F_REG,  fontSize=11,
@@ -2426,20 +2435,20 @@ def _build_single_locus(case: dict, S: dict) -> list:
 
     # ── Title ─────────────────────────────────────────────────────────────────
     elems.append(Paragraph(f"<b>HLA-{locus}*</b>", _title_s))
-    elems.append(Spacer(1, 2 * mm))
+    elems.append(Spacer(1, 1 * mm))
 
     # ── Patient info — custom 5-row table with separate Gender / Age rows ─────
     elems.append(_sl_info_table(patient, S))
-    elems.append(Spacer(1, 2 * mm))
+    elems.append(Spacer(1, 1 * mm))
 
     # ── Method ────────────────────────────────────────────────────────────────
     elems.extend(_sec("Method"))
     for para_text in SINGLE_LOCUS_METHODOLOGY:
         elems.append(Paragraph(para_text, _body_s))
-    elems.append(Spacer(1, 2 * mm))
+    elems.append(Spacer(1, 1 * mm))
 
     # ── Result ────────────────────────────────────────────────────────────────
-    elems.extend(_sec("Result"))
+    _result_heading = _sec("Result")
 
     _col_w = [CONTENT_W * 0.12, CONTENT_W * 0.25]   # total ≈ 37 % of content, centred
 
@@ -2458,8 +2467,8 @@ def _build_single_locus(case: dict, S: dict) -> list:
         ("INNERGRID",     (0, 0), (-1, -1),  0.25, WHITE),
         ("ALIGN",         (0, 0), (-1, -1),  "CENTER"),
         ("VALIGN",        (0, 0), (-1, -1),  "MIDDLE"),
-        ("TOPPADDING",    (0, 0), (-1, -1),  5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1),  5),
+        ("TOPPADDING",    (0, 0), (-1, -1),  4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1),  4),
     ]
     if sl_note:
         note_row_idx = len(result_rows)
@@ -2473,10 +2482,23 @@ def _build_single_locus(case: dict, S: dict) -> list:
     result_t.hAlign = "CENTER"
     result_t.setStyle(TableStyle(style_cmds))
 
-    # ── Result table + signatures kept together so they never split across pages ─
+    # Remarks (if any) render after the result table, before signatures.
+    _sl_remarks = _clean_display(patient.get("remarks", "")) or ""
+    remarks_items = []
+    if _sl_remarks:
+        remarks_items = [
+            Spacer(1, 2 * mm),
+            Paragraph(f"<b>Remarks:</b> {_sl_remarks}",
+                      ParagraphStyle("_sl_rmk", fontName=F_REG, fontSize=11,
+                                     leading=14, alignment=TA_JUSTIFY)),
+        ]
+
+    # ── Result heading + table + remarks + signatures kept together as one unit
+    # so the "Result" heading never gets orphaned on page 1 while the table and
+    # signatures spill onto page 2 — they all move together if they don't fit.
     sig_items = _signature_block(signatories, S)
     elems.append(KeepTogether(
-        [result_t, Spacer(1, 2 * mm)] + (sig_items or [])
+        _result_heading + [result_t, Spacer(1, 1 * mm)] + remarks_items + (sig_items or [])
     ))
 
     return elems
@@ -4562,9 +4584,6 @@ def _build_flow_report(case: dict, S: dict) -> list:
     # ── "Flowcytometry Cross match for T & B Lymphocytes" section title ───────
     _section_title_s = ParagraphStyle("_fst", fontName=F_BOLD, fontSize=16,
                                        textColor=C_NGS_TITLE, alignment=TA_CENTER, leading=20)
-    elems.append(Paragraph("<b>Flowcytometry Cross match for T &amp; B Lymphocytes</b>",
-                            _section_title_s))
-    elems.append(Spacer(1, 2*mm))
 
     # ── 4-column results table ────────────────────────────────────────────────
     t_antibody    = flow.get("t_antibody", "T-CELLS (CD3)")
@@ -4636,7 +4655,15 @@ def _build_flow_report(case: dict, S: dict) -> list:
         ("LEFTPADDING",   (0,0), (-1,-1), 4),
         ("RIGHTPADDING",  (0,0), (-1,-1), 4),
     ]))
-    elems.append(res_t)
+    # Title + table kept as one unit so a tall info table above (e.g. a
+    # Hospital/Clinic name that wraps to a 2nd line) can never push a page
+    # break between the title and the table, or split the table mid-row
+    # (which would strand the B-CELLS row alone on the next page).
+    elems.append(KeepTogether([
+        Paragraph("<b>Flowcytometry Cross match for T &amp; B Lymphocytes</b>", _section_title_s),
+        Spacer(1, 2*mm),
+        res_t,
+    ]))
 
     # ── Page break → page 2 (Interpretation / Comments / Disclaimer / Signatures)
     # Without this the signature block overflows to a third page.
