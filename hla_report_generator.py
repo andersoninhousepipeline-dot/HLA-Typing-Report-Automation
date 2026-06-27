@@ -2235,6 +2235,189 @@ class HLAReportGeneratorApp(QMainWindow):
             "sab_class":   sab_class,
         }
 
+    @staticmethod
+    def _parse_gendx_run_excel(path: str) -> list:
+        """Parse a GenDx run-level Excel export (many patients/donors per run).
+
+        Three sheets:
+          • 'patient-donor detail' — one row per person; a "Patient" row
+            optionally followed by one or more "Donor" rows is one case
+            group. Rows with a blank Patient/donor column are QC/control
+            samples (e.g. '-PB' buffer controls, NTC) and never start or
+            extend a group.
+          • 'result data'          — unused; empty in every run seen so far.
+          • 'complete csv data'    — the raw GenDx CSV pasted into Excel;
+            Excel auto-split each line on its first unquoted comma into
+            columns A/B, so each line must be rejoined before parsing.
+
+        Returns a list of group dicts: {"patient", "donors", "methodology",
+        "imgt_release", "coverage", "typing_status"}.
+        """
+        import openpyxl
+        from datetime import datetime, date
+
+        def _fmt(v):
+            if v is None:
+                return ""
+            if isinstance(v, (datetime, date)):
+                return v.strftime("%d-%m-%Y")
+            if isinstance(v, float) and v.is_integer():
+                return str(int(v))
+            return str(v).strip()
+
+        wb = openpyxl.load_workbook(path, data_only=True)
+
+        # ── 'complete csv data': {sample_tag: {locus: [alleles]}} ───────────
+        _csv_pat = _re.compile(r'_HLA-([^_]+)_L\d+_R1;"([^"]+)";"(.*)')
+        _LOCUS_MAP = {"HLA_A": "A", "HLA_B": "B", "HLA_C": "C",
+                      "DRB1": "DRB1", "DRB3": "DRB3", "DQB1": "DQB1", "DPB1": "DPB1"}
+
+        def _is_insufficient(text):
+            return "insufficientdata" in _re.sub(r"\s+", "", text).lower()
+
+        alleles_by_sample = {}
+        if "complete csv data" in wb.sheetnames:
+            for a, b in wb["complete csv data"].iter_rows(values_only=True):
+                if a is None:
+                    continue
+                full = a if b is None else f"{a},{b}"
+                m = _csv_pat.search(full)
+                if not m:
+                    continue
+                sample_tag, raw_locus, allele_field = m.groups()
+                locus = _LOCUS_MAP.get(raw_locus)
+                if locus is None:        # drop HLA_Y and anything unexpected
+                    continue
+                allele_field = allele_field.rstrip().rstrip('"')
+                if _is_insufficient(allele_field):
+                    allele_list = []
+                else:
+                    allele_list = [x.strip().rstrip('"').strip()
+                                    for x in allele_field.split(",") if x.strip()]
+                alleles_by_sample.setdefault(sample_tag, {})[locus] = allele_list
+
+        def _alleles_for(sample_number):
+            # Real Sample Number lookup, with an -RPT fallback for repeats
+            # (the run prefix carries -RPT but the detail sheet's own Sample
+            # Number column doesn't).
+            if not sample_number:
+                return {}
+            return (alleles_by_sample.get(sample_number)
+                    or alleles_by_sample.get(f"{sample_number}-RPT") or {})
+
+        _CORE_LOCI = ("A", "B", "C", "DRB1", "DQB1", "DPB1")
+
+        def _hla_dict(sample_number):
+            found = _alleles_for(sample_number)
+            hla = {}
+            for locus in _CORE_LOCI:
+                vals = list(found.get(locus, []))[:2]
+                while len(vals) < 2:
+                    vals.append("")
+                hla[locus] = vals
+            if found.get("DRB3"):
+                vals = list(found["DRB3"])[:2]
+                while len(vals) < 2:
+                    vals.append("")
+                hla["DRB3"] = vals
+            return hla
+
+        # ── 'patient-donor detail': group rows into cases ────────────────────
+        if "patient-donor detail" not in wb.sheetnames:
+            raise ValueError("Sheet 'patient-donor detail' not found in workbook.")
+        ws = wb["patient-donor detail"]
+
+        header = list(next(ws.iter_rows(min_row=1, max_row=1, values_only=True)))
+
+        def _col(*names):
+            for name in names:
+                for i, h in enumerate(header):
+                    if isinstance(h, str) and h.strip().lower() == name.strip().lower():
+                        return i
+            return None
+
+        idx = {
+            "name":   _col(" name", "name"),
+            "pd":     _col("Patient/donor"),
+            "age":    _col(" Age", "Age"),
+            "gender": _col("Gender"),
+            "rel":    _col("Relationship"),
+            "mrno":   _col("Hospital MR No", "Hospital MR No "),
+            "diag":   _col("Diagnosis"),
+            "ref":    _col("Referred By"),
+            "hosp":   _col("Hospital/Clinic"),
+            "pin":    _col("PIN"),
+            "samp":   _col("Sample Number", "Sample Number "),
+            "spec":   _col("Specimen", "Specimen "),
+            "coll":   _col("Collection Date", "Collection Date "),
+            "recv":   _col("Sample receipt date"),
+            "rdate":  _col("Report date", "Report date "),
+            "remarks": _col("Remarks/comments"),
+            "imgt":   _col("IMGT/HLA Release"),
+            "cov":    _col("Coverage"),
+            "meth":   _col("Methodology"),
+            "status": _col("Typing Status\ncomplete/incomplete", "Typing Status"),
+        }
+
+        def _get(row, key):
+            i = idx.get(key)
+            return row[i] if i is not None and i < len(row) else None
+
+        def _build_person(row, is_donor):
+            sample_number = _fmt(_get(row, "samp"))
+            age, gender = _fmt(_get(row, "age")), _fmt(_get(row, "gender"))
+            gender_age = f"{age} / {gender}".strip(" /")
+            person = {
+                "name":            _fmt(_get(row, "name")),
+                "gender_age":      gender_age,
+                "diagnosis":       _fmt(_get(row, "diag")),
+                "referred_by":     _fmt(_get(row, "ref")),
+                "hospital_clinic": _fmt(_get(row, "hosp")),
+                "specimen":        _fmt(_get(row, "spec")) or "Blood - EDTA",
+                "remarks":         _fmt(_get(row, "remarks")),
+                "hospital_mr_no":  _fmt(_get(row, "mrno")) or "NA",
+                "pin":             _fmt(_get(row, "pin")),
+                "sample_number":   sample_number,
+                "collection_date": _fmt(_get(row, "coll")),
+                "receipt_date":    _fmt(_get(row, "recv")),
+                "report_date":     _fmt(_get(row, "rdate")),
+                "hla":             _hla_dict(sample_number),
+                "hla_c_type":      "",
+                "photo_bytes":     None,
+            }
+            if is_donor:
+                person["relationship"] = _fmt(_get(row, "rel"))
+                person["match"] = ""
+            return person
+
+        groups, current = [], None
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if all(v is None for v in row):
+                break
+            pd_val = _get(row, "pd")
+            pd = pd_val.strip().lower() if isinstance(pd_val, str) else ""
+            if pd == "patient":
+                if current is not None:
+                    groups.append(current)
+                current = {
+                    "patient":       _build_person(row, is_donor=False),
+                    "donors":        [],
+                    "methodology":   _fmt(_get(row, "meth")),
+                    "imgt_release":  _fmt(_get(row, "imgt")),
+                    "coverage":      _fmt(_get(row, "cov")),
+                    "typing_status": _fmt(_get(row, "status")) or "Complete",
+                }
+            elif pd == "donor" and current is not None:
+                current["donors"].append(_build_person(row, is_donor=True))
+            else:
+                if current is not None:
+                    groups.append(current)
+                current = None
+        if current is not None:
+            groups.append(current)
+
+        return groups
+
     def _load_sab_excel(self):
         """Import a SAB workbook and auto-fill the whole form (patient + results)."""
         self._import_sab_excel(fill_patient=True)
@@ -4019,6 +4202,14 @@ class HLAReportGeneratorApp(QMainWindow):
         sab_xl_btn.clicked.connect(self._bulk_import_sab_excel)
         opts_row.addWidget(sab_xl_btn)
 
+        gendx_xl_btn = QPushButton("Import GenDx Run Excel")
+        gendx_xl_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        gendx_xl_btn.setToolTip("Add every case from a GenDx run-level Excel export "
+                                "(patient/donor details + alleles for all samples in the run). "
+                                "Replaces the current bulk list.")
+        gendx_xl_btn.clicked.connect(self._bulk_import_gendx_excel)
+        opts_row.addWidget(gendx_xl_btn)
+
         load_btn = QPushButton("Load & Parse Excel")
         load_btn.setStyleSheet(GENERATE_BTN_STYLE)
         load_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight))
@@ -4312,6 +4503,61 @@ class HLAReportGeneratorApp(QMainWindow):
         QMessageBox.information(
             self, "SAB Excel Imported",
             f"Added 1 SAB Class {cls} case: {patient['name'] or 'Patient'}.")
+
+    def _bulk_import_gendx_excel(self):
+        """Import a GenDx run-level Excel export as many bulk cases at once
+        (one per Patient row, with any following Donor rows attached as
+        transplant_donor donors). Replaces the current bulk list."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select GenDx Run Excel", str(Path.home()),
+            "Excel Workbooks (*.xlsx *.xlsm)")
+        if not path:
+            return
+        try:
+            groups = self._parse_gendx_run_excel(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Excel Import Failed",
+                                 f"Could not read the GenDx run Excel file:\n\n{e}")
+            return
+        if not groups:
+            QMessageBox.warning(self, "No Cases Found",
+                                 "No Patient rows were found in 'patient-donor detail'.")
+            return
+
+        nabl      = self.chk_nabl.isChecked()
+        with_logo = self.logo_combo.currentText() == "With Logo"
+        sig_stamp = self.qsettings.value("sig_stamp", True, type=bool)
+
+        new_cases, n_pairs, n_single = [], 0, 0
+        for g in groups:
+            rtype = "transplant_donor" if g["donors"] else "single_hla"
+            case = self._build_case(rtype, nabl, with_logo, sig_stamp,
+                                     g["patient"], g["donors"])
+            case["methodology"]   = g["methodology"]
+            case["imgt_release"]  = g["imgt_release"]
+            case["coverage"]      = g["coverage"]
+            case["typing_status"] = g["typing_status"]
+            new_cases.append(case)
+            if g["donors"]:
+                n_pairs += 1
+            else:
+                n_single += 1
+
+        # Run-level import replaces the bulk list, like Import SAB Excel does —
+        # reset only now (after a successful parse) so a cancelled dialog or a
+        # failed parse above leaves the existing list untouched.
+        self._reset_bulk_session()
+        self.cases = new_cases
+        self._populate_bulk_list()
+        if self.cases:
+            self.bulk_list.setCurrentRow(0)
+        self._bulk_log(
+            f"Imported {len(new_cases)} case(s) from {os.path.basename(path)} "
+            f"({n_pairs} transplant/donor pair(s), {n_single} single typing(s)).")
+        QMessageBox.information(
+            self, "GenDx Run Excel Imported",
+            f"Imported {len(new_cases)} case(s): {n_pairs} transplant/donor pair(s), "
+            f"{n_single} single typing(s).")
 
     def _populate_bulk_list(self):
         self.bulk_list.clear()
