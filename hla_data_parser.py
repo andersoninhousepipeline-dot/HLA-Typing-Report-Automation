@@ -213,6 +213,13 @@ def _parse_miniseq_results(df_result: pd.DataFrame) -> dict:
         sample = _clean_str(row.get("SampleName", ""))
         if not sample or sample == "nan":
             continue
+        # Some rows carry a re-run/QC suffix after the sample number, e.g.
+        # "260774138 - MULTI QBT" or "260766775- LMNX". Strip it so the key
+        # matches the bare "Sample Number" in the patient-donor detail sheet.
+        # Rows iterate in sheet order, so a later plain-number row (the final
+        # result) naturally overwrites an earlier suffixed QC re-run.
+        m = re.match(r"^(\d{6,})", sample)
+        key = m.group(1) if m else sample
         hla = {}
         for locus, (c1, c2) in locus_cols.items():
             a1 = _clean_allele(str(row.get(c1, "-")))
@@ -223,7 +230,7 @@ def _parse_miniseq_results(df_result: pd.DataFrame) -> dict:
             hla[locus] = [a1, a2]
         # Comments/remarks
         remarks = _clean_str(row.get("Comments", ""))
-        results[sample] = {"hla": hla, "remarks": remarks}
+        results[key] = {"hla": hla, "remarks": remarks}
 
     return results
 
@@ -1474,9 +1481,12 @@ def parse_excel(filepath: str, nabl: bool = True) -> list:
     if is_miniseq:
         df_res = pd.read_excel(filepath, sheet_name="result data", header=None)
         hla_lookup = _parse_miniseq_results(df_res)
-        # Auto-detect join key: if SampleName values are all numeric they are
-        # sample numbers, not PINs — override the default join_by.
-        if hla_lookup and all(k.isdigit() for k in hla_lookup.keys()):
+        # Auto-detect join key: if SampleName values are mostly numeric they are
+        # sample numbers, not PINs — override the default join_by. A majority
+        # vote (rather than requiring 100%) tolerates QC/control rows such as
+        # "NTC" or a technician's name that aren't real sample numbers.
+        digit_keys = sum(1 for k in hla_lookup if k.isdigit())
+        if hla_lookup and digit_keys >= len(hla_lookup) / 2:
             join_by = "sample_number"
     else:
         df_csv = pd.read_excel(filepath, sheet_name="complete csv data", header=None)
